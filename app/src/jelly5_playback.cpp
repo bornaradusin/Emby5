@@ -306,7 +306,7 @@ std::string request_json(jf::Client &c, const jf::Item &it, const jf::Playback &
     cJSON *skips = cJSON_CreateArray();
     for (const auto &sg : segs) {
         if (!plausible(sg)) {
-            evo_bt("emby5: ignoring implausible %s segment %.0f-%.0f s (runtime %.0f s)", sg.type.c_str(), sg.start,
+            evo_bt("jelly5: ignoring implausible %s segment %.0f-%.0f s (runtime %.0f s)", sg.type.c_str(), sg.start,
                    sg.end, runtime);
             continue;
         }
@@ -556,7 +556,7 @@ void download(const jf::RemoteSubtitle &sub)
                     }
             }
         }
-        evo_bt("emby5: subtitle download %s -> track %d", track >= 0 ? "ok" : "failed", track);
+        evo_bt("jelly5: subtitle download %s -> track %d", track >= 0 ? "ok" : "failed", track);
         std::lock_guard<std::mutex> g(s_lock);
         if (gen != s_gen && track < 0)
             return;
@@ -779,10 +779,10 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
         const int mbps = settings::get().local.max_mbps;
         if (!client.playback_info(item.id, item.position_ticks, -1, -2, &pb, (int64_t)mbps * 1000000)) {
             *error = client.last_error();
-            evo_bt("emby5: playback info failed: %s", error->c_str());
+            evo_bt("jelly5: playback info failed: %s", error->c_str());
             return chain > 0;
         }
-        evo_bt("emby5: play %s (%s) %s %s", item.name.c_str(), item.id.c_str(), pb.play_method.c_str(),
+        evo_bt("jelly5: play %s (%s) %s %s", item.name.c_str(), item.id.c_str(), pb.play_method.c_str(),
                pb.transcode_reasons.c_str());
         Extras ex;
         if (item.type == "Audio") {
@@ -793,7 +793,7 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
             chapters.join();
         }
         if (ex.trickplay.valid())
-            evo_bt("emby5: trickplay %dx%d, %d thumbnails", ex.trickplay.width, ex.trickplay.height, ex.trickplay.count);
+            evo_bt("jelly5: trickplay %dx%d, %d thumbnails", ex.trickplay.width, ex.trickplay.height, ex.trickplay.count);
         const std::string req = request_json(client, item, pb, episodes, ex);
 
         s_session.client = &client;
@@ -830,7 +830,7 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
                 s_reports--;
             }).detach();
         }
-        evo_bt("emby5: playback done at %.1f s: %s", pos, result.c_str());
+        evo_bt("jelly5: playback done at %.1f s: %s", pos, result.c_str());
 
         int season = 0, number = 0;
         if (item.type == "Audio" && !episodes.empty()) {   /* music: the queue decides */

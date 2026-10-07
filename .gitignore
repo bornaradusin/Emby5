@@ -1,30 +1,11 @@
-# Build outputs
-build/
-app/build/
-*.ffpfsc
-*.ffpkg
-*.zip
-
-# Downloaded toolchains and dependencies
+refs/
 toolchain/
-.deps/
-toolkit/.deps/
-
-# Local configuration
-.env
+build/
+.DS_Store
+*.ffpfsc
 .env.local
 app/build-assets.mk
-
-# OS/editor files
-.DS_Store
-Thumbs.db
-*.swp
-*~
-
-# Temporary files
-*.tmp
-*.log
-
-# Local/private development files
+toolkit/.deps/
+# Not published: the working notes for Claude Code, and anything kept private
+CLAUDE.md
 private/
-refs/

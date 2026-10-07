@@ -2,6 +2,15 @@
 
 All notable public Emby5 releases are documented here.
 
+## 0.1.4
+
+- Reworked the PS5 Home Screen icon so the Emby5 artwork is no longer presented as a tile inside the PS5's own tile.
+- Expanded the README to document the complete Emby5 feature set.
+- Documented existing chapter browsing, chapter thumbnails and L1/R1 chapter navigation.
+- Documented existing Skip Intro, automatic intro skipping, credits handling and next-episode autoplay.
+- Documented playback, music, subtitle, Seerr and PS5 integration features.
+- Release packaging remains the folder-based `Emby5-0.1.4.zip` format introduced in 0.1.3.
+
 ## 0.1.3
 
 - Seerr integration.
@@ -20,28 +29,8 @@ All notable public Emby5 releases are documented here.
 - Changed runtime device identity to Emby5.
 - Improved Emby session handling.
 - Confirmed working on PS5 hardware.
-- Confirmed Emby authentication.
-- Confirmed Movies library browsing.
-- Confirmed TV Shows library browsing.
-- Confirmed Music library browsing.
+- Confirmed Emby authentication and Movies, TV Shows and Music library browsing.
 
 ## 0.1.1
 
 - First functional Emby5 PS5 build.
-- Added Emby server routing.
-- Added Emby username/password authentication.
-- Added Emby access-token handling.
-- Added Emby user views.
-- Added Continue Watching.
-- Added Recently Added.
-- Added Emby image routing.
-- Added Direct Stream URL handling.
-- Added separate `PPSA99515` title identity.
-- Added separate `/download0/emby5` persistent state.
-- Retained Jelly5 native PS5 UI and playback foundation.
-
-## Internal development builds
-
-### 0.1.0
-
-The first internal Emby port was not functional and is intentionally not published as a GitHub release.

@@ -12,11 +12,11 @@
 #
 #   ./scripts/build.sh            # development build (in the container when
 #                                 # NUVIO_BUILD_IMAGE is set)
-#   ./scripts/build.sh --ffpfsc   # optional legacy single-image package
-#   ./scripts/build.sh --release  # distributable folder ZIP; no .env.local
-#                                 # server or development log target
+#   ./scripts/build.sh --ffpfsc   # also pack PPSA99505.ffpfsc
+#   ./scripts/build.sh --release  # for sharing: no .env.local server, no log
+#                                 # target, packed as a distributable folder ZIP
 #
-# Output: build/app/PPSA99515/{eboot.bin, sce_sys/, sce_module/libc.prx}
+# Output: build/app/PPSA99505/{eboot.bin, sce_sys/, sce_module/libc.prx}
 # The packaging steps follow the toolkit's app packaging (player mode);
 # the loader constants and PRX stub rules there are hardware-validated.
 # =============================================================================
@@ -87,12 +87,12 @@ j = json.load(open(sys.argv[1]))
 import os
 if os.environ.get("EMBY5_PROBE") == "media":   # Media category, no extra attribute
     j["titleId"] = "PPSA99507"; j["conceptId"] = "99507"
-    j["contentId"] = "UP9000-PPSA99507_00-EMBY5MPROBE00000"
+    j["contentId"] = "UP9000-PPSA99507_00-JELLY5MPROBE0000"
     j["applicationCategoryType"] = 65536; j["attribute"] = 0
     j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Media Probe"}}
 else:
     j["titleId"] = "PPSA99506"; j["conceptId"] = "99506"
-    j["contentId"] = "UP9000-PPSA99506_00-EMBY5PROBE000000"
+    j["contentId"] = "UP9000-PPSA99506_00-JELLY5PROBE00000"
     j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Probe"}}
 json.dump(j, open(sys.argv[2], "w"), indent=2)
 PY
@@ -293,9 +293,11 @@ if (( FFPFSC )); then
         "${APPDIR}" "${BUILD}/app/${TITLE_ID}.ffpfsc"
 fi
 if (( RELEASE )); then
-    VER="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))["contentVersion"].split("."); print(".".join(str(int(x)) for x in v))' "${PARAM}")"
+    CONTENT_VER="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["contentVersion"])' "${PARAM}")"
+    VER="$(python3 -c 'import sys; p=[int(x) for x in sys.argv[1].split(".")]; print(f"{p[0]}.{p[1]}.{p[2]}")' "${CONTENT_VER}")"
     ZIP="Emby5-${VER}.zip"
     rm -f -- "${BUILD}/app/${ZIP}"
+    # Licences travel inside the installable title folder.
     LIC="${APPDIR}/licenses"
     rm -rf -- "${LIC}" && mkdir -p "${LIC}"
     cp "${NUVIO_ROOT}/LICENSE" "${NUVIO_ROOT}/THIRD_PARTY_NOTICES.md" "${LIC}/"

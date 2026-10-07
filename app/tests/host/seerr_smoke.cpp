@@ -156,7 +156,7 @@ int main(int argc, char **argv)
         if (auth == "jellyfin") {
             check(c.sign_in_jellyfin(jf_user, jf_pass, &me), "sign-in with the Emby password", c.last_error());
         } else {
-            jf::Client jfc(jf_url, "emby5-dev-host", "Emby5 dev (host)");
+            jf::Client jfc(jf_url, "jelly5-dev-host", "Emby5 dev (host)");
             if (!jfc.authenticate(jf_user, jf_pass)) {
                 std::fprintf(stderr, "Emby sign-in failed: %s\n", jfc.last_error().c_str());
                 return 1;

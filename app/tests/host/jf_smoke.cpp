@@ -17,7 +17,7 @@ int main()
         std::fprintf(stderr, "EMBY_URL, JF_USER and JF_PASS must be set\n");
         return 2;
     }
-    jf::Client c(server, "emby5-dev-mac", "Mac (Emby5 dev)");
+    jf::Client c(server, "jelly5-dev-mac", "Mac (Emby5 dev)");
     std::string name, version;
     if (!c.public_info(&name, &version)) {
         std::fprintf(stderr, "server unreachable: %s\n", c.last_error().c_str());
