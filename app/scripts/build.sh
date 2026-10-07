@@ -12,11 +12,11 @@
 #
 #   ./scripts/build.sh            # development build (in the container when
 #                                 # NUVIO_BUILD_IMAGE is set)
-#   ./scripts/build.sh --ffpfsc   # also pack PPSA99505.ffpfsc
-#   ./scripts/build.sh --release  # for sharing: no .env.local server, no log
-#                                 # target, packed as .ffpfsc and .zip
+#   ./scripts/build.sh --ffpfsc   # optional legacy single-image package
+#   ./scripts/build.sh --release  # distributable folder ZIP; no .env.local
+#                                 # server or development log target
 #
-# Output: build/app/PPSA99505/{eboot.bin, sce_sys/, sce_module/libc.prx}
+# Output: build/app/PPSA99515/{eboot.bin, sce_sys/, sce_module/libc.prx}
 # The packaging steps follow the toolkit's app packaging (player mode);
 # the loader constants and PRX stub rules there are hardware-validated.
 # =============================================================================
@@ -35,7 +35,7 @@ FFPFSC=0; RELEASE=0
 for arg in "$@"; do
     case "${arg}" in
         --ffpfsc) FFPFSC=1 ;;
-        --release) RELEASE=1; FFPFSC=1 ;;
+        --release) RELEASE=1 ;;
         -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
         *) echo "unknown option: ${arg}" >&2; exit 2 ;;
     esac
@@ -293,14 +293,14 @@ if (( FFPFSC )); then
         "${APPDIR}" "${BUILD}/app/${TITLE_ID}.ffpfsc"
 fi
 if (( RELEASE )); then
-    VER="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["contentVersion"])' "${PARAM}")"
-    rm -f -- "${BUILD}/app/Emby5-${VER}.zip"
-    # The licences travel with the binaries (GPL, and the fonts' OFL).
-    LIC="${BUILD}/app/licenses"
+    VER="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))["contentVersion"].split("."); print(".".join(str(int(x)) for x in v))' "${PARAM}")"
+    ZIP="Emby5-${VER}.zip"
+    rm -f -- "${BUILD}/app/${ZIP}"
+    LIC="${APPDIR}/licenses"
     rm -rf -- "${LIC}" && mkdir -p "${LIC}"
     cp "${NUVIO_ROOT}/LICENSE" "${NUVIO_ROOT}/THIRD_PARTY_NOTICES.md" "${LIC}/"
     cp "${APP_ROOT}"/assets/fonts/*.txt "${LIC}/"
-    (cd "${BUILD}/app" && zip -qr "Emby5-${VER}.zip" "${TITLE_ID}" "${TITLE_ID}.ffpfsc" licenses)
-    ok "release: ${BUILD#"${NUVIO_ROOT}/"}/app/Emby5-${VER}.zip"
+    (cd "${BUILD}/app" && zip -qr "${ZIP}" "${TITLE_ID}")
+    ok "release: ${BUILD#"${NUVIO_ROOT}/"}/app/${ZIP}"
 fi
 ok "app: ${APPDIR#"${NUVIO_ROOT}/"}/"

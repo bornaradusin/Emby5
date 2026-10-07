@@ -376,7 +376,7 @@ void check_for_update()
     asked = true;
     std::thread([] {
         const jf::HttpResponse r =
-            jf::http_request("GET", "https://api.github.com/repos/02dnot/Emby5/releases/latest",
+            jf::http_request("GET", "https://api.github.com/repos/bornaradusin/Emby5/releases/latest",
                              {"Accept: application/vnd.github+json", "User-Agent: Emby5/" EMBY5_VERSION}, "", 10);
         if (!r.ok())
             return;

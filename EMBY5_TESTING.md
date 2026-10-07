@@ -1,3 +1,11 @@
+## 0.1.3 Seerr enabled
+
+- Re-enabled the existing native Seerr settings UI that was deliberately hidden during the initial Emby bring-up.
+- Seerr can now be enabled per Emby server from Settings, with URL, authentication method, account sign-in and connection test controls.
+- The existing Seerr discovery/search/request UI is now reachable once Seerr is connected.
+- SyncPlay remains hidden because it is Jellyfin-specific.
+- Bumped `contentVersion` to `00.001.003`.
+
 # Emby5 hardware test notes
 
 ## 0.1.2 branding fix

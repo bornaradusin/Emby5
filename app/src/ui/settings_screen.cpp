@@ -123,9 +123,10 @@ void SettingsScreen::activate()
 
 bool SettingsScreen::shown(int r) const
 {
+    /* SyncPlay is Jellyfin-specific and remains hidden in the Emby port.
+     * Seerr is supported by current Seerr releases for Emby, so expose the
+     * existing native Seerr settings and request/discovery UI. */
     if (r == Together)
-        return false;
-    if (r >= SeerrOn && r <= SeerrTest)
         return false;
     return true;
 }
