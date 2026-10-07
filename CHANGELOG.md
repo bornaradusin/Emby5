@@ -2,16 +2,15 @@
 
 All notable public Emby5 releases are documented here.
 
-## Unreleased
-
-### 0.1.3
+## 0.1.3
 
 - Seerr integration.
 - Seerr connection settings.
 - Search and media request functionality.
 - Request status and request management.
-
-0.1.3 will not be published as a release until hardware testing is complete.
+- Added folder-based ZIP distribution.
+- Added persistent Emby and Seerr settings across folder-based updates.
+- Updated the in-app update checker to use the `bornaradusin/Emby5` GitHub repository.
 
 ## 0.1.2
 

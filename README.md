@@ -8,7 +8,7 @@ It is derived from the Jelly5 project by 02dnot and retains much of Jelly5's nat
 
 ## Current status
 
-The current tested release is **0.1.2**.
+The current tested release is **0.1.3**.
 
 Confirmed working on PS5:
 
@@ -24,7 +24,7 @@ Confirmed working on PS5:
 - Separate persistent application storage
 - Emby5 Home Screen branding
 
-The upcoming **0.1.3** release adds Seerr integration and will only be published after hardware testing.
+**0.1.3** adds tested Seerr integration, folder-based installation and GitHub update checking.
 
 ## Features
 
@@ -55,9 +55,17 @@ Emby5 is intended for homebrew-capable PS5 systems using a compatible native-tit
 
 Application title ID: `PPSA99515`
 
-Release image: `PPSA99515.ffpfsc`
+1. Download `Emby5-0.1.3.zip` from the latest GitHub release.
+2. Extract the ZIP to obtain the `PPSA99515/` folder.
+3. Upload the entire folder to `/data/homebrew/` on the PS5.
+4. The resulting path should be `/data/homebrew/PPSA99515/`.
+5. Set the uploaded `PPSA99515/` folder and its contents to permission `777` recursively if required by your ShadowMountPlus setup.
+6. Wait approximately 15 seconds for ShadowMountPlus to discover the title.
+7. If Emby5 does not appear, redeploy ShadowMountPlus and allow it to scan `/data/homebrew/` again.
 
-Place the release image in the location watched by your compatible loader and allow it to rediscover the title before launching it.
+### Updating
+
+Close Emby5, then replace the files inside `/data/homebrew/PPSA99515/` with those from the newer release. Keep the same title ID and folder so persistent Emby and Seerr configuration under `/download0/emby5` is retained.
 
 ## Building
 
@@ -69,12 +77,14 @@ Typical Linux build:
 ./scripts/setup-toolchain.sh
 eval "$(./scripts/setup-toolchain.sh --env)"
 cd app
-./scripts/build.sh --ffpfsc
+./scripts/build.sh --release
 ```
 
-The resulting image is created under:
+The resulting release ZIP is created under:
 
-`app/build/app/PPSA99515.ffpfsc`
+`app/build/app/Emby5-<version>.zip`
+
+The ZIP contains the installable `PPSA99515/` application folder.
 
 No proprietary Sony SDK is included in this repository.
 
