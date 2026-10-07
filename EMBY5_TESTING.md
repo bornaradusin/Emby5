@@ -1,4 +1,10 @@
-# Emby5 PS5 port - first hardware test build
+# Emby5 hardware test notes
+
+## 0.1.2 branding fix
+- Replaced the PS5 Home Screen `sce_sys/icon0.png` Jelly5 artwork with Emby5 artwork.
+- Updated the documentation icon to match.
+- Updated the checked-in home-screen artwork template so regenerating assets no longer restores Jelly5 branding.
+- Bumped `contentVersion` to `00.001.002`.
 
 This tree is an Emby-targeted port of the uploaded Jelly5 source. It keeps the proven PS5 UI/media engine and changes the server-facing layer where Emby differs.
 

@@ -241,7 +241,7 @@ void crash_handler(int sig, siginfo_t *si, void *ctx)
             pthread_attr_destroy(&attr);
         }
         char line[512];
-        int n = std::snprintf(line, sizeof line, "jelly5: crash at %s%#lx; stack:", rip >= lo && rip < hi ? "+" : "",
+        int n = std::snprintf(line, sizeof line, "emby5: crash at %s%#lx; stack:", rip >= lo && rip < hi ? "+" : "",
                               (unsigned long)(rip >= lo && rip < hi ? rip - lo : rip));
         if (rsp && top > rsp) {
             const uintptr_t *sp = (const uintptr_t *)rsp;

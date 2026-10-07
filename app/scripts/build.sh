@@ -87,12 +87,12 @@ j = json.load(open(sys.argv[1]))
 import os
 if os.environ.get("EMBY5_PROBE") == "media":   # Media category, no extra attribute
     j["titleId"] = "PPSA99507"; j["conceptId"] = "99507"
-    j["contentId"] = "UP9000-PPSA99507_00-JELLY5MPROBE0000"
+    j["contentId"] = "UP9000-PPSA99507_00-EMBY5MPROBE00000"
     j["applicationCategoryType"] = 65536; j["attribute"] = 0
     j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Media Probe"}}
 else:
     j["titleId"] = "PPSA99506"; j["conceptId"] = "99506"
-    j["contentId"] = "UP9000-PPSA99506_00-JELLY5PROBE00000"
+    j["contentId"] = "UP9000-PPSA99506_00-EMBY5PROBE000000"
     j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Probe"}}
 json.dump(j, open(sys.argv[2], "w"), indent=2)
 PY

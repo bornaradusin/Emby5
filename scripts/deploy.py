@@ -6,7 +6,7 @@
     scripts/deploy.py --check    only check that the console's FTP answers
     scripts/deploy.py --probe    upload the bring-up probe (PPSA99506) instead
 
-A first install is staged in /data/jelly5-staging/<TITLE_ID> and renamed into
+A first install is staged in /data/emby5-staging/<TITLE_ID> and renamed into
 place; later deploys overwrite the files in place, because ShadowMountPlus
 bind-mounts the folder and a replaced folder leaves that mount empty.
 eboot.bin and param.json always go up last. ShadowMountPlus then mounts it and registers the tile under Media.
@@ -65,7 +65,7 @@ def listdir(ftp, path):
 
 
 # The only trees this script may ever delete: Emby5's own.
-OWN_PREFIXES = ("/data/homebrew/PPSA99505", "/data/homebrew/PPSA99506", "/data/homebrew/PPSA99507", "/data/jelly5-staging/")
+OWN_PREFIXES = ("/data/homebrew/PPSA99505", "/data/homebrew/PPSA99506", "/data/homebrew/PPSA99507", "/data/emby5-staging/")
 
 
 def rm_rf(ftp, path, depth=0):
@@ -147,7 +147,7 @@ def main():
         # First install: staged outside /data/homebrew (ShadowMountPlus scans
         # every folder there; a same-id folder is a duplicate to it), then
         # renamed in, so it never sees a half-written app.
-        staging_root = "/data/jelly5-staging"
+        staging_root = "/data/emby5-staging"
         staging = f"{staging_root}/{tid}"
         if not exists(ftp, staging_root):
             ftp.mkd(staging_root)
