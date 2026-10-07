@@ -8,6 +8,7 @@
 #include <algorithm>
 
 #include "evo_boot_trace.h"
+#include "evo_data_path.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -22,7 +23,7 @@ extern "C" {
 namespace settings {
 namespace {
 
-constexpr const char *kFile = "/download0/emby5/settings.json";
+const char *settings_file() { return evo_data_path("emby5/settings.json"); }
 std::mutex s_lock;
 All s_all;
 
@@ -37,7 +38,7 @@ All get()
 void load_local()
 {
     std::string body;
-    if (FILE *f = std::fopen(kFile, "rb")) {
+    if (FILE *f = std::fopen(settings_file(), "rb")) {
         char buf[1024];
         size_t n;
         while ((n = std::fread(buf, 1, sizeof buf, f)) > 0)
@@ -86,7 +87,8 @@ void set_local(const Local &l)
         std::lock_guard<std::mutex> g(s_lock);
         s_all.local = l;
     }
-    mkdir("/download0/emby5", 0777);
+    evo_mkdir(evo_data_dir());
+    evo_mkdir(evo_data_path("emby5"));
     cJSON *j = cJSON_CreateObject();
     cJSON_AddNumberToObject(j, "maxMbps", l.max_mbps);
     cJSON_AddBoolToObject(j, "autoSkipIntro", l.auto_skip_intro);
@@ -104,7 +106,7 @@ void set_local(const Local &l)
     cJSON_AddItemToObject(j, "subtitles", st);
     char *text = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
-    if (FILE *f = std::fopen(kFile, "wb")) {
+    if (FILE *f = std::fopen(settings_file(), "wb")) {
         std::fputs(text, f);
         std::fclose(f);
     }

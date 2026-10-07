@@ -8,6 +8,7 @@
 #include <map>
 
 #include "evo_boot_trace.h"
+#include "evo_data_path.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -20,9 +21,9 @@ extern "C" {
 namespace accounts {
 namespace {
 
-constexpr const char *kDir = "/download0/emby5";
-constexpr const char *kFile = "/download0/emby5/accounts.json";
-constexpr const char *kLegacy = "/download0/emby5/session.json";   /* phase 1's single session */
+const char *data_dir() { return evo_data_dir(); }
+const char *accounts_file() { return evo_data_path("emby5/accounts.json"); }
+const char *legacy_file() { return evo_data_path("emby5/session.json"); }
 
 std::string read_file(const char *path)
 {
@@ -68,7 +69,7 @@ std::string ps5_key() { return std::to_string(s_ps5_user); }
 Store read_store()
 {
     Store s;
-    cJSON *j = cJSON_Parse(read_file(kFile).c_str());
+    cJSON *j = cJSON_Parse(read_file(accounts_file()).c_str());
     if (j) {
         const cJSON *it;
         cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(j, "accounts"))
@@ -83,7 +84,7 @@ Store read_store()
         return s;
     }
     /* First run after phase 1: take over its session. */
-    if (cJSON *old = cJSON_Parse(read_file(kLegacy).c_str())) {
+    if (cJSON *old = cJSON_Parse(read_file(legacy_file()).c_str())) {
         Account a = account_of(old);
         if (!a.token.empty()) {
             s.list.push_back(a);
@@ -97,7 +98,8 @@ Store read_store()
 
 void write_store(const Store &s)
 {
-    mkdir(kDir, 0777);
+    evo_mkdir(data_dir());
+    evo_mkdir(evo_data_path("emby5"));
     cJSON *j = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
     for (const Account &a : s.list) {
@@ -125,13 +127,13 @@ void write_store(const Store &s)
     char *text = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     /* Write beside, then rename: a crash mid-write never loses the accounts. */
-    const std::string tmp = std::string(kFile) + ".tmp";
+    const std::string tmp = std::string(accounts_file()) + ".tmp";
     if (FILE *f = std::fopen(tmp.c_str(), "wb")) {
         std::fputs(text, f);
         std::fclose(f);
-        std::rename(tmp.c_str(), kFile);
+        std::rename(tmp.c_str(), accounts_file());
     } else {
-        evo_bt("accounts: cannot write %s", kFile);
+        evo_bt("accounts: cannot write %s", accounts_file());
     }
     std::free(text);
 }

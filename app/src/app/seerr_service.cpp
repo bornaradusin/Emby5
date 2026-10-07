@@ -8,6 +8,7 @@
 #include "jf/jf_http.h"
 
 #include "evo_boot_trace.h"
+#include "evo_data_path.h"
 
 #include <algorithm>
 #include <atomic>
@@ -33,8 +34,8 @@ extern "C" {
 namespace seerr_service {
 namespace {
 
-constexpr const char *kDir = "/download0/emby5";
-constexpr const char *kFile = "/download0/emby5/seerr.json";
+const char *data_dir() { return evo_data_dir(); }
+const char *seerr_file() { return evo_data_path("emby5/seerr.json"); }
 constexpr const char *kAuthNames[] = {"quickconnect", "jellyfin", "local"};
 constexpr int kRetrySeconds = 30;
 
@@ -56,7 +57,7 @@ std::string s_genres_lang;              /* the language they are in */
 cJSON *load()
 {
     std::string body;
-    if (FILE *f = std::fopen(kFile, "rb")) {
+    if (FILE *f = std::fopen(seerr_file(), "rb")) {
         char buf[4096];
         size_t n;
         while ((n = std::fread(buf, 1, sizeof buf, f)) > 0)
@@ -69,18 +70,19 @@ cJSON *load()
 
 void save(cJSON *root)
 {
-    mkdir(kDir, 0777);
+    evo_mkdir(data_dir());
+    evo_mkdir(evo_data_path("emby5"));
     char *text = cJSON_PrintUnformatted(root);
     if (!text)
         return;   /* out of memory: the file stays as it was */
     /* Beside, then renamed: a crash mid-write never loses the file. */
-    const std::string tmp = std::string(kFile) + ".tmp";
+    const std::string tmp = std::string(seerr_file()) + ".tmp";
     if (FILE *f = std::fopen(tmp.c_str(), "wb")) {
         std::fputs(text, f);
         std::fclose(f);
-        std::rename(tmp.c_str(), kFile);
+        std::rename(tmp.c_str(), seerr_file());
     } else {
-        evo_bt("seerr: cannot write %s", kFile);
+        evo_bt("seerr: cannot write %s", seerr_file());
     }
     std::free(text);
 }

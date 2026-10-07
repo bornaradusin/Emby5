@@ -18,6 +18,7 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Sort, filter, favourites and watched/unwatched state
 - A-Z library navigation
 - Artwork/backdrop loading and BlurHash placeholders
+- Persistent accounts and local settings across app relaunches and folder-based updates
 
 ### Servers and accounts
 
@@ -26,7 +27,7 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Emby Quick Connect
 - Multiple saved users and servers
 - Profile/server switching
-- Per-server configuration
+- Persistent authentication and per-server settings across app relaunches and updates
 
 ### Playback
 
@@ -41,7 +42,6 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Audio delay and night mode
 - Subtitle styling, delay and online subtitle search
 - Trickplay thumbnails and accelerated seeking
-- 10-second L1/R1 quick seeking
 - Playback progress, resume and watched-state reporting
 - Playback recovery after network interruption
 - L3 playback information including delivery method, codecs, bitrate, decoder and buffer
@@ -83,6 +83,7 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Request status and withdrawal where supported
 - Request additional seasons for partially available series
 - Radarr/Sonarr server, quality-profile and root-folder choices when permitted by Seerr
+- Persistent Seerr configuration across app relaunches and updates
 
 ### PS5 integration
 
@@ -94,6 +95,17 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - 120 Hz UI support on compatible displays
 - Folder-based installation and updating
 - Optional GitHub update checking against `bornaradusin/Emby5`
+
+## Known limits
+
+These come from the PS5 platform and current playback stack, not from Emby5:
+
+- No bitstream passthrough: Dolby Atmos and DTS:X are decoded and output as multichannel PCM.
+- No true 24p output: the console runs the display at 60 or 120 Hz.
+- Dolby Vision plays its HDR10-compatible base layer where available. Profile 5, which has no HDR10 base layer, requires server transcoding.
+- AV1 is currently transcoded by the Emby server.
+- No 3D output, so side-by-side and top-and-bottom 3D files are not played.
+- Emby5 cannot quit itself. Close it using the PS button.
 
 ## Controls
 
@@ -120,15 +132,9 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 
 ## Updating
 
-Close Emby5 completely before updating.
+Close Emby5 completely first. Upload the new `PPSA99515/` folder's files over the existing files in `/data/homebrew/PPSA99515/` rather than deleting the folder.
 
-Upload the new `PPSA99515/` folder's files over the existing files in:
-
-`/data/homebrew/PPSA99515/`
-
-Do not delete the existing application folder before updating.
-
-> **Note:** Account, Emby and Seerr configuration persistence across application updates is currently being investigated. You may need to configure Emby5 again after updating.
+Accounts, local Emby5 settings and Seerr configuration are stored separately from the application folder and are retained across normal relaunches and folder-based updates.
 
 ## Building
 
@@ -141,15 +147,11 @@ cd app
 ./scripts/build.sh --release
 ```
 
-The release ZIP is written to `app/build/app/Emby5-<version>.zip` and contains the installable `PPSA99515/` folder.
-
-No proprietary Sony SDK is included.
+The release ZIP is written to `app/build/app/Emby5-<version>.zip` and contains the installable `PPSA99515/` folder. No proprietary Sony SDK is included.
 
 ## Project history
 
-The first public Emby5 release is `0.1.1`. The earlier internal `0.1.0` build was not functional and was not published.
-
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+The first public Emby5 release is `0.1.1`. The earlier internal `0.1.0` build was not functional and was not published. See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Credits
 
@@ -159,9 +161,7 @@ Emby5 is based on and derived from **Jelly5 by 02dnot**.
 
 Original project: https://github.com/02dnot/Jelly5
 
-Jelly5 provided the original PS5-native application foundation, including major portions of the UI, playback architecture, rendering, controller integration, media handling and platform-specific work.
-
-Emby5 adapts that foundation for Emby and adds Emby-specific authentication, API routing, user/library handling, branding and compatibility changes.
+Jelly5 provided the original PS5-native application foundation, including major portions of the UI, playback architecture, rendering, controller integration, media handling and platform-specific work. Emby5 adapts that foundation for Emby and adds Emby-specific authentication, API routing, user/library handling, branding and compatibility changes.
 
 ### Other upstream projects
 
@@ -169,30 +169,16 @@ Emby5 adapts that foundation for Emby and adds Emby-specific authentication, API
 - EVO Player PS5 by sainsaji
 - ps5-payload-dev SDK and PacBrew
 - ps5-native-app-boilerplate / ProsperoLight components by BlackBearReloaded
-- FFmpeg
-- libass
-- FreeType
-- HarfBuzz
-- cJSON
-- NanoSVG
-- OpenSSL
-- libcurl
-- zlib
+- FFmpeg, libass, FreeType, HarfBuzz, cJSON, NanoSVG, OpenSSL, libcurl and zlib
 
 Full attribution is retained in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Licence
 
-Emby5 is distributed under the GNU General Public License v3.0 or later.
-
-See [LICENSE](LICENSE).
-
-Individual third-party components remain subject to their respective licences and copyright notices.
+Emby5 is distributed under the GNU General Public License v3.0 or later. See [LICENSE](LICENSE). Individual third-party components remain subject to their respective licences and copyright notices.
 
 ## Disclaimer and trademarks
 
 Emby5 is unofficial homebrew software provided without warranty. It contains no media and accesses media supplied by the user's own Emby server.
 
-Emby5 is not affiliated with or endorsed by Emby LLC or Sony Interactive Entertainment.
-
-Emby, PlayStation, PS5 and DualSense are names or trademarks belonging to their respective owners and are used only to describe compatibility.
+Emby5 is not affiliated with or endorsed by Emby LLC or Sony Interactive Entertainment. Emby, PlayStation, PS5 and DualSense are names or trademarks belonging to their respective owners and are used only to describe compatibility.

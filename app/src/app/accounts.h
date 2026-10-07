@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Signed-in accounts ("Hvem ser på?"), kept in the title's own storage
- * (/download0/emby5/accounts.json): server, user and access token per
+ * (the Emby5 persistent data store): server, user and access token per
  * account, plus which one was used last. Accounts may be on several servers,
  * several on each.
  */

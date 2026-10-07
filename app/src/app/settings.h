@@ -5,7 +5,7 @@
  * Settings. Audio/subtitle languages, subtitle mode and autoplay live on the
  * Emby account (so every client agrees); the console-side ones (quality
  * cap, automatic intro skipping, language, subtitle look) live in
- * /download0/emby5/settings.json.
+ * the Emby5 persistent data store.
  */
 #pragma once
 

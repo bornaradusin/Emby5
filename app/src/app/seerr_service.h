@@ -6,7 +6,7 @@
  * whether it is there. Off unless turned on in Innstillinger: then nothing
  * is ever sent to Seerr and the app is as it was.
  *
- * Kept in /download0/emby5/seerr.json: per Emby server whether Seerr
+ * Kept in the Emby5 persistent data store: per Emby server whether Seerr
  * is on and its address; per account how it signs in and its session
  * cookie (as accounts.json keeps the Emby tokens); for the console,
  * whether it has Internet.

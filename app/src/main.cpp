@@ -48,8 +48,10 @@
 #include "evo_agc_runtime.h"
 #include "evo_boot_log.h"
 #include "evo_boot_trace.h"
+#include "evo_data_path.h"
 #include "evo_direct_mem.h"
 #include "evo_hw.h"
+#include "evo_jailbreak.h"
 #include "evo_vdec.h"
 
 #include <algorithm>
@@ -316,7 +318,7 @@ void request_gate(Gate kind, const std::string &server = std::string(), const st
 /* The hero's titles are cached per user between launches: the server's random
  * pick takes over a second, so a start shows the last pick at once and fetches
  * the next one behind it. */
-std::string hero_file(const jf::Client &c) { return "/download0/emby5/hero-" + c.user_id() + ".json"; }
+std::string hero_file(const jf::Client &c) { return std::string(evo_data_path(("emby5/hero-" + c.user_id() + ".json").c_str())); }
 
 std::string read_file(const std::string &path)
 {
@@ -333,7 +335,8 @@ std::string read_file(const std::string &path)
 
 void write_file(const std::string &path, const std::string &data)
 {
-    mkdir("/download0/emby5", 0777);
+    evo_mkdir(evo_data_dir());
+    evo_mkdir(evo_data_path("emby5"));
     const std::string tmp = path + ".tmp";
     if (FILE *f = std::fopen(tmp.c_str(), "wb")) {
         const bool ok = std::fwrite(data.data(), 1, data.size(), f) == data.size();
@@ -1911,6 +1914,13 @@ int main()
         for (;;)
             usleep(1000 * 1000);
     }
+
+    const int sandbox_open = evo_jailbreak_self();
+    if (sandbox_open)
+        evo_data_path_rebind();
+    evo_bt("emby5: persistent storage %s (%s)",
+           sandbox_open ? "available" : "NOT available",
+           evo_data_dir());
     if (ui_text_init() != 0 || !gfx::init())
         evo_bt("emby5: ui init failed");
     nuvio_input_open(s_user);
