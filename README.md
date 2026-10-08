@@ -1,128 +1,228 @@
 # Emby5 for PS5
 
-Emby5 is a native Emby client for homebrew-capable PlayStation 5 consoles. It is derived from [Jelly5 by 02dnot](https://github.com/02dnot/Jelly5), retaining its native PS5 UI and playback engine while adapting the server-facing layer for Emby.
+**Emby5** is an unofficial native Emby client for homebrew-capable PlayStation 5 consoles.
+
+It is derived from [Jelly5 by 02dnot](https://github.com/02dnot/Jelly5).
 
 Emby5 is an independent community project. It is not affiliated with or endorsed by Emby LLC, Sony Interactive Entertainment, Jelly5, or their respective developers.
 
 ## Features
 
-### Interface and libraries
+### Interface and Libraries
 
-- Native GPU-rendered PS5 interface with liquid-glass controls
-- Home hero, Continue Watching, Next Up and Recently Added
-- Recommendations and genre browsing
-- Movies, TV shows, seasons and episodes
-- Music, artists, albums and playlists
-- Detail pages with artwork, cast and media information
-- Global search across movies, TV shows, people, and Xtream IPTV channel names (IPTV requires configured credentials)
-- Sort, filter, favourites and watched/unwatched state
-- A-Z library navigation
-- Artwork/backdrop loading and BlurHash placeholders
-- Persistent accounts and local settings across app relaunches and folder-based updates
+- Native GPU-rendered PS5 interface.
+- **31 selectable visual themes**, including the original Glass design.
+- Theme-specific colors, panel treatments, borders, shadows, highlights and bevels.
+- Theme selection under **Settings → Theme**.
+- Home screen with featured content, Continue Watching, Next Up and Recently Added.
+- Recommendations and genre browsing.
+- Movies, TV shows, seasons and episodes.
+- Music libraries, artists, albums and playlists.
+- Media detail pages with artwork and metadata.
+- Global search covering movies, TV shows, and configured Xtream IPTV channels.
+- Library sorting, filtering, favourites and watched/unwatched status.
+- A–Z library navigation.
+- Artwork and backdrop loading, including placeholder rendering.
+- Local storage for saved accounts and application settings.
 
-### Servers and accounts
+Some artwork may be unavailable or fail to load for particular items or libraries, depending on the Emby server and image-handling behavior.
 
-- Emby LAN discovery and manual server addresses
-- Username/password authentication
-- Emby Quick Connect
-- Multiple saved users and servers
-- Profile/server switching
-- Persistent authentication and per-server settings across app relaunches and updates
+### Servers and Accounts
+
+- Emby server discovery on the local network.
+- Manual server addresses.
+- Username/password authentication.
+- Multiple saved users and servers.
+- Account and server switching.
+- Local storage of authentication and account configuration.
+
+Saved accounts and application settings are intended to survive normal application restarts and folder-based updates. 
 
 ### Playback
 
-- Native PS5 playback engine and hardware video decoding
-- H.264 and HEVC/Main 10, including 4K playback
-- HDR10 and HLG; compatible HDR base-layer handling
-- Direct Play, Direct Stream and server-side transcoding
-- PS5-specific Emby playback negotiation/device profile
-- Multiple media-version selection
-- Multiple audio and subtitle tracks
-- Playback speed from 0.75x to 2x with pitch preservation
-- Audio delay and night mode
-- Subtitle styling, delay and online subtitle search
-- Trickplay thumbnails and accelerated seeking
-- Playback progress, resume and watched-state reporting
-- Playback recovery after network interruption
-- L3 playback information including delivery method, codecs, bitrate, decoder and buffer
+- Native PS5 video playback engine.
+- Hardware-accelerated H.264 and HEVC decoding, including supported 4K content.
+- HEVC Main 10 support.
+- HDR10 and HLG output for compatible media and displays.
+- Direct Play, Direct Stream and Emby server transcoding.
+- PS5-specific Emby playback negotiation and device profile.
+- Media-source/version selection where multiple versions are available.
+- Audio-track and subtitle-track selection.
+- Playback speed options: 0.75×, 1×, 1.25×, 1.5× and 2×.
+- Audio delay adjustment.
+- Night mode.
+- Seeking and trickplay thumbnails where supported by the server.
+- Playback progress, resume and watched-state reporting.
+- Automatic reconnection attempts after some network or stream interruptions.
+- Playback information accessible through L3, including available codec, delivery and buffering details.
 
-### Intros, credits and episodes
+Playback speeds and audio handling may be limited by the selected output mode. Automatic recovery is not guaranteed for every connection failure.
 
-- Emby media-segment support
-- Skip Intro and Skip Recap where available
-- Optional automatic intro skipping
-- Credits/outro handling and Watch Credits
-- In-player season/episode browser
-- Next-episode card and countdown
-- Automatic next-episode playback
+### Intros, Credits and Episodes
 
-### Audio and subtitles
+- Emby media-segment integration.
+- Skip Intro and Skip Recap when suitable segments are provided by the server.
+- Optional automatic intro skipping.
+- Credits/outro handling and Watch Credits functionality.
+- In-player season and episode browsing.
+- Next-episode card and countdown.
+- Automatic next-episode playback.
+- Optional **Are You Still Watching?** confirmation for unattended episode autoplay.
 
-- AAC, AC3, E-AC3, TrueHD, DTS-family, FLAC, Opus, MP3 and other supported audio decoded to PCM
-- SRT, ASS/SSA, PGS, DVD, DVB and WebVTT subtitles
-- Embedded and external subtitle tracks
-- Subtitle appearance and timing controls
-- All six Emby subtitle playback modes: Default, Smart, Always, Only Forced, Hearing Impaired (SDH), None
+#### Are You Still Watching?
+
+Available under **Settings → Playback**:
+
+| Setting | Behavior |
+| --- | --- |
+| Off | Disabled by default |
+| After 3 episodes | Requests confirmation after consecutive unattended autoplay |
+| After 2 hours | Requests confirmation at the next qualifying episode transition |
+
+When the confirmation appears, pressing a controller button continues to the next episode.
+
+Controller activity during playback resets the unattended streak.
+
+The feature applies to TV episode autoplay and does not affect music, IPTV, or movies.
+
+### Audio and Subtitles
+
+- Playback of supported AAC, AC-3, E-AC-3, DTS-family, TrueHD, FLAC, Opus, MP3 and other FFmpeg-compatible audio formats, subject to codec and output limitations.
+- Decoded PCM audio output for compatible formats.
+- Optional HDMI bitstream output for supported AC-3, E-AC-3 and DTS-core streams.
+- Audio-track selection while playing video.
+- Embedded and external subtitle-track support.
+- Subtitle support for compatible text and bitmap formats, including SRT, ASS/SSA, PGS, DVD, DVB and WebVTT.
+- Subtitle-track selection and subtitle disabling during playback.
+- Subtitle search and download when supported by the connected Emby server.
+- Six Emby subtitle playback modes: Default, Smart, Always, Only Forced, Hearing Impaired (SDH) and None.
+
+**Subtitle customization limitation:** The source contains subtitle size, position, delay, background and outline controls, but the customization submenu has not been confirmed accessible in the released PS5 interface. These controls are therefore not advertised as available functionality.
+
+Preferred audio-language and preferred subtitle-language settings were removed from Emby5 1.0.0 because their behavior was unreliable.
 
 ### Music
 
-- Artists, albums and playlists
-- Background playback while browsing
-- Mini player and Now Playing view
-- Queue navigation
-- Shuffle and repeat controls
-- Lyrics support where available
+- Artist, album and playlist browsing.
+- Music playback while navigating the application.
+- Mini player and Now Playing screen.
+- Playback queue navigation.
+- Shuffle and repeat.
+- Lyrics display when lyrics are available from Emby.
 
-### Seerr (optional)
+### Seerr (Optional)
 
-- Seerr connection settings and connection testing
-- Per-account Seerr sessions
-- Seerr results alongside Emby search
-- Discover: trending, popular and upcoming media
-- Movie requests
-- TV-series and season-by-season requests
-- Request status and withdrawal where supported
-- Request additional seasons for partially available series
-- Radarr/Sonarr server, quality-profile and root-folder choices when permitted by Seerr
-- Persistent Seerr configuration across app relaunches and updates
+Emby5 includes optional integration with supported Seerr servers.
 
-### IPTV (Xtream Codes; PS5 validation pending)
+- Seerr connection configuration and connection testing.
+- Account-associated sessions.
+- Seerr search and discovery integration.
+- Trending, popular and upcoming content discovery.
+- Movie requests.
+- Television and season-based requests.
+- Request-status viewing.
+- Request withdrawal and additional-season requests where supported.
+- Radarr/Sonarr configuration options, subject to server support and user permissions.
+- Local storage of Seerr configuration.
 
-- Native IPTV tab using Emby5's existing visual style
-- Xtream server URL, username and password configured independently in Settings (no chained keyboards)
-- Live channel browsing and Xtream TS/HLS stream URL playback through the existing PS5 player
-- User-managed categories in Settings: create, rename, delete and reorder
-- Assign or remove channels in multiple custom categories from Settings; reorder assigned channels
-- Persistent Xtream account configuration and category assignments
-- IPTV viewer controls: Up from the first channel focuses the category selector; Left/Right changes category, X cycles categories, Down returns to channels; X on a channel plays.
-- Category assignment search: Triangle opens a channel-name search, Square clears it; X assigns/unassigns a channel in filtered results. All configuration remains in Settings → IPTV.
-- Requires a legitimate IPTV provider account; no channels or subscriptions are supplied
+Available functions depend on the connected Seerr version, server configuration and account permissions.
 
-### PS5 integration
+### IPTV — Xtream Codes
 
-- Native PS5 title ID `PPSA99515`
-- Native DualSense navigation
-- Adaptive-trigger seeking
-- DualSense light-bar integration
-- HDMI Device Link / HDMI-CEC navigation where supported
-- 120 Hz UI support on compatible displays
-- Folder-based installation and updating
-- Optional GitHub update checking against `bornaradusin/Emby5`
+Emby5 1.0.0 includes native IPTV integration.
 
-## HDMI bitstream (1.0.0, pending hardware validation)
+- Dedicated IPTV tab.
+- Xtream Codes-compatible server configuration.
+- Separate server URL, username and password entry under **Settings → IPTV**.
+- Live television channel browsing.
+- Xtream TS/HLS stream playback through Emby5's existing player.
+- Channel categories.
+- Custom category creation, renaming, deletion and reordering.
+- Assigning and removing channels from custom categories.
+- Channel ordering within custom categories.
+- Channel-name search during category assignment.
+- IPTV channel-name support in global search.
+- Local storage of Xtream configuration and category assignments.
 
-Optional HDMI passthrough for compatible AC-3, E-AC-3 and DTS-core audio streams. Unsupported formats or sinks fall back to PCM; night mode disables passthrough. TrueHD Atmos and DTS:X passthrough are not supported.
+#### IPTV Controller Navigation
 
-## Known limits
+- **Up** from the first channel focuses the category selector.
+- **Left/Right** changes the category.
+- **X** cycles categories when the selector is focused.
+- **Down** returns to the channel list.
+- **X** on a channel starts playback.
 
-These come from the PS5 platform and current playback stack, not from Emby5:
+#### Category Management
 
-- HDMI passthrough for AC-3, E-AC-3 and DTS core is optional and requires compatible output hardware; TrueHD Atmos and DTS:X are decoded to PCM.
-- No true 24p output: the console runs the display at 60 or 120 Hz.
-- Dolby Vision plays its HDR10-compatible base layer where available. Profile 5, which has no HDR10 base layer, requires server transcoding.
-- AV1 is currently transcoded by the Emby server.
-- No 3D output, so side-by-side and top-and-bottom 3D files are not played.
-- Emby5 cannot quit itself. Close it using the PS button.
+Custom categories are managed under **Settings → IPTV**.
+
+- **Triangle** opens channel-name search.
+- **Square** clears the search.
+- **X** assigns or removes a channel from the selected category.
+
+IPTV browsing, custom categories and live playback have been tested on PS5. Compatibility with individual providers and streams may vary.
+
+**Emby5 does not supply IPTV channels, subscriptions or credentials. A legitimate IPTV provider account is required.**
+
+### Visual Themes
+
+Emby5 includes **31 selectable themes** under **Settings → Theme**.
+
+- **Glass** — the original Emby5 appearance and default theme.
+- **30 additional themes** inspired by [BlackBearReloaded's PS5 Homebrew UI](https://github.com/blackbearreloaded/ps5-homebrew-ui).
+- Theme-specific colors and panel treatments.
+- Different borders, outlines, shadows, highlights and bevels.
+- Design adaptations inspired by Brutal, Clay, Gloss, Classic, Blueprint, Hazard, Pixel, Sketch and other styles.
+- Theme selection stored in local application settings.
+
+These themes are recreated using Emby5's native PS5 AGC renderer.
+
+They are **not direct OpenGL ports**, complete interface replacements or exact reproductions of every original visual effect.
+
+See [docs/THEME_PRESETS.md](docs/THEME_PRESETS.md) for additional information.
+
+### PS5 Integration
+
+- Native PS5 application title ID `PPSA99515`.
+- DualSense controller navigation.
+- Adaptive-trigger seeking support.
+- DualSense light-bar integration.
+- HDMI Device Link / HDMI-CEC input handling where supported.
+- Optional 120 Hz UI output on compatible displays and PS5 configurations.
+- Folder-based homebrew installation and updating.
+- Optional GitHub update checking for `bornaradusin/Emby5`.
+
+Hardware-dependent features may behave differently across PS5 firmware versions and homebrew environments.
+
+## HDMI Audio Bitstream
+
+Emby5 1.0.0 includes optional HDMI bitstream handling for compatible:
+
+- **AC-3** — Dolby Digital.
+- **E-AC-3** — Dolby Digital Plus.
+- **DTS core**.
+
+When bitstream output is unavailable or unsupported, the player attempts to use decoded PCM audio instead.
+
+Night mode disables bitstream output.
+
+**TrueHD Atmos and DTS:X bitstream passthrough are not supported.**
+
+HDMI bitstream support is implemented in source, but compatibility with individual receivers, televisions and audio configurations requires hardware testing.
+
+## Known Limitations
+
+The following limitations relate to the PS5 platform, the homebrew environment or Emby5's current implementation.
+
+- HDMI bitstream output requires compatible equipment and source formats.
+- TrueHD Atmos and DTS:X bitstream passthrough are not supported.
+- Dolby Vision compatibility depends on the source profile and playback path. Native Dolby Vision output is not supported, and some files may require server transcoding.
+- AV1 is not supported by the intended PS5 hardware-decoding path and may require server transcoding.
+- Native stereoscopic 3D output is not supported. Side-by-side and top-and-bottom 3D content is rejected by the application.
+- Emby5 cannot terminate itself. Use the PS button to close it.
+- Subtitle appearance and timing customization code exists, but its menu accessibility has not been validated in the released build.
+- Preferred audio-language and subtitle-language selectors are not included in 1.0.0.
+- Some album artwork may fail to appear in the music album grid.
 
 ## Controls
 
@@ -130,87 +230,132 @@ These come from the PS5 platform and current playback stack, not from Emby5:
 | --- | --- | --- |
 | X | Select | Play / pause / select |
 | Circle | Back | Hide controls / leave player |
-| D-pad | Navigate | Show controls; left/right seek |
-| L1 / R1 | Previous / next tab | 10 seconds back / forward |
-| L2 / R2 | Previous / next letter in A-Z libraries | Adaptive rewind / fast-forward |
+| D-pad | Navigate | Show controls; Left/Right seek |
+| L1 / R1 | Previous / next tab | Seek backward / forward |
+| L2 / R2 | Previous / next A–Z letter | Adaptive rewind / fast-forward |
 | Triangle | Search | Episodes |
-| Square | Sort & filter | Audio and subtitles |
+| Square | Sort and filter | Audio and subtitle selection |
 | Options | Item options | Playback controls |
 | Touchpad | Now Playing while music plays | Playback controls |
-| L3 | - | Playback information |
+| L3 | — | Playback information |
+
+Some buttons have additional functions within the IPTV interface and its category-management screens.
 
 ## Installation
 
-1. Download `Emby5-<version>.zip` from the GitHub release and extract it.
-2. Upload the extracted `PPSA99515/` folder to `/data/homebrew/` on the PS5.
-3. The resulting path must contain `/data/homebrew/PPSA99515/eboot.bin`.
-4. If your ShadowMountPlus setup requires it, set `PPSA99515/` and its contents recursively to permission `777`.
-5. Wait approximately 15 seconds for ShadowMountPlus to discover Emby5. If it does not appear, redeploy ShadowMountPlus and let it scan `/data/homebrew/` again.
+1. Download `Emby5-<version>.zip` from [GitHub Releases](https://github.com/bornaradusin/Emby5/releases).
+2. Extract the downloaded ZIP.
+3. Upload the included `PPSA99515/` folder to `/data/homebrew/` on the PS5.
+4. Verify that the resulting installation contains `/data/homebrew/PPSA99515/eboot.bin`.
+5. If required by your ShadowMountPlus setup, set the `PPSA99515/` directory and its contents recursively to permission `777`.
+6. Allow ShadowMountPlus approximately 15 seconds to discover the application. If it does not appear, redeploy ShadowMountPlus and allow it to scan `/data/homebrew/` again.
+
+### File Transfer Recommendation
+
+During development and testing, **PS5Upload caused problems with transferred application files and permissions**.
+
+For manual transfers, [ps5-web-file-manager by owendswang](https://github.com/owendswang/ps5-web-file-manager) or another compatible file-management tool is recommended.
+
+After transferring, confirm that the installed application files have the permissions required (0777) by your homebrew environment.
 
 ## Updating
 
-Close Emby5 completely first. Upload the new `PPSA99515/` folder's files over the existing files in `/data/homebrew/PPSA99515/` rather than deleting the folder.
+Close Emby5 completely before updating.
 
-Accounts, local Emby5 settings and Seerr configuration are stored separately from the application folder and are retained across normal relaunches and folder-based updates.
+Upload the new files from `PPSA99515/` over the existing installation in `/data/homebrew/PPSA99515/`.
 
-## Building
+**Do not delete the existing application directory or persistent data unless specifically necessary.**
 
-Emby5 uses the public PS5 payload SDK and PacBrew toolchain.
+Account information, local settings and Seerr configuration are stored separately from the installed application files and are intended to be retained across normal folder-based updates.
 
-```bash
-./scripts/setup-toolchain.sh
-eval "$(./scripts/setup-toolchain.sh --env)"
-cd app
-./scripts/build.sh --release
-```
+## Credits & Acknowledgements
 
-The release ZIP is written to `app/build/app/Emby5-<version>.zip` and contains the installable `PPSA99515/` folder. No proprietary Sony SDK is included.
+Emby5 is built upon and inspired by the work of developers throughout the PlayStation 5 homebrew and open-source communities.
 
-## Project history
+Full credit for the original projects and components belongs to their respective developers and contributors.
 
-The first public Emby5 release is `0.1.1`. The earlier internal `0.1.0` build was not functional and was not published. See [CHANGELOG.md](CHANGELOG.md) for release history.
+### Jelly5 — Original Application Foundation
 
-## Credits
+**[02dnot — Jelly5](https://github.com/02dnot/Jelly5)**
 
-### Jelly5
+Emby5 is based on and derived from Jelly5.
 
-Emby5 is based on and derived from **Jelly5 by 02dnot**.
+Jelly5 provided the original PS5-native application foundation, including major portions of the UI, playback architecture, rendering, controller integration, media handling and platform-specific functionality.
 
-Original project: https://github.com/02dnot/Jelly5
+Emby5 adapts this foundation for Emby-specific authentication, API integration, user management, libraries, branding and additional features.
 
-Jelly5 provided the original PS5-native application foundation, including major portions of the UI, playback architecture, rendering, controller integration, media handling and platform-specific work. Emby5 adapts that foundation for Emby and adds Emby-specific authentication, API routing, user/library handling, branding and compatibility changes.
+### Nuvio PS5 — Application and Playback Foundations
 
-### Other upstream projects
+**[Husam Osman / theghostonline — Nuvio PS5](https://github.com/theghostonline/Nuvio-PS5)**
 
-- Nuvio PS5 by Husam Osman / theghostonline
-- EVO Player PS5 by sainsaji
-- ps5-payload-dev SDK and PacBrew
-- ps5-native-app-boilerplate / ProsperoLight components by BlackBearReloaded
-- FFmpeg, libass, FreeType, HarfBuzz, cJSON, NanoSVG, OpenSSL, libcurl and zlib
+Credit for upstream PlayStation 5 application and playback foundations.
 
-Full attribution is retained in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+### EVO Player PS5 — Native Media Engine
+
+**[sainsaji — EVO Player PS5](https://github.com/sainsaji/EVO-PLAYER-PS5)**
+
+Credit for native PS5 media playback, decoding, rendering and media-engine foundations.
+
+### ProsperoTV — IPTV Reference and Inspiration
+
+**[BlackBearReloaded — ProsperoTV](https://github.com/blackbearreloaded/ProsperoTV)**
+
+Creator of ProsperoTV, a native PlayStation 5 IPTV homebrew application.
+
+ProsperoTV is acknowledged as a reference and inspiration for IPTV development in Emby5.
+
+### PS5 Homebrew UI — Visual Theme Designs
+
+**[BlackBearReloaded — PS5 Homebrew UI](https://github.com/blackbearreloaded/ps5-homebrew-ui)**
+
+Creator of the UI theme collection that inspired the 30 additional Emby5 visual themes.
+
+The original styling concepts and visual designs have been adapted to Emby5's native AGC rendering system.
+
+Full credit for the original theme designs belongs to BlackBearReloaded.
+
+### PS5 SDK and Toolchain
+
+**[ps5-payload-dev — PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk)**
+
+Open-source PlayStation 5 SDK and development tools.
+
+**PacBrew**
+
+PS5 homebrew toolchain and package ecosystem.
+
+### Open-Source Libraries
+
+Thanks to the developers and maintainers of the open-source libraries used by Emby5 and its upstream projects, including:
+
+- FFmpeg
+- libass
+- FreeType
+- HarfBuzz
+- cJSON
+- NanoSVG
+- OpenSSL
+- libcurl
+- zlib
+
+Thanks also to everyone contributing to the wider PS5 homebrew community.
+
+For additional attribution and third-party licensing information, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Licence
 
-Emby5 is distributed under the GNU General Public License v3.0 or later. See [LICENSE](LICENSE). Individual third-party components remain subject to their respective licences and copyright notices.
+Emby5 is distributed under the GNU General Public License v3.0 or later. See [LICENSE](LICENSE).
 
-## Disclaimer and trademarks
+Third-party components remain subject to their respective licences and copyright notices.
 
-Emby5 is unofficial homebrew software provided without warranty. It contains no media and accesses media supplied by the user's own Emby server.
+## Disclaimer and Trademarks
 
-Emby5 is not affiliated with or endorsed by Emby LLC or Sony Interactive Entertainment. Emby, PlayStation, PS5 and DualSense are names or trademarks belonging to their respective owners and are used only to describe compatibility.
+Emby5 is unofficial homebrew software provided without warranty.
 
-### Are you still watching?
+The application does not include media files, IPTV channels, subscriptions or access credentials.
 
-Settings -> Playback: **Off** (default), **After 3 episodes**, or **After 2 hours**.
-During uninterrupted episode autoplay, Emby5 pauses the next-episode transition
-and asks for confirmation. Any controller button starts the next episode;
-controller activity during playback resets the unattended streak. Does not affect music or IPTV.
+Users are responsible for accessing media and services they are legally entitled to use.
 
-### PS5 diagnostic log
+Emby5 is not affiliated with or endorsed by Emby LLC, Sony Interactive Entertainment, Jelly5, or any of the other acknowledged upstream projects.
 
-With USB0 mounted, Emby5 writes to `/mnt/usb0/emby5/emby5.log`,
-separately from EVO Player's `/mnt/usb0/evo.log`. If no USB is connected,
-the app continues without a USB log.
-
-Theme selection: Settings > Theme offers original Glass plus 30 AGC-native visual presets (see docs/THEME_PRESETS.md).
+Emby, PlayStation, PS5 and DualSense are trademarks or names belonging to their respective owners and are used solely to describe compatibility.
