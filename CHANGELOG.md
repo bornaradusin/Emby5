@@ -89,7 +89,7 @@ All notable public Emby5 releases are documented here.
 
 ## 0.1.2
 
-- Replaced remaining PS5 Home Screen Jelly5 branding with Emby5 branding.
+- Replaced remaining PS5 Home Screen Jellyfin branding with Emby branding.
 - Added Emby5 application icon and presentation artwork.
 - Fixed post-login authenticated Emby user lookup.
 - Changed runtime device identity to Emby5.
@@ -101,5 +101,3 @@ All notable public Emby5 releases are documented here.
 
 - First functional Emby5 PS5 build.
 
-- Removed preferred audio/subtitle language controls and experimental preference diagnostics/USB file logging; retained subtitle playback mode and unattended autoplay prompt.
-- Added Glass plus 30 selectable AGC-native theme color/panel presets under Settings.
