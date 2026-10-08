@@ -35,6 +35,7 @@ Emby5 provides a native, GPU-rendered interface designed for navigating your Emb
 - Movies, TV shows, seasons, and episodes.
 - Music libraries, artists, albums, and playlists.
 - Media detail pages with artwork and metadata.
+- Upcoming episodes appear in TV Show season details.
 - Global search across movies, TV shows, and configured Xtream IPTV channels.
 - Library sorting, filtering, favourites, and watched/unwatched status.
 - A–Z library navigation.
