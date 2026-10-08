@@ -405,6 +405,9 @@ std::string request_json(jf::Client &c, const jf::Item &it, const jf::Playback &
     cJSON_AddItemToObject(prefs, "autoSkipIntro", cJSON_CreateBool(set.local.auto_skip_intro));
     cJSON_AddItemToObject(prefs, "clock24h", cJSON_CreateBool(1));
     cJSON *style = cJSON_CreateObject();   /* how text subtitles look (Innstillinger) */
+    char sub_color[8];
+    std::snprintf(sub_color, sizeof sub_color, "#%06X", (unsigned)set.local.sub_color & 0xffffff);
+    cJSON_AddStringToObject(style, "color", sub_color);
     cJSON_AddNumberToObject(style, "size", set.local.sub_size);
     cJSON_AddNumberToObject(style, "offset", set.local.sub_offset);
     cJSON_AddNumberToObject(style, "background", set.local.sub_background);

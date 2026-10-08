@@ -120,6 +120,8 @@ void load_local()
             l.sub_background = std::max(0.f, std::min(1.f, (float)v->valuedouble));
         if (cJSON_IsBool(v = cJSON_GetObjectItemCaseSensitive(st, "outline")))
             l.sub_outline = cJSON_IsTrue(v);
+        if (cJSON_IsNumber(v = cJSON_GetObjectItemCaseSensitive(st, "color")))
+            l.sub_color = std::max(0, std::min(0xffffff, (int)v->valuedouble));
     }
     if (s_all.local.language < 0 || s_all.local.language >= i18n::ChoiceCount)
         s_all.local.language = 0;
@@ -148,6 +150,7 @@ static void save_local_snapshot(const Local &l)
     cJSON_AddNumberToObject(st, "offset", l.sub_offset);
     cJSON_AddNumberToObject(st, "background", l.sub_background);
     cJSON_AddBoolToObject(st, "outline", l.sub_outline);
+    cJSON_AddNumberToObject(st, "color", l.sub_color);
     cJSON_AddItemToObject(j, "subtitles", st);
     char *text = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);

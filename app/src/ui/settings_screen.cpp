@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "ui/settings_screen.h"
+#include "app/iptv_live.h"
 #include "ui/theme_presets.h"
 #include "evo_audio_out.h"
 
@@ -89,9 +90,12 @@ const char *label_of(int row)
                                          T("P\xC3\xA5logging"),
                                          T("Seerr-konto"),
                                          T("Test tilkoblingen"),
+                                         "Emby Live TV (automatic)",
                                          "Xtream server URL",
                                          "Xtream username",
                                          "Xtream password",
+                                         "Xtream source status",
+                                         "Unified IPTV",
                                          "Manage IPTV categories",
                                          T("Språk"),
                                          "Theme",
@@ -178,6 +182,21 @@ std::string SettingsScreen::value(Row r) const
     const settings::All s = settings::get();
     switch (r) {
     case SwitchUser: return m_client.user_name();
+    case EmbyLive: {
+        const auto live=iptv_live::snapshot();
+        if (live.loading && !live.emby_count) return "Checking Emby Live TV...";
+        return live.emby_count ? std::to_string(live.emby_count)+" channels - connected" : "No channels available";
+    }
+    case XtreamLive: {
+        const auto live=iptv_live::snapshot();
+        if (live.loading && !live.xtream_count) return "Checking Xtream...";
+        return live.xtream_count ? std::to_string(live.xtream_count)+" channels - connected" : "No channels available";
+    }
+    case IPTVSummary: {
+        const auto live=iptv_live::snapshot();
+        const unsigned count=live.emby_count+live.xtream_count;
+        return count ? std::to_string(count)+" channels - IPTV visible" : "No channels - IPTV hidden";
+    }
     case IPTVServer: return m_iptv_creds.server.empty() ? "X to enter" : m_iptv_creds.server;
     case IPTVUsername: return m_iptv_creds.username.empty() ? "X to enter" : m_iptv_creds.username;
     case IPTVPassword: return m_iptv_creds.password.empty() ? "X to enter" : "********";

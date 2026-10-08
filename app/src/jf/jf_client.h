@@ -45,6 +45,7 @@ struct Item {
     std::string album_id, album, album_artist, album_artist_id;
     std::string album_primary_tag, album_blurhash;
     std::string premiere_date;                /* ISO date; a person's birth date */
+    bool upcoming = false;                    /* Virtual future episode; not playable */
     std::vector<std::string> locations;       /* a person's birthplace */
     std::string tmdb_id, tvdb_id;             /* ProviderIds (search and item ask for them) */
 
@@ -211,6 +212,7 @@ public:
     std::vector<Item> featured_from(const std::string &raw, int limit);
     std::vector<Item> latest(const std::string &parent_id, int limit);
     std::vector<Item> episodes(const std::string &series_id, const std::string &season_id);
+    std::vector<Item> upcoming_episodes(const std::string &series_id);
     /* A library page: types e.g. "Movie" or "Series"; sort_by e.g. "DateCreated,SortName". */
     /* filter: extra query, e.g. "&AlbumArtistIds=<id>" (an artist's albums). */
     Page library(const std::string &parent_id, const std::string &types, const std::string &sort_by,

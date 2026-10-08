@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 extern "C" {
 #include "cJSON.h"
@@ -181,6 +182,7 @@ Item item_of(const cJSON *o)
     it.album_primary_tag = str_of(o, "AlbumPrimaryImageTag");
     it.album_blurhash = blurhash_of(o, "Primary", it.album_primary_tag);
     it.premiere_date = str_of(o, "PremiereDate");
+    it.upcoming = str_of(o, "LocationType") == "Virtual";
     cJSON_ArrayForEach(g, cJSON_GetObjectItemCaseSensitive(o, "ProductionLocations"))
         if (cJSON_IsString(g))
             it.locations.push_back(g->valuestring);
@@ -564,6 +566,36 @@ std::vector<Item> Client::episodes(const std::string &series_id, const std::stri
     if (!get_json(path, &body))
         return {};
     return items_of(body);
+}
+
+/* Emby supplies unaired virtual episodes in its upcoming TV schedule.
+ * Query this independently because /Shows/{id}/Episodes need not include them.
+ * Limit the response to the requested series in code as well as via ParentId.
+ */
+std::vector<Item> Client::upcoming_episodes(const std::string &series_id)
+{
+    std::string body;
+    const std::string path = "/Shows/Upcoming?userId=" + user_id_ +
+        "&ParentId=" + url_escape(series_id) +
+        "&Recursive=true&Limit=500&Fields=Overview&SortBy=PremiereDate&SortOrder=Ascending";
+    if (!get_json(path, &body))
+        return {};
+    std::vector<Item> upcoming;
+    for (Item &e : items_of(body)) {
+        if (e.type != "Episode" || e.series_id != series_id || e.premiere_date.size() < 10)
+            continue;
+        // Compare ISO calendar dates (YYYY-MM-DD); episodes from today can be included.
+        std::time_t now = std::time(nullptr);
+        std::tm *utc = std::gmtime(&now);
+        char today[11] = {};
+        if (!utc || !std::strftime(today, sizeof today, "%Y-%m-%d", utc))
+            continue;
+        if (e.premiere_date.compare(0, 10, today, 10) < 0)
+            continue;
+        e.upcoming = true; // Upcoming endpoint defines availability, even if LocationType was omitted.
+        upcoming.push_back(std::move(e));
+    }
+    return upcoming;
 }
 
 Page Client::library(const std::string &parent_id, const std::string &types, const std::string &sort_by,
@@ -1075,7 +1107,9 @@ std::string Client::image_url(const std::string &owner, const char *type, const 
  * and HEVC Main/Main10 up to 3840x2176 and VP9; FFmpeg covers the rest in
  * software and every audio codec (multichannel PCM out). Dolby Vision plays
  * its HDR10 base layer, so only profiles with a compatible base are allowed.
- * AV1 needs dav1d, which this build does not have yet: the server transcodes it.
+ * AV1 uses the FFmpeg software decoder (dav1d when available). Advertise
+ * direct play only for streams up to 3840x2160, 10-bit and 30 fps; let Emby
+ * transcode higher-frame-rate or otherwise unsupported AV1 streams.
  */
 std::string Client::device_profile_json(int64_t max_bitrate)
 {
@@ -1087,7 +1121,7 @@ std::string Client::device_profile_json(int64_t max_bitrate)
   "DirectPlayProfiles": [
     {"Type": "Video",
      "Container": "mkv,webm,mp4,m4v,mov,ts,mpegts,m2ts,mts,avi,wmv,asf,flv,3gp,ogv,mpg,mpeg,vob",
-     "VideoCodec": "h264,hevc,vp9,mpeg2video,mpeg4,vc1,vp8,msmpeg4v3,wmv3,mpeg1video",
+     "VideoCodec": "h264,hevc,vp9,av1,mpeg2video,mpeg4,vc1,vp8,msmpeg4v3,wmv3,mpeg1video",
      "AudioCodec": "aac,ac3,eac3,truehd,dts,dca,flac,mp3,mp2,opus,vorbis,alac,pcm_s16le,pcm_s24le,pcm_s32le,pcm_bluray,wmav2,wmapro"},
     {"Type": "Audio", "Container": "mp3,flac,aac,m4a,m4b,ogg,oga,opus,wav,alac,ape,wv,wma"}
   ],
@@ -1108,7 +1142,12 @@ std::string Client::device_profile_json(int64_t max_bitrate)
       {"Condition": "EqualsAny", "Property": "VideoRangeType",
        "Value": "SDR|HDR10|HLG|DOVIWithHDR10|DOVIWithHLG|DOVIWithSDR|HDR10Plus", "IsRequired": false}]},
     {"Type": "Video", "Codec": "vp9", "Conditions": [
-      {"Condition": "LessThanEqual", "Property": "Width", "Value": "3840", "IsRequired": false}]}
+      {"Condition": "LessThanEqual", "Property": "Width", "Value": "3840", "IsRequired": false}]},
+    {"Type": "Video", "Codec": "av1", "Conditions": [
+      {"Condition": "LessThanEqual", "Property": "Width", "Value": "3840", "IsRequired": true},
+      {"Condition": "LessThanEqual", "Property": "Height", "Value": "2160", "IsRequired": true},
+      {"Condition": "LessThanEqual", "Property": "VideoBitDepth", "Value": "10", "IsRequired": true},
+      {"Condition": "LessThanEqual", "Property": "VideoFramerate", "Value": "30", "IsRequired": true}]}
   ],
   "ContainerProfiles": [],
   "ResponseProfiles": [],

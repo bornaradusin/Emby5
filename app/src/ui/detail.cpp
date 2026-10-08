@@ -130,7 +130,7 @@ Detail::Content Detail::fetch(jf::Client &c, const jf::Item &base)
     jf::Detail detail;
     jf::Item item = base;
     bool got = false;
-    std::vector<jf::Item> similar, seasons, resume, next, all_episodes;
+    std::vector<jf::Item> similar, seasons, resume, next, all_episodes, upcoming;
     const bool series = base.type == "Series", boxset = base.type == "BoxSet";
     std::vector<std::thread> jobs;
     jobs.emplace_back([&] { got = c.item(base.id, &item, &detail); });
@@ -143,6 +143,7 @@ Detail::Content Detail::fetch(jf::Client &c, const jf::Item &base)
         jobs.emplace_back([&] { resume = c.resume(1, base.id); });
         jobs.emplace_back([&] { next = c.next_up(1, base.id); });
         jobs.emplace_back([&] { all_episodes = c.episodes(base.id, std::string()); });
+        jobs.emplace_back([&] { upcoming = c.upcoming_episodes(base.id); });
     }
     for (auto &j : jobs)
         j.join();
@@ -163,6 +164,21 @@ Detail::Content Detail::fetch(jf::Client &c, const jf::Item &base)
     out.similar = std::move(similar);
     out.seasons = std::move(seasons);
     out.all_episodes = std::move(all_episodes);
+    // Merge server-supplied upcoming virtual episodes without duplicating available ones.
+    for (jf::Item &e : upcoming) {
+        const bool duplicate = std::any_of(out.all_episodes.begin(), out.all_episodes.end(),
+            [&](const jf::Item &existing) {
+                return (!e.id.empty() && existing.id == e.id) ||
+                    (existing.parent_index == e.parent_index && existing.index == e.index && e.index >= 0);
+            });
+        if (!duplicate)
+            out.all_episodes.push_back(std::move(e));
+    }
+    std::stable_sort(out.all_episodes.begin(), out.all_episodes.end(),
+        [](const jf::Item &a, const jf::Item &b) {
+            if (a.parent_index != b.parent_index) return a.parent_index < b.parent_index;
+            return a.index < b.index;
+        });
     if (boxset) {
         /* Play: the first title not yet watched, else the first. */
         for (const jf::Item &t : out.similar)
@@ -181,8 +197,12 @@ Detail::Content Detail::fetch(jf::Client &c, const jf::Item &base)
     } else {
         /* Play continues a started episode, else the next one, else the first. */
         std::vector<jf::Item> &t = !resume.empty() ? resume : next;
-        if (t.empty() && !out.all_episodes.empty())
-            t.push_back(out.all_episodes.front());
+        if (t.empty()) {
+            auto playable = std::find_if(out.all_episodes.begin(), out.all_episodes.end(),
+                [](const jf::Item &e) { return !e.upcoming; });
+            if (playable != out.all_episodes.end())
+                t.push_back(*playable);
+        }
         if (!t.empty()) {
             out.target = t.front();
             out.have_target = true;
@@ -511,7 +531,7 @@ Action Detail::input(uint32_t p)
         }
     } else if (p & NUVIO_BTN_OPTIONS) {   /* the focused part's menu */
         m_menu_zone = m_zone;
-        if (m_zone == Episodes && m_episode < (int)m_eps.size())
+        if (m_zone == Episodes && m_episode < (int)m_eps.size() && !m_eps[m_episode].upcoming)
             m_menu.open_actions(m_eps[m_episode], true, can_ask_seerr());
         else if (m_zone == Seasons && m_season < (int)m_view.seasons.size())
             m_menu.open_actions(m_view.seasons[m_season], true, can_ask_seerr());
@@ -546,7 +566,7 @@ Action Detail::input(uint32_t p)
             break;
         }
         case Episodes:
-            if (m_episode < (int)m_eps.size()) {
+            if (m_episode < (int)m_eps.size() && !m_eps[m_episode].upcoming) {
                 a.kind = Action::Play;
                 a.item = m_eps[m_episode];
             }
@@ -859,12 +879,16 @@ void Detail::draw_sections(float dt)
                     if (lift > 0.01f)
                         gfx::shadow(r, 14 * k, 26, 0.3f * lift, 10 * lift);
                     art::draw(r, landscape_url(m_client, e, 640), e.primary_blurhash, 640, 360, 14 * k);
-                    if (e.played_percent > 0 && e.played_percent < 100) {
+                    if (e.upcoming) {
+                        gfx::fill({r.x + 14, r.y + 14, 140, 34}, 0xbc000000u, 17);
+                        gfx::text(r.x + 84, r.y + 38, "Upcoming", {gfx::SemiBold, 18}, kText, 1);
+                    }
+                    if (!e.upcoming && e.played_percent > 0 && e.played_percent < 100) {
                         gfx::fill({r.x + 18, r.y + r.h - 22, r.w - 36, 6}, 0x47ffffffu, 3);
                         gfx::fill({r.x + 18, r.y + r.h - 22, (r.w - 36) * (float)(e.played_percent / 100), 6},
                                   0xffffffffu, 3);
                     }
-                    if (e.played) {
+                    if (e.played && !e.upcoming) {
                         gfx::fill({r.x + r.w - 76, r.y + 14, 62, 30}, 0xa6000000u, 15);
                         gfx::text(r.x + r.w - 45, r.y + 36, T("Sett"), {gfx::SemiBold, 18}, kText, 1);
                     }
@@ -872,7 +896,9 @@ void Detail::draw_sections(float dt)
                     char title[300];
                     std::snprintf(title, sizeof title, "%d. %s", e.index, e.name.c_str());
                     gfx::text(x, ty, title, {gfx::SemiBold, 22, kEpW}, focus ? kText : kText2);
-                    gfx::text(x, ty + 30, runtime_label(e.runtime_ticks), {gfx::Medium, 19}, kText3);
+                    gfx::text(x, ty + 30,
+                              e.upcoming ? "Airs " + e.premiere_date.substr(0, 10) : runtime_label(e.runtime_ticks),
+                              {gfx::Medium, 19}, kText3);
                     gfx::text(x, ty + 62, e.overview, {gfx::Regular, 19, kEpW, 3, 27}, kText3);
                 }
         }

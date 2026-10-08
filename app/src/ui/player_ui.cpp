@@ -9,6 +9,7 @@
 #include "jelly5_bitstream.h"
 
 #include "app/remote.h"
+#include "app/iptv_live.h"
 #include "app/settings.h"
 #include "app/syncplay.h"
 #include "app/i18n.h"
@@ -104,6 +105,14 @@ void PlayerUi::begin(const NuvioRequest *req, double now)
     *this = PlayerUi();
     m_req = req;
     m_music = req && req->item_type == "audio";
+    // Only the channel that opened this player can display Live TV EPG.
+    const std::string playing_id=iptv_live::playing_channel();
+    if (req && !playing_id.empty()) {
+        const auto channels=iptv_live::snapshot().channels;
+        for (const auto &ch:channels) if (ch.id==playing_id && ch.name==req->title) {
+            m_live_channel_id=playing_id; break;
+        }
+    }
     m_controls = m_music;   /* the music screen is all controls, always up */
     m_now = m_last = m_load_since = now;
     /* Video opens on the dark loading veil; music never does: its screen (the
@@ -113,6 +122,41 @@ void PlayerUi::begin(const NuvioRequest *req, double now)
     if (m_music)
         a_controls.snap(1.f);
     m_dirty = true;
+}
+
+void PlayerUi::end()
+{
+    if (!m_live_channel_id.empty()) iptv_live::set_playing_channel({});
+    m_live_channel_id.clear();
+    m_req=nullptr;
+}
+
+/* Live IPTV: a compact Now / Next panel while player controls are visible. */
+void PlayerUi::draw_live_epg(float opacity)
+{
+    if (m_live_channel_id.empty() || opacity<=0.01f) return;
+    const auto channels=iptv_live::snapshot().channels;
+    for (const auto &ch:channels) {
+        if (ch.id!=m_live_channel_id) continue;
+        const float x=70.f, y=75.f, w=830.f, h=ch.now.empty() && ch.next.empty()?115.f:196.f;
+        gfx::fill({x,y,w,h},alpha(0xc9000000u,opacity),20);
+        gfx::text(x+24,y+38,ch.name,{gfx::Bold,27,w-48},alpha(kText,opacity));
+        if (ch.now.empty() && ch.next.empty()) {
+            gfx::text(x+24,y+85,"Programme guide unavailable",{gfx::Medium,21,w-48},alpha(kText3,opacity));
+            break;
+        }
+        gfx::text(x+24,y+82,"NOW  " + (ch.now.empty()?"No information":ch.now),
+                  {gfx::Medium,22,w-48},alpha(kText,opacity));
+        if (ch.now_end>ch.now_start) {
+            const auto epoch=(int64_t)std::time(nullptr);
+            const float progress=(float)std::clamp(double(epoch-ch.now_start)/double(ch.now_end-ch.now_start),0.0,1.0);
+            gfx::fill({x+24,y+104,w-48,5},alpha(0x66ffffffu,opacity),2.5f);
+            gfx::fill({x+24,y+104,(w-48)*progress,5},alpha(0xffffffffu,opacity),2.5f);
+        }
+        gfx::text(x+24,y+154,"NEXT  " + (ch.next.empty()?"No information":ch.next),
+                  {gfx::Medium,22,w-48},alpha(kText2,opacity));
+        break;
+    }
 }
 
 void PlayerUi::show_controls(double now, Zone zone)
@@ -333,7 +377,7 @@ void PlayerUi::tracks_input(uint32_t p, const NuvioStatus &st, std::vector<OsdCo
     const int na = (int)st.audio.size(), ns = nuvio_subs_count();
     const int nv = m_req->sources.size() > 1 ? (int)m_req->sources.size() : 0;   /* versions, under the audio */
     const bool find = jelly5_subs::available();
-    const int rows[3] = {na + nv, ns + 2 + (find ? 1 : 0), 5};   /* subtitles: Av, tracks, Tilpass, Søk */
+    const int rows[3] = {na + nv, ns + 2 + (find ? 1 : 0), 7};   /* subtitles: Av, tracks, Tilpass, Søk */
     int &r = m_rows[m_col];
     if (m_col == 2 && m_find_open && !(p & (NUVIO_BTN_CIRCLE | NUVIO_BTN_LEFT)) ) {
         find_input(p);
@@ -376,6 +420,19 @@ void PlayerUi::tracks_input(uint32_t p, const NuvioStatus &st, std::vector<OsdCo
             break;
         }
         case 4: s.outline = !s.outline; break;
+        case 5: {
+            const uint32_t colors[] = {0xffffff, 0xffff00, 0x00ffff, 0x00ff00};
+            int i = 0;
+            for (int k = 0; k < 4; k++)
+                if (s.color == colors[k]) i = k;
+            s.color = colors[(i + d + 4) % 4];
+            break;
+        }
+        case 6:
+            s.size_pct = 100; s.offset_pct = 0.f;
+            s.background = 0.f; s.outline = 1; s.color = 0xffffff;
+            out.push_back({OsdCmd::SubtitleDelay, 0.0});
+            break;
         }
         nuvio_subs_set_style(&s);
         out.push_back({OsdCmd::SubtitleStyle});
@@ -385,6 +442,7 @@ void PlayerUi::tracks_input(uint32_t p, const NuvioStatus &st, std::vector<OsdCo
         l.sub_offset = s.offset_pct;
         l.sub_background = s.background;
         l.sub_outline = s.outline != 0;
+        l.sub_color = (int)s.color;
         settings::set_local(l);
     } else if (p & NUVIO_BTN_LEFT) {
         if (m_col > 0)
@@ -392,7 +450,12 @@ void PlayerUi::tracks_input(uint32_t p, const NuvioStatus &st, std::vector<OsdCo
     } else if (p & NUVIO_BTN_RIGHT) {
         if (m_col == 0)
             m_col = 1;
-        else if (m_col == 1 && (m_style_open || m_find_open))
+        else if (m_col == 1 && r == ns + 1) {
+            m_style_open = true;
+            m_find_open = false;
+            m_col = 2;
+            m_rows[2] = 0;
+        } else if (m_col == 1 && (m_style_open || m_find_open))
             m_col = 2;
     } else if (p & NUVIO_BTN_CROSS) {
         if (m_col == 0 && r < na) {
@@ -1232,7 +1295,7 @@ void PlayerUi::draw_tracks(const NuvioStatus &st, float a)
     if (m_style_open) {
         nuvio_sub_style s;
         nuvio_subs_get_style(&s);
-        column(2, 5, [&](int i, std::string &label, std::string &right, bool &, bool &) {
+        column(2, 7, [&](int i, std::string &label, std::string &right, bool &, bool &) {
             char v[48];
             switch (i) {
             case 0: label = T("Forsinkelse"); std::snprintf(v, sizeof v, "\xE2\x80\xB9 %+.1f s \xE2\x80\xBA", nuvio_subs_delay_ms() / 1000.0); break;
@@ -1245,7 +1308,16 @@ void PlayerUi::draw_tracks(const NuvioStatus &st, float a)
                 else
                     std::snprintf(v, sizeof v, "\xE2\x80\xB9 %d %% \xE2\x80\xBA", (int)(s.background * 100));
                 break;
-            default: label = T("Kontur"); std::snprintf(v, sizeof v, "%s", s.outline ? T("På") : T("Av")); break;
+            case 4: label = T("Kontur"); std::snprintf(v, sizeof v, "%s", s.outline ? T("På") : T("Av")); break;
+            case 5: {
+                label = T("Farge");
+                const char *color = s.color == 0xffff00 ? T("Gul") :
+                                    s.color == 0x00ffff ? T("Cyan") :
+                                    s.color == 0x00ff00 ? T("Grønn") : T("Hvit");
+                std::snprintf(v, sizeof v, "< %s >", color);
+                break;
+            }
+            default: label = T("Tilbakestill"); v[0] = 0; break;
             }
             right = v;
         });
@@ -1770,6 +1842,7 @@ void PlayerUi::draw(const NuvioStatus &st)
     } else {
         draw_loading(st);
         draw_controls(st);
+        if (!overlay) draw_live_epg(a_controls.value);
         if (!overlay)
             draw_skip_next(st);
     }

@@ -26,6 +26,8 @@ HttpResponse http_request(const std::string &method, const std::string &url,
         r.body = R"({"AccessToken":"tok","User":{"Id":"u1","Name":"Tester","PrimaryImageTag":"img"}})";
     else if (url.find("/emby/Users/u1/Views") != std::string::npos)
         r.body = R"({"Items":[{"Id":"movies","Name":"Movies","Type":"CollectionFolder","CollectionType":"movies"}],"TotalRecordCount":1})";
+    else if (url.find("/emby/Shows/Upcoming") != std::string::npos)
+        r.body = R"({"Items":[{"Id":"future1","Name":"New Episode","Type":"Episode","SeriesId":"s1","SeasonId":"season1","IndexNumber":5,"ParentIndexNumber":2,"PremiereDate":"2099-01-01T00:00:00Z"},{"Id":"old","Type":"Episode","SeriesId":"s1","PremiereDate":"2000-01-01T00:00:00Z"},{"Id":"other","Type":"Episode","SeriesId":"s2","PremiereDate":"2099-01-01T00:00:00Z"}]})";
     else if (url.find("/emby/Users/u1/Items/Resume") != std::string::npos)
         r.body = R"({"Items":[],"TotalRecordCount":0})";
     else if (url.find("/emby/Users/u1/Items/Latest") != std::string::npos)
@@ -55,6 +57,8 @@ int main()
     assert(views.size() == 1 && views[0].id == "movies");
     (void)c.resume(10);
     (void)c.latest("movies", 10);
+    const auto upcoming = c.upcoming_episodes("s1");
+    assert(upcoming.size() == 1 && upcoming[0].id == "future1" && upcoming[0].upcoming);
     jf::Playback pb;
     assert(c.playback_info("movie1", 0, -1, -2, &pb));
     assert(pb.play_method == "DirectStream");

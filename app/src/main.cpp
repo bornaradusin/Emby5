@@ -38,6 +38,7 @@
 #include "ui/screensaver.h"
 #include "ui/search.h"
 #include "ui/iptv.h"
+#include "app/iptv_live.h"
 #include "ui/seerr_detail.h"
 #include "ui/settings_screen.h"
 #include "ui/syncplay_screen.h"
@@ -1143,7 +1144,8 @@ void reset_screens()
     s_shows.reset(new ui::Library(*s_client, T("Serier"), "Series"));
     s_music.reset(new ui::Library(*s_client, T("Musikk"), "MusicAlbum"));
     s_search.reset(new ui::Search(*s_client));
-    s_iptv.reset(new ui::IPTV());
+    s_iptv.reset(new ui::IPTV(*s_client));
+    iptv_live::refresh(s_client,true);
     s_settings.reset(new ui::SettingsScreen(*s_client));
     s_tab = s_nav_tab = ui::Nav::Home;
     s_nav_focus = false;
@@ -1498,7 +1500,7 @@ void apply_views(const std::vector<jf::Item> &views)
     if (!music.empty()) { tabs.push_back(ui::Nav::Music); s_music->set_sources(music); }
     if (seerr_service::available())
         tabs.push_back(ui::Nav::Discover);
-    tabs.push_back(ui::Nav::IPTV);
+    if (!iptv_live::snapshot().channels.empty()) tabs.push_back(ui::Nav::IPTV);
     tabs.push_back(ui::Nav::Search);
     s_nav.set_tabs(tabs);
     /* A tab that went away (another account, a library removed): back home. */
@@ -1756,7 +1758,7 @@ bool draw_connection(double now)
 bool resolve_playable(jf::Item *item)
 {
     if (item->type == "Movie" || item->type == "Episode" || item->type == "Video" || item->type == "Trailer" ||
-        item->type == "MusicVideo" || item->type == "Audio")
+        item->type == "MusicVideo" || item->type == "Audio" || item->type == "LiveTvChannel")
         return true;
     if (item->type == "MusicAlbum") {   /* from Min liste or search: its first track */
         for (const jf::Item &t : s_client->children(item->id, "ParentIndexNumber,IndexNumber,SortName", 1))
@@ -2035,9 +2037,19 @@ int main()
                 s_session++;
                 open_gate({accounts::load().empty() ? Gate::Login : Gate::Profiles, s_client->server(), "", false});
                 set_phase(Phase::Gate);
-            } else if (phase == Phase::Home && s_home_version == s_model_version)
-                shell_input(in.pressed, &chosen, &chose, &from_start, &shuffle);
+            } else if (phase == Phase::Home && s_home_version == s_model_version) {
+                // Native repeats handle normal speed; held navigation takes over after 1 second.
+                const uint32_t pressed = (s_tab == ui::Nav::IPTV && s_iptv &&
+                    !s_nav_focus && s_stack.empty() && s_iptv->accelerating(now_s()))
+                    ? in.pressed & ~(in.repeats & (NUVIO_BTN_UP | NUVIO_BTN_DOWN)) : in.pressed;
+                if (pressed) shell_input(pressed, &chosen, &chose, &from_start, &shuffle);
+            }
         }
+        // IPTV acceleration uses actual held state, not D-pad repeat events.
+        if (phase == Phase::Home && s_tab == ui::Nav::IPTV && s_stack.empty() && !s_nav_focus && !ime::active())
+            s_iptv->update_hold(in.held,now_s());
+        else if (s_iptv)
+            s_iptv->update_hold(0,now_s());
         if (phase == Phase::Gate)
             gate_poll();
         if (lang_gen != i18n::generation()) {   /* Innstillinger -> Språk: rebuild the text that was built */
@@ -2096,7 +2108,16 @@ int main()
             const bool again = failed && seerr_service::snapshot().state == seerr_service::State::Ready;
             refresh_discover(again ? 0 : 1e9, again);
         }
-        const bool changed = in.pressed || phase != last_phase || s_model_version != last_model ||
+        static uint64_t seen_iptv = 0;
+        iptv_live::refresh(s_client);
+        const auto live_now=iptv_live::snapshot();
+        const bool iptv_moved=live_now.generation!=seen_iptv;
+        if (iptv_moved && phase==Phase::Home) {
+            seen_iptv=live_now.generation;
+            std::lock_guard<std::mutex> g(s_state.lock);
+            apply_views(s_state.views);
+        }
+        const bool changed = iptv_moved || in.pressed || phase != last_phase || s_model_version != last_model ||
                              gate.kind != Gate::None || seerr_moved || s_discover_version != last_discover ||
                              s_discover_appended != last_appended;
         if (changed || animating || idle_frames < 2) {

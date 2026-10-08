@@ -24,6 +24,7 @@ struct Local {
     float sub_offset = 0;        /* % of the height, lift from the bottom */
     float sub_background = 0;    /* 0..1 box behind the text */
     bool sub_outline = true;
+    int sub_color = 0xffffff;  /* subtitle text colour */
     bool refresh_120 = true;
     int audio_delay_ms = 0;      /* the sound system's delay: the picture waits this long (A/V sync) */
     bool night_mode = false;     /* compress loud and quiet together, dialogue lifted */

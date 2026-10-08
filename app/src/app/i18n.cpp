@@ -81,7 +81,7 @@ const std::unordered_map<std::string, const char *> &english_table()
         /* player interface */
         {"Ukjent språk", "Unknown language"}, {"Undertekst lagt til", "Subtitle added"},
         {"Kunne ikke hente underteksten", "Couldn't get the subtitle"}, {"Tilpass", "Customize"},
-        {"Tilpass undertekster", "Customize subtitles"}, {"Tilpass undertekster ›", "Customize subtitles ›"},
+        {"Farge", "Color"}, {"Gul", "Yellow"}, {"Grønn", "Green"}, {"Hvit", "White"}, {"Tilbakestill", "Reset to defaults"}, {"Tilpass undertekster", "Customize subtitles"}, {"Tilpass undertekster ›", "Customize subtitles ›"},
         {"Søk etter undertekster", "Search for subtitles"}, {"Søk etter undertekster ›", "Search for subtitles ›"},
         {"Henter undertekst …", "Getting subtitle …"}, {"Slutter kl. ", "Ends at "}, {"Episoder", "Episodes"},
         {"Lyd og undertekster", "Audio & Subtitles"}, {"NESTE EPISODE", "NEXT EPISODE"},

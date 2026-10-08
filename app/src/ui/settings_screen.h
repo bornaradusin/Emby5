@@ -29,7 +29,7 @@ public:
         Quality, SubMode, SubSize, SubBackground, Autoplay, StillWatching, AutoSkip, AudioDelay, NightMode, Bitstream,
         ThemeMusic,
         SeerrOn, SeerrUrl, SeerrAuth, SeerrAccount, SeerrTest,
-        IPTVServer, IPTVUsername, IPTVPassword, IPTVCategories,
+        EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, IPTVSummary, IPTVCategories,
         AppLanguage, Theme, Refresh, Updates, Together, ServerInfo, About, RowCount
     };
     explicit SettingsScreen(jf::Client &client) : m_client(client) {}

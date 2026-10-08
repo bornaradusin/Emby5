@@ -39,7 +39,7 @@ namespace ui {
 class PlayerUi {
 public:
     void begin(const NuvioRequest *req, double now);
-    void end() { m_req = nullptr; }
+    void end();
     bool stats_shown() const { return m_stats; }
     bool had_user_input() const { return m_had_input; }
 
@@ -83,6 +83,7 @@ private:
 
     void draw_loading(const NuvioStatus &st);
     void draw_controls(const NuvioStatus &st);
+    void draw_live_epg(float opacity);
     void draw_bar(const NuvioStatus &st, float a);
     void draw_skip_next(const NuvioStatus &st);
     void draw_tracks(const NuvioStatus &st, float a);
@@ -101,7 +102,8 @@ private:
     void draw_lyrics(const NuvioStatus &st, float x, float w, float top, float bottom);
 
     const NuvioRequest *m_req = nullptr;
-    bool m_music = false;               /* an audio track: the now-playing screen */
+    bool m_music = false;
+    std::string m_live_channel_id;               /* an audio track: the now-playing screen */
     double m_now = 0, m_last = 0, m_load_since = 0;
     bool m_dirty = true;
 
