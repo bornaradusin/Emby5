@@ -1,8 +1,10 @@
+#include <cctype>
 /*
  * Emby5 — Emby for PS5
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "ui/settings_screen.h"
+#include "ui/theme_presets.h"
 #include "evo_audio_out.h"
 
 #include "app/settings.h"
@@ -14,6 +16,7 @@
 #include "platform/ime.h"
 
 #include <algorithm>
+#include <thread>
 
 #ifndef EMBY5_VERSION
 #define EMBY5_VERSION "0.0.1"
@@ -25,15 +28,6 @@ namespace {
 const int kQualities[] = {0, 120, 80, 60, 40, 20, 10, 8, 4};
 constexpr int kNumQualities = 9;
 
-struct Lang {
-    const char *code, *name;
-};
-/* ISO 639-2 codes, as Emby stores them. "" = no preference. */
-const Lang kLangs[] = {{"", "Ingen preferanse"}, {"nor", "Norsk"},   {"eng", "Engelsk"}, {"swe", "Svensk"},
-                       {"dan", "Dansk"},          {"fin", "Finsk"},   {"ger", "Tysk"},    {"fre", "Fransk"},
-                       {"spa", "Spansk"},         {"ita", "Italiensk"}, {"jpn", "Japansk"}, {"kor", "Koreansk"}};
-constexpr int kNumLangs = 12;
-
 struct Mode {
     const char *code, *name;
 };
@@ -41,10 +35,11 @@ const Mode kModes[] = {{"Default", "Standard"},
                        {"Smart", "Smart"},
                        {"Always", "Alltid"},
                        {"OnlyForced", "Bare tvungne"},
+                       {"HearingImpaired", "Hearing impaired (SDH)"},
                        {"None", "Av"}};
-constexpr int kNumModes = 5;
+constexpr int kNumModes = sizeof(kModes) / sizeof(kModes[0]);
 
-const char *kHeaders[] = {"Konto", "Avspilling", "Seerr", "Generelt"};
+const char *kHeaders[] = {"Konto", "Avspilling", "Seerr", "IPTV", "Generelt"};
 
 /* Its card: 0 account, 1 playback, 2 Seerr, 3 general, 4 about (no header). */
 int section_of(int row)
@@ -52,8 +47,9 @@ int section_of(int row)
     return row <= SettingsScreen::SignOut      ? 0
            : row <= SettingsScreen::ThemeMusic ? 1
            : row <= SettingsScreen::SeerrTest  ? 2
-           : row == SettingsScreen::About      ? 4
-                                               : 3;
+           : row <= SettingsScreen::IPTVCategories ? 3
+           : row == SettingsScreen::About      ? 5
+                                               : 4;
 }
 
 /* Left/Right changes it (the rest act on Cross). */
@@ -78,22 +74,27 @@ const char *label_of(int row)
     const char *const labels[] = {T("Bytt bruker eller server"),
                                          T("Logg ut"),
                                          T("Maks kvalitet"),
-                                         T("Foretrukket lydspråk"),
                                          T("Undertekster"),
-                                         T("Undertekstspråk"),
                                          T("Undertekststørrelse"),
                                          T("Undertekstbakgrunn"),
                                          T("Spill neste episode automatisk"),
+                                         "Are you still watching?",
                                          T("Hopp over intro automatisk"),
                                          T("Lydforsinkelse"),
                                          T("Nattmodus"),
+                                         T("HDMI-bitstr\xC3\xB8m"),
                                          T("Temamusikk"),
                                          "Seerr",
                                          T("Adresse"),
                                          T("P\xC3\xA5logging"),
                                          T("Seerr-konto"),
                                          T("Test tilkoblingen"),
+                                         "Xtream server URL",
+                                         "Xtream username",
+                                         "Xtream password",
+                                         "Manage IPTV categories",
                                          T("Språk"),
+                                         "Theme",
                                          T("Bildefrekvens"),
                                          T("Se etter oppdateringer"),
                                          T("Se sammen"),
@@ -119,6 +120,10 @@ void SettingsScreen::activate()
     m_row = 0;
     m_scroll.snap(0);
     ime::init();
+    m_iptv_page = IPTVRows;
+    m_iptv_creds = {};
+    iptv_xtream::load_credentials(&m_iptv_creds);
+    m_iptv_store.load(m_iptv_creds.server + "|" + m_iptv_creds.username);
 }
 
 bool SettingsScreen::shown(int r) const
@@ -173,11 +178,14 @@ std::string SettingsScreen::value(Row r) const
     const settings::All s = settings::get();
     switch (r) {
     case SwitchUser: return m_client.user_name();
+    case IPTVServer: return m_iptv_creds.server.empty() ? "X to enter" : m_iptv_creds.server;
+    case IPTVUsername: return m_iptv_creds.username.empty() ? "X to enter" : m_iptv_creds.username;
+    case IPTVPassword: return m_iptv_creds.password.empty() ? "X to enter" : "********";
+    case IPTVCategories: return std::to_string(m_iptv_store.categories().size()) + " categories - X to manage";
     case Quality:
         return s.local.max_mbps == 0 ? T("Automatisk (maks)") : std::to_string(s.local.max_mbps) + " Mbit/s";
-    case AudioLang: return T(kLangs[index_of(kLangs, s.server.audio_language)].name);
     case SubMode: return T(kModes[index_of(kModes, s.server.subtitle_mode)].name);
-    case SubLang: return T(kLangs[index_of(kLangs, s.server.subtitle_language)].name);
+    case Theme: return theme_name(s.local.theme);
     case AppLanguage: {   /* each language in its own name */
         if (s.local.language > i18n::Auto)
             return i18n::choice_name(s.local.language);
@@ -188,8 +196,12 @@ std::string SettingsScreen::value(Row r) const
         return s.local.sub_background < 0.05f ? std::string(T("Av"))
                                               : std::to_string((int)(s.local.sub_background * 100 + 0.5f)) + " %";
     case Autoplay: return s.server.autoplay_next ? T("På") : T("Av");
+    case StillWatching: return s.local.still_watching == 1 ? "After 3 episodes" :
+                              s.local.still_watching == 2 ? "After 2 hours" : "Off";
     case AutoSkip: return s.local.auto_skip_intro ? T("På") : T("Av");
     case NightMode: return s.local.night_mode ? T("På") : T("Av");
+    case Bitstream:   /* night mode needs the sound decoded here, so it wins */
+        return !s.local.hdmi_bitstream ? T("Av") : s.local.night_mode ? T("Av med nattmodus") : T("På");
     case ThemeMusic: return s.local.theme_music ? T("På") : T("Av");
     case Updates: return s.local.check_updates ? T("På") : T("Av");
     case AudioDelay:
@@ -256,6 +268,10 @@ void SettingsScreen::change(Row r, int dir)
         settings::set_local(s.local);
         break;
     }
+    case StillWatching:
+        s.local.still_watching = cycle(s.local.still_watching, 3);
+        settings::set_local(s.local);
+        break;
     case AutoSkip:
         s.local.auto_skip_intro = !s.local.auto_skip_intro;
         settings::set_local(s.local);
@@ -264,6 +280,10 @@ void SettingsScreen::change(Row r, int dir)
         s.local.night_mode = !s.local.night_mode;
         settings::set_local(s.local);
         evo_audio_set_night(s.local.night_mode);
+        break;
+    case Bitstream:   /* from the next playback */
+        s.local.hdmi_bitstream = !s.local.hdmi_bitstream;
+        settings::set_local(s.local);
         break;
     case ThemeMusic:
         s.local.theme_music = !s.local.theme_music;
@@ -294,18 +314,14 @@ void SettingsScreen::change(Row r, int dir)
         settings::set_local(s.local);
         evo_agc_runtime_set_120hz(s.local.refresh_120 ? 1 : 0);
         break;
+    case Theme:
+        s.local.theme = cycle(s.local.theme, kThemeCount);
+        settings::set_local(s.local);
+        break;
     case AppLanguage:
         s.local.language = cycle(s.local.language, i18n::ChoiceCount);   /* Automatisk, then each language */
         settings::set_local(s.local);
         i18n::set_choice(s.local.language);
-        break;
-    case AudioLang:
-        s.server.audio_language = kLangs[cycle(index_of(kLangs, s.server.audio_language), kNumLangs)].code;
-        settings::set_server(m_client, s.server);
-        break;
-    case SubLang:
-        s.server.subtitle_language = kLangs[cycle(index_of(kLangs, s.server.subtitle_language), kNumLangs)].code;
-        settings::set_server(m_client, s.server);
         break;
     case SubMode:
         s.server.subtitle_mode = kModes[cycle(index_of(kModes, s.server.subtitle_mode), kNumModes)].code;
@@ -336,6 +352,11 @@ void SettingsScreen::change(Row r, int dir)
 
 Action SettingsScreen::input(uint32_t p)
 {
+    if (ime::active()) return {};
+    if (m_iptv_page != IPTVRows) {
+        iptv_category_input(p);
+        return {};
+    }
     Action a;
     if (!(p & NUVIO_BTN_CROSS))
         m_signout_armed = false;   /* moved on: the account row asks again */
@@ -378,6 +399,10 @@ Action SettingsScreen::input(uint32_t p)
                              seerr_service::set_config(n);
                          });
         }
+        else if (m_row == IPTVServer || m_row == IPTVUsername || m_row == IPTVPassword)
+            iptv_edit((Row)m_row);
+        else if (m_row == IPTVCategories)
+            iptv_open_categories();
         else if (m_row == SeerrAccount)
             seerr_account();
         else if (m_row == SeerrTest)
@@ -388,8 +413,158 @@ Action SettingsScreen::input(uint32_t p)
     return a;
 }
 
+void SettingsScreen::iptv_edit(Row r)
+{
+    const ime::Kind kind = r == IPTVServer ? ime::Kind::Url :
+                           r == IPTVPassword ? ime::Kind::Password : ime::Kind::Text;
+    const std::string initial = r == IPTVServer ? m_iptv_creds.server :
+                                r == IPTVUsername ? m_iptv_creds.username : "";
+    const char *title = r == IPTVServer ? "Xtream server URL" :
+                        r == IPTVUsername ? "Xtream username" : "Xtream password";
+    ime::request(kind, title, initial, [this,r](const std::string &v) {
+        if (v.empty()) return;
+        if (r == IPTVServer) m_iptv_creds.server = v;
+        else if (r == IPTVUsername) m_iptv_creds.username = v;
+        else m_iptv_creds.password = v;
+        // Persist only complete credentials. No keyboard chaining: each row is edited separately.
+        if (iptv_xtream::save_credentials(m_iptv_creds))
+            m_iptv_store.load(m_iptv_creds.server + "|" + m_iptv_creds.username);
+    });
+}
+
+void SettingsScreen::iptv_open_categories()
+{
+    m_iptv_store.load(m_iptv_creds.server + "|" + m_iptv_creds.username);
+    m_iptv_page = IPTVCategoryList;
+    m_iptv_category = 0;
+    m_iptv_channel = 0;
+    m_iptv_search.clear();
+    m_iptv_catalog = std::make_shared<IPTVCatalogState>();
+    if (m_iptv_creds.server.empty() || m_iptv_creds.username.empty() || m_iptv_creds.password.empty()) return;
+    auto data = m_iptv_catalog;
+    auto creds = m_iptv_creds;
+    { std::lock_guard<std::mutex> lk(data->mutex); data->loading = true; }
+    std::thread([data,creds] {
+        iptv_xtream::Catalog catalog;
+        std::string error;
+        const bool ok = iptv_xtream::authenticate(creds, &error) &&
+                        iptv_xtream::load_catalog(creds, &catalog, &error);
+        std::lock_guard<std::mutex> lk(data->mutex);
+        if (ok) data->catalog = std::move(catalog);
+        else data->error = error.empty() ? "Unable to load channels" : error;
+        data->loading = false;
+    }).detach();
+}
+
+std::vector<size_t> SettingsScreen::iptv_filtered_channels(const iptv_xtream::Catalog &catalog) const
+{
+    std::vector<size_t> result;
+    std::string needle = m_iptv_search;
+    std::transform(needle.begin(), needle.end(), needle.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+    for (size_t i = 0; i < catalog.channels.size(); ++i) {
+        std::string name = catalog.channels[i].name;
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+        if (needle.empty() || name.find(needle) != std::string::npos) result.push_back(i);
+    }
+    return result;
+}
+
+void SettingsScreen::iptv_category_input(uint32_t p)
+{
+    const auto &cats = m_iptv_store.categories();
+    if (p & NUVIO_BTN_CIRCLE) {
+        if (m_iptv_page == IPTVChannels) {m_iptv_page = IPTVCategoryList;m_iptv_search.clear();}
+        else m_iptv_page = IPTVRows;
+        return;
+    }
+    if (m_iptv_page == IPTVCategoryList) {
+        const int n = (int)cats.size();
+        if (p & NUVIO_BTN_UP) m_iptv_category = std::max(0,m_iptv_category-1);
+        if (p & NUVIO_BTN_DOWN) m_iptv_category = std::min(n,m_iptv_category+1);
+        if ((p & NUVIO_BTN_CROSS) && m_iptv_category == n) {
+            ime::request(ime::Kind::Text,"New IPTV category","",[this](const std::string &name){
+                if (m_iptv_store.create(name)) m_iptv_category=(int)m_iptv_store.categories().size()-1;
+            });
+        } else if (m_iptv_category < n) {
+            const auto id = cats[(size_t)m_iptv_category].id;
+            if (p & NUVIO_BTN_CROSS)
+                ime::request(ime::Kind::Text,"Rename IPTV category",cats[(size_t)m_iptv_category].name,
+                             [this,id](const std::string &name){m_iptv_store.rename(id,name);});
+            if (p & NUVIO_BTN_SQUARE) {
+                m_iptv_store.erase(id);
+                m_iptv_category=std::min(m_iptv_category,(int)m_iptv_store.categories().size());
+            }
+            if (p & NUVIO_BTN_L2) {if(m_iptv_store.move(id,-1)) --m_iptv_category;}
+            if (p & NUVIO_BTN_R2) {if(m_iptv_store.move(id,1)) ++m_iptv_category;}
+            if (p & NUVIO_BTN_TRIANGLE) {m_iptv_page=IPTVChannels;m_iptv_channel=0;m_iptv_search.clear();}
+        }
+        return;
+    }
+    if (m_iptv_category >= (int)cats.size()) {m_iptv_page=IPTVCategoryList;return;}
+    iptv_xtream::Catalog catalog;
+    { std::lock_guard<std::mutex> lk(m_iptv_catalog->mutex); catalog=m_iptv_catalog->catalog; }
+    if (p & NUVIO_BTN_TRIANGLE) {
+        ime::request(ime::Kind::Text,"Search IPTV channels",m_iptv_search,
+                     [this](const std::string &query){m_iptv_search=query;m_iptv_channel=0;});
+        return;
+    }
+    if (p & NUVIO_BTN_SQUARE) {m_iptv_search.clear();m_iptv_channel=0;return;}
+    const auto filtered=iptv_filtered_channels(catalog);
+    const int n=(int)filtered.size();
+    if (p & NUVIO_BTN_UP) m_iptv_channel=std::max(0,m_iptv_channel-1);
+    if (p & NUVIO_BTN_DOWN) m_iptv_channel=std::min(std::max(0,n-1),m_iptv_channel+1);
+    if (m_iptv_channel>=n) return;
+    const auto id = cats[(size_t)m_iptv_category].id;
+    const auto channel_id=catalog.channels[filtered[(size_t)m_iptv_channel]].id;
+    const auto &assigned = cats[(size_t)m_iptv_category].channels;
+    const bool is_assigned=std::find(assigned.begin(),assigned.end(),channel_id)!=assigned.end();
+    if (p & NUVIO_BTN_CROSS) m_iptv_store.assign(id,channel_id,!is_assigned);
+    if (p & NUVIO_BTN_L2) m_iptv_store.move_channel(id,channel_id,-1);
+    if (p & NUVIO_BTN_R2) m_iptv_store.move_channel(id,channel_id,1);
+}
+
+void SettingsScreen::iptv_draw_categories()
+{
+    gfx::fill({0,0,gfx::W,gfx::H},kBg);
+    gfx::text(180,150,"IPTV category management",{gfx::Bold,54},kText);
+    const auto &cats=m_iptv_store.categories();
+    const bool channels=m_iptv_page==IPTVChannels;
+    gfx::text(180,212,channels ? "Triangle: Search  Square: Clear  X: Assign/unassign  Circle: Back" :
+              "X: Rename/Create  Square: Delete  L2/R2: Reorder  Triangle: Assign channels  Circle: Back",
+              {gfx::Medium,23},kText2);
+    iptv_xtream::Catalog catalog; std::string error; bool loading;
+    { std::lock_guard<std::mutex> lk(m_iptv_catalog->mutex);
+      catalog=m_iptv_catalog->catalog; error=m_iptv_catalog->error; loading=m_iptv_catalog->loading; }
+    if (channels && m_iptv_category >= (int)cats.size()) return;
+    const auto filtered=channels ? iptv_filtered_channels(catalog) : std::vector<size_t>{};
+    if (channels) gfx::text(180,255,"Search: " + (m_iptv_search.empty()?std::string("All channels (Triangle to search)"):m_iptv_search),{gfx::Medium,23,1400},kText2);
+    const int count=channels ? (int)filtered.size() : (int)cats.size()+1;
+    const int selected=channels ? m_iptv_channel : m_iptv_category;
+    const int first=std::max(0,selected-7);
+    for (int i=first;i<count && i<first+14;i++) {
+        const float y=295.f+(i-first)*52.f;
+        if (i==selected) glass_panel({165,y-31,1500,48},14,1.f,false);
+        std::string name;
+        if (!channels) name=i<(int)cats.size()?cats[(size_t)i].name:"+ Create category";
+        else {
+            const auto &ch=catalog.channels[filtered[(size_t)i]];
+            const auto &assigned=cats[(size_t)m_iptv_category].channels;
+            const bool checked=std::find(assigned.begin(),assigned.end(),ch.id)!=assigned.end();
+            name=std::string(checked?"[X] ":"[ ] ")+ch.name;
+        }
+        gfx::text(190,y,name,{gfx::SemiBold,26,1360},i==selected?kText:kText2);
+    }
+    if (channels && loading) gfx::text(190,1025,"Loading channels...",{gfx::Medium,24},kText2);
+    else if(channels && !error.empty()) gfx::text(190,1025,error,{gfx::Medium,24},kText2);
+    else if(channels && count==0) gfx::text(190,400,m_iptv_search.empty()?"No channels loaded; check IPTV credentials":"No channels match your search",{gfx::Medium,24},kText2);
+}
+
 void SettingsScreen::draw(double, float dt)
 {
+    if (m_iptv_page != IPTVRows) {
+        iptv_draw_categories();
+        return;
+    }
     m_animating = false;
     if (m_want_password && !ime::active()) {   /* a local Seerr account: its password, after the e-mail */
         m_want_password = false;
@@ -456,8 +631,8 @@ void SettingsScreen::draw(double, float dt)
         const int sec = section_of(r);
         if (sec != last_section) {
             last_section = sec;
-            if (sec < 4)
-                gfx::text(left + 8, ys[r] - 22 - off, sec == 2 ? kHeaders[sec] : T(kHeaders[sec]), {gfx::Bold, 22}, kText3);
+            if (sec < 5)
+                gfx::text(left + 8, ys[r] - 22 - off, (sec == 2 || sec == 3) ? kHeaders[sec] : T(kHeaders[sec]), {gfx::Bold, 22}, kText3);
         }
         const bool focus = r == m_row;
         const gfx::Rect rr{left, ys[r] - off, width, row_h};

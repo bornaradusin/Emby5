@@ -6,6 +6,7 @@
  */
 #include "ui/player_ui.h"
 #include "evo_audio_out.h"
+#include "jelly5_bitstream.h"
 
 #include "app/remote.h"
 #include "app/settings.h"
@@ -251,8 +252,22 @@ void PlayerUi::seek_step(int dir, const NuvioStatus &st, double now)
     m_zone = Zone::Bar;
 }
 
-void PlayerUi::playback_ended(const NuvioStatus &, std::vector<OsdCommand> &out)
+bool PlayerUi::check_still_watching(const NuvioStatus &st) const
 {
+    if (!m_req || m_music || !m_req->has_next || !m_req->prefs.autoplay_next || m_had_input || m_still_approved)
+        return false;
+    const int mode = m_req->prefs.still_watching_mode;
+    return (mode == 1 && m_req->autoplay_count >= 3) ||
+           (mode == 2 && m_req->prefs.unattended_seconds + st.duration >= 7200.0);
+}
+
+void PlayerUi::playback_ended(const NuvioStatus &st, std::vector<OsdCommand> &out)
+{
+    if (check_still_watching(st)) {
+        m_still_prompt = true;
+        m_dirty = true;
+        return;   /* do not autoplay another episode without confirmation */
+    }
     /* An album always plays on; episodes follow the autoplay setting. */
     if (m_req && m_req->has_next && (m_req->prefs.autoplay_next || m_music))
         out.push_back({OsdCmd::PlayNext});
@@ -302,7 +317,8 @@ void PlayerUi::tick(const NuvioStatus &st, std::vector<OsdCommand> &out, bool po
     if (next_card(st)) {
         if (m_card_since < 0)
             m_card_since = st.now;
-        if (m_req->prefs.autoplay_next && st.now - m_card_since >= 10.0 && !st.paused) {
+        if (m_req->prefs.autoplay_next && st.now - m_card_since >= 10.0 && !st.paused &&
+            !check_still_watching(st) && !m_still_prompt) {
             m_card_dismissed = true;
             out.push_back({OsdCmd::PlayNext});
         }
@@ -478,6 +494,17 @@ void PlayerUi::episodes_input(uint32_t p, std::vector<OsdCommand> &out)
 
 void PlayerUi::input(const nuvio_input_state &in, const NuvioStatus &st, std::vector<OsdCommand> &out)
 {
+    if (in.pressed) {
+        if (m_still_prompt) {
+            m_still_prompt = false;
+            m_still_approved = true;
+            m_had_input = true;  /* acknowledgement resets the unattended run */
+            m_dirty = true;
+            out.push_back({OsdCmd::PlayNext});
+            return;  /* any button confirms, without triggering another control */
+        }
+        m_had_input = true;
+    }
     const size_t first = out.size();
     input_local(in, st, out);
     if (!syncplay::active())
@@ -653,6 +680,10 @@ void PlayerUi::input_local(const nuvio_input_state &in, const NuvioStatus &st, s
             }
             case Button::Tracks: open_overlay(Overlay::Tracks); break;
             case Button::Speed: {   /* 1x, 1.25x, 1.5x, 2x, 0.75x, round again */
+                if (jelly5_bs_active()) {   /* the receiver decodes it: it plays as it is */
+                    toast(T("Hastighet virker ikke med HDMI-bitstr\xC3\xB8m"), now);
+                    break;
+                }
                 static const float speeds[] = {1.0f, 1.25f, 1.5f, 2.0f, 0.75f};
                 const float now_sp = evo_audio_speed();
                 int k = 0;
@@ -1741,6 +1772,13 @@ void PlayerUi::draw(const NuvioStatus &st)
         draw_controls(st);
         if (!overlay)
             draw_skip_next(st);
+    }
+
+    if (m_still_prompt) {
+        const gfx::Rect r{W / 2 - 400, H / 2 - 110, 800, 220};
+        glass_panel(r, 20, 1.f, true, 1.f);
+        gfx::text(W / 2, H / 2 - 15, "Are you still watching?", {gfx::Bold, 38}, kText, 1);
+        gfx::text(W / 2, H / 2 + 48, "Press any button to continue", {gfx::Medium, 25}, kText2, 1);
     }
 
     if (a_flash.value > 0.01f) {   /* play / pause, flashed in the centre */

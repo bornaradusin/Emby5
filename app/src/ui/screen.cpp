@@ -5,6 +5,7 @@
 #include "ui/screen.h"
 #include "app/seerr_service.h"
 #include "app/i18n.h"
+#include "app/settings.h"
 #include "seerr/seerr_client.h"
 
 #include "gfx/art.h"
@@ -48,7 +49,13 @@ std::string poster_url(jf::Client &c, const jf::Item &it, int width)
         return it.ext.poster;
     if (it.type == "Episode" && !it.series_primary_tag.empty())   /* its series' poster */
         return c.image_url(it.series_id, "Primary", it.series_primary_tag, width);
-    return c.image_url(it.id, "Primary", it.primary_tag, width);
+    if (it.type == "Audio" && !it.album_id.empty())
+        return c.image_url(it.album_id, "Primary", it.album_primary_tag, width, true);
+    const bool music = it.type == "MusicAlbum" || it.type == "MusicArtist";
+    // Match Album::draw's known-working 800px Primary URL and image cache key.
+    // Emby may omit tags on music listings, so keep the untagged request.
+    return c.image_url(it.primary_owner.empty() ? it.id : it.primary_owner,
+                       "Primary", it.primary_tag, music ? 800 : width, music);
 }
 
 void Drop::to(const gfx::Rect &abs, int key, float ox, float oy)
@@ -114,6 +121,83 @@ void glass_panel(const gfx::Rect &r, float radius, float a, bool shadow, float l
 {
     if (a <= 0.01f)
         return;
+    if (settings::get().local.theme != 0) {
+        const auto &p = theme_palette();
+        using S = SurfaceStyle;
+        const bool focus = lift > 0;
+        const float rad = p.style == S::Flat || p.style == S::Hard || p.style == S::Bevel || p.style == S::Outline || p.style == S::Pixel ? p.radius : (radius > 0 ? std::min(radius, p.radius) : p.radius);
+        const float b = p.border;
+        const uint32_t ink = alpha(p.text, a);
+        const uint32_t accent = alpha(p.accent, a);
+        const uint32_t body = alpha(focus ? p.accent : p.panel, a);
+        auto inset = [](const gfx::Rect &box, float n) -> gfx::Rect { return {box.x+n, box.y+n, std::max(0.f,box.w-2*n), std::max(0.f,box.h-2*n)}; };
+        auto stroke = [&](const gfx::Rect &box, float width, uint32_t c, float round) {
+            if (width <= 0) return;
+            gfx::fill(box, c, round);
+            const auto inner = inset(box, width);
+            gfx::fill(inner, body, std::max(0.f,round-width));
+        };
+        if (p.style == S::Hard) {
+            gfx::fill({r.x+p.depth, r.y+p.depth, r.w, r.h}, 0xff141414u, rad);
+            gfx::fill(r, ink, rad);
+            gfx::fill(inset(r,b), body, std::max(0.f,rad-b));
+        } else if (p.style == S::Neumorphic) {
+            gfx::shadow({r.x+4,r.y+5,r.w,r.h}, rad, 18, .44f*a, 8);
+            gfx::fill({r.x-4,r.y-4,r.w,r.h}, alpha(0x99ffffffu,a),rad);
+            gfx::fill(r, alpha(p.page,a),rad);
+            if (focus) gfx::fill(inset(r,4),alpha(p.accent,.25f*a),std::max(0.f,rad-4));
+        } else if (p.style == S::Gloss) {
+            if (shadow) gfx::shadow(r,rad,22,.4f*a,7);
+            gfx::fill_vgradient(r,alpha(focus?p.accent:p.panel,a),alpha(0xff101321u,a),rad);
+            gfx::fill({r.x+4,r.y+3,r.w-8,std::max(3.f,r.h*.36f)},alpha(0x45ffffffu,a),std::max(0.f,rad-4));
+            gfx::rim(r,rad,.8f*a);
+        } else if (p.style == S::Bevel) {
+            gfx::fill(r,alpha(0xff545454u,a),0);
+            gfx::fill({r.x,r.y,r.w,3},alpha(0xffffffffu,a));
+            gfx::fill({r.x,r.y,3,r.h},alpha(0xffffffffu,a));
+            gfx::fill({r.x,r.y+r.h-3,r.w,3},alpha(0xff555555u,a));
+            gfx::fill({r.x+r.w-3,r.y,3,r.h},alpha(0xff555555u,a));
+            gfx::fill(inset(r,4),body,0);
+        } else if (p.style == S::Outline) {
+            if (focus) gfx::fill(r,alpha(p.accent,.25f*a),rad);
+            if (b>0) {
+                gfx::fill(r,accent,rad);
+                gfx::fill(inset(r,b),alpha(focus?p.panel:p.page,a),std::max(0.f,rad-b));
+            }
+        } else if (p.style == S::Glow) {
+            if (shadow || focus) gfx::shadow(r,rad,32,.35f*a,0);
+            gfx::fill(r,accent,rad);
+            gfx::fill(inset(r,std::max(2.f,b)),alpha(p.panel,a),std::max(0.f,rad-b));
+            if (focus) gfx::fill(inset(r,7),alpha(p.accent,.18f*a),std::max(0.f,rad-7));
+        } else if (p.style == S::Pixel) {
+            gfx::fill({r.x+5,r.y+5,r.w,r.h},alpha(0xff0d0b13u,a));
+            gfx::fill(r,ink);
+            gfx::fill(inset(r,3),body);
+            gfx::fill({r.x+7,r.y+r.h-9,r.w-14,4},alpha(0x66000000u,a));
+        } else if (p.style == S::Sketch) {
+            if (shadow) gfx::shadow(r,3,15,.18f*a,6);
+            gfx::fill(r,ink,3);
+            gfx::fill(inset(r,2),body,2);
+            gfx::fill({r.x+9,r.y+5,r.w-18,1},accent);
+            gfx::fill({r.x+4,r.y+r.h-8,r.w-12,2},ink);
+        } else if (p.style == S::Frost) {
+            if (shadow) gfx::shadow(r,rad,24,.23f*a,6);
+            const int blurred = gfx::backdrop_blur(r,rad,14.f,a,0);
+            if (blurred != 2) {
+                gfx::fill(r,alpha(p.panel,.52f*a),rad);
+                gfx::rim(r,rad,.65f*a);
+            }
+            if (focus) gfx::fill(r,alpha(p.accent,.22f*a),rad);
+        } else {
+            if (shadow && p.depth > 0) gfx::shadow(r,rad,18,.23f*a,p.depth);
+            if (p.style == S::Soft) gfx::shadow(r,rad,24,.17f*a,4);
+            gfx::fill(r,body,rad);
+            if (b>0) stroke(r,b,alpha(p.accent,.4f*a),rad);
+        }
+        if (focus && (p.style == S::Soft || p.style == S::Flat))
+            gfx::rim(r,rad,.8f*a);
+        return;
+    }
     if (lift > 0) {
         /* The focus drop sits on glass that already bends the picture: it is that
          * glass lifted - brighter, a sheen from above, a lit rim - with no backdrop

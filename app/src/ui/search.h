@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Search (concept: .search): an on-screen keyboard on the left, results as
- * posters on the right (titles, then people, albums and episodes), updated as the viewer types (300 ms debounce).
+ * posters on the right (films, series, people and episodes), updated as the viewer types (300 ms debounce).
  * Suggestions fill the results while the query is empty. Square deletes.
  *
  * With Seerr on, its films and series follow under their own heading, with
@@ -13,6 +13,7 @@
 #pragma once
 
 #include "ui/screen.h"
+#include "app/iptv_xtream.h"
 
 #include <memory>
 #include <mutex>
@@ -35,6 +36,11 @@ private:
     struct Data {
         std::mutex lock;
         std::vector<jf::Item> items;
+        std::vector<iptv_xtream::Channel> iptv;
+        iptv_xtream::Catalog iptv_catalog;
+        std::string iptv_account;
+        bool iptv_loaded = false, iptv_loading = false;
+        unsigned iptv_generation = 0;
         std::string for_query;       /* the query these results answer */
         unsigned seq = 0;
         /* Seerr: its results, and those of them shown (the library's left out). */
@@ -61,13 +67,15 @@ private:
     Grid grid();
     void type(const std::string &key);
     void start_search();
-    void more_seerr();               /* Seerr's next page, when the focus nears the end of its results */
+    void more_seerr();
+    void load_iptv_catalog();               /* Seerr's next page, when the focus nears the end of its results */
 
     jf::Client &m_client;
     std::shared_ptr<Data> m_data = std::make_shared<Data>();
     std::string m_query;
     double m_changed = 0, m_now = 0;
     bool m_pending = false, m_suggested = false;
+    unsigned m_iptv_seen_generation = 0;
     std::string m_seerr_retried;        /* the query Seerr was asked again for, once it came up */
 
     bool m_in_results = false;

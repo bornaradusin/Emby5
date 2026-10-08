@@ -29,7 +29,7 @@ std::string duration(int64_t ticks)
 
 std::string cover_url(jf::Client &c, const jf::Item &it)
 {
-    return c.image_url(it.id, "Primary", it.primary_tag, 800);
+    return c.image_url(it.primary_owner.empty() ? it.id : it.primary_owner, "Primary", it.primary_tag, 800, true);
 }
 
 } // namespace
@@ -172,7 +172,22 @@ void Album::draw(double now, float dt)
     if (m_content.step(dt, 8.f))
         m_animating = true;
 
-    const std::string cover = cover_url(m_client, m_album);
+    // An album entry can have no usable image even when its audio tracks have
+    // embedded art. Prefer the track's tagged album art, then its own artwork.
+    std::string cover = cover_url(m_client, m_album);
+    if (!m_tracks.empty() && (m_album.primary_tag.empty() || art::failed(cover))) {
+        for (const jf::Item &track : m_tracks) {
+            if (!track.album_id.empty() && !track.album_primary_tag.empty()) {
+                cover = m_client.image_url(track.album_id, "Primary", track.album_primary_tag, 800);
+                break;
+            }
+            if (!track.primary_tag.empty()) {
+                cover = m_client.image_url(track.primary_owner.empty() ? track.id : track.primary_owner,
+                                           "Primary", track.primary_tag, 800);
+                break;
+            }
+        }
+    }
     gfx::fill({0, 0, gfx::W, gfx::H}, kBg);
     if (const gfx::Texture *bh = art::blurhash(m_album.primary_blurhash))
         gfx::image({0, 0, gfx::W, gfx::H}, bh, 0.5f, 0, true);

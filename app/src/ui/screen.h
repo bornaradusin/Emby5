@@ -17,13 +17,14 @@
 #include <string>
 #include <vector>
 
+#include "ui/theme_presets.h"
 namespace ui {
 
 constexpr float kPad = 120;
-constexpr uint32_t kBg = 0xff07070a;
-constexpr uint32_t kText = 0xfff5f5f7;
-constexpr uint32_t kText2 = 0xadebebf5;
-constexpr uint32_t kText3 = 0x6bebebf5;
+#define kBg (theme_bg())
+#define kText (theme_text())
+#define kText2 (theme_text2())
+#define kText3 (theme_text3())
 
 uint32_t alpha(uint32_t c, float a);
 
@@ -42,6 +43,7 @@ struct Action {
         Play,       /* play item (a series plays its next episode) */
         PlayFromStart,
         PlayShuffled, /* music: item first, the rest of its album in random order */
+        PlayIPTV,     /* live Xtream channel */
         PlayMix,      /* music: Emby's Instant Mix from item */
         Open,       /* open item's detail page */
         ToNav,      /* focus moves up into the tab bar */
@@ -51,6 +53,7 @@ struct Action {
         Changed,    /* change: write it, then refresh the home rows */
     } kind = None;
     jf::Item item;
+    std::string iptv_url, iptv_title;
     UserDataChange change;
     std::vector<jf::Item> queue;   /* Play: a queue to play from queue_start (a playlist) */
     size_t queue_start = 0;

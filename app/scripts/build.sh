@@ -302,6 +302,7 @@ if (( RELEASE )); then
     rm -rf -- "${LIC}" && mkdir -p "${LIC}"
     cp "${NUVIO_ROOT}/LICENSE" "${NUVIO_ROOT}/THIRD_PARTY_NOTICES.md" "${LIC}/"
     cp "${APP_ROOT}"/assets/fonts/*.txt "${LIC}/"
+    chmod -R 777 "${APPDIR}"
     (cd "${BUILD}/app" && zip -qr "${ZIP}" "${TITLE_ID}")
     ok "release: ${BUILD#"${NUVIO_ROOT}/"}/app/${ZIP}"
 fi

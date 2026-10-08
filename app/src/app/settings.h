@@ -2,8 +2,8 @@
  * Emby5 — Emby for PS5
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Settings. Audio/subtitle languages, subtitle mode and autoplay live on the
- * Emby account (so every client agrees); the console-side ones (quality
+ * Settings. Subtitle mode and autoplay live on the Emby account;
+ * console-side preferences (quality
  * cap, automatic intro skipping, language, subtitle look) live in
  * the Emby5 persistent data store.
  */
@@ -16,6 +16,8 @@ namespace settings {
 struct Local {
     int max_mbps = 0;            /* 0 = no cap (direct play whatever the network allows) */
     bool auto_skip_intro = false;
+    int theme = 0;             /* Glass or one of 30 native AGC palette presets */
+    int still_watching = 0;  /* 0 off, 1 after 3 autoplayed episodes, 2 after 2 hours */
     int language = 0;            /* i18n::Choice: 0 follow the PS5, 1 Norsk, 2 English */
     /* How text subtitles look (set in Innstillinger or in the player). */
     int sub_size = 100;          /* % */
@@ -25,6 +27,7 @@ struct Local {
     bool refresh_120 = true;
     int audio_delay_ms = 0;      /* the sound system's delay: the picture waits this long (A/V sync) */
     bool night_mode = false;     /* compress loud and quiet together, dialogue lifted */
+    bool hdmi_bitstream = false; /* Dolby Digital (Plus) and DTS to the TV/receiver undecoded (jelly5_bitstream) */
     bool theme_music = true;     /* a title's theme song, quietly, on its page */
     bool check_updates = false;  /* opt-in: ask GitHub for a newer release at start */     /* the display at 120 Hz when it can (smoother menus, 24p without judder) */
 };

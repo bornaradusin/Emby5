@@ -174,12 +174,57 @@ void Library::load_more()
         /* Artists are Emby's album artists, as its own music tab shows them. */
         jf::Page page = src.types == "MusicArtist" ? c->album_artists(src.view, s.by, s.desc, start, kPage)
                                                    : c->library(src.view, src.types, s.by, s.desc, start, kPage, src.filter + fq);
-        std::lock_guard<std::mutex> g(d->lock);
-        if (gen != d->generation)
-            return;   /* the sort changed meanwhile */
-        d->items.insert(d->items.end(), page.items.begin(), page.items.end());
-        d->total = page.items.empty() && start == 0 ? 0 : std::max(page.total, (int)d->items.size());
-        d->loading = false;
+        {
+            std::lock_guard<std::mutex> g(d->lock);
+            if (gen != d->generation)
+                return;   /* the sort changed meanwhile */
+            d->items.insert(d->items.end(), page.items.begin(), page.items.end());
+            d->total = page.items.empty() && start == 0 ? 0 : std::max(page.total, (int)d->items.size());
+            d->loading = false;
+        }
+        /* The album-detail page can show cover art because it fetches its
+         * tracks as well as the album. Do the same on the worker thread for
+         * the grid: a listing's Primary tag can be absent OR point at a dead
+         * image even when a track has working album art. Never block draw(). */
+        if (src.types == "MusicAlbum") {
+            for (const auto &album : page.items) {
+                if (album.type != "MusicAlbum") continue;
+                {
+                    std::lock_guard<std::mutex> g(d->lock);
+                    if (gen != d->generation) return;
+                }
+                std::string owner, tag;
+                // Prefer the same album Primary image Album::draw first tries.
+                jf::Item detail;
+                if (c->item(album.id, &detail) && !detail.primary_tag.empty()) {
+                    owner = detail.primary_owner.empty() ? detail.id : detail.primary_owner;
+                    tag = detail.primary_tag;
+                }
+                // Album::draw can use an audio track when album art is absent.
+                // Resolve it for the grid too, even if the list provided a tag.
+                const auto tracks = c->children(album.id, "SortName", 8);
+                for (const auto &track : tracks) {
+                    if (!track.album_primary_tag.empty() && !track.album_id.empty()) {
+                        owner = track.album_id;
+                        tag = track.album_primary_tag;
+                        break;
+                    }
+                    if (!track.primary_tag.empty()) {
+                        owner = track.primary_owner.empty() ? track.id : track.primary_owner;
+                        tag = track.primary_tag;
+                        break;
+                    }
+                }
+                if (owner.empty()) continue;
+                std::lock_guard<std::mutex> g(d->lock);
+                if (gen != d->generation) return;
+                for (auto &item : d->items)
+                    if (item.id == album.id) {
+                        item.primary_owner = owner;
+                        item.primary_tag = tag;
+                    }
+            }
+        }
     }).detach();
 }
 

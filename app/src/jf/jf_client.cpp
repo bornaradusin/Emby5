@@ -138,6 +138,14 @@ Item item_of(const cJSON *o)
             it.genres.push_back(g->valuestring);
 
     it.primary_tag = tag_of(o, "Primary");
+    it.primary_owner = it.id;
+    if (it.primary_tag.empty())
+        it.primary_tag = str_of(o, "PrimaryImageTag");
+    if (it.primary_tag.empty()) {
+        it.primary_tag = str_of(o, "ParentPrimaryImageTag");
+        it.primary_owner = str_of(o, "ParentPrimaryImageItemId");
+        if (it.primary_owner.empty()) it.primary_owner = str_of(o, "ParentId");
+    }
     it.primary_blurhash = blurhash_of(o, "Primary", it.primary_tag);
     it.thumb_tag = tag_of(o, "Thumb");
     it.thumb_owner = it.id;
@@ -454,14 +462,19 @@ bool Client::set_prefs(const UserPrefs &p)
     cJSON_Delete(j);
     if (!cfg)
         return false;
-    auto put = [cfg](const char *k, cJSON *v) { cJSON_ReplaceItemInObjectCaseSensitive(cfg, k, v); };
+    // Emby omits unset preference keys for some accounts. ReplaceItem fails
+    // silently when a key is absent; add the key rather than dropping the edit.
+    auto put = [cfg](const char *k, cJSON *v) {
+        cJSON_DeleteItemFromObjectCaseSensitive(cfg, k);
+        cJSON_AddItemToObject(cfg, k, v);
+    };
     put("AudioLanguagePreference", cJSON_CreateString(p.audio_language.c_str()));
     put("SubtitleLanguagePreference", cJSON_CreateString(p.subtitle_language.c_str()));
     put("SubtitleMode", cJSON_CreateString(p.subtitle_mode.empty() ? "Default" : p.subtitle_mode.c_str()));
     put("EnableNextEpisodeAutoPlay", cJSON_CreateBool(p.autoplay_next));
     char *text = cJSON_PrintUnformatted(cfg);
     cJSON_Delete(cfg);
-    const bool ok = post_json("/Users/Configuration?userId=" + user_id_, text, nullptr);
+    const bool ok = post_json("/Users/" + user_id_ + "/Configuration", text, nullptr);
     std::free(text);
     return ok;
 }
@@ -977,13 +990,17 @@ bool Client::media_extras(const std::string &item_id, const std::string &media_s
                           std::vector<Chapter> *chapters, Trickplay *tp)
 {
     std::string body;
-    if (!get_json("/Items/" + item_id + "?userId=" + user_id_ + "&fields=Chapters,Trickplay", &body))
+    if (!get_json("/Users/" + user_id_ + "/Items/" + item_id + "?fields=Chapters", &body))
         return false;
     cJSON *j = cJSON_Parse(body.c_str());
     if (!j)
         return false;
     const cJSON *c;
     cJSON_ArrayForEach(c, cJSON_GetObjectItemCaseSensitive(j, "Chapters")) {
+        /* Emby marker entries (intro/credits) are not navigable chapters. */
+        const std::string marker = str_of(c, "MarkerType");
+        if (!marker.empty() && marker != "Chapter")
+            continue;
         Chapter ch;
         ch.start = num_of(c, "StartPositionTicks") / (double)kTicksPerSecond;
         ch.name = str_of(c, "Name");
@@ -1043,12 +1060,14 @@ std::vector<Segment> Client::segments(const std::string &item_id)
 }
 
 std::string Client::image_url(const std::string &owner, const char *type, const std::string &tag,
-                              int width) const
+                              int width, bool allow_untagged) const
 {
-    if (owner.empty() || tag.empty())
+    if (owner.empty() || (tag.empty() && !allow_untagged))
         return std::string();
+    // Music albums/artists may have valid Primary artwork without an ImageTag
+    // in Emby's list response. An untagged image URL is valid on Emby.
     return api_url("/Items/" + owner + "/Images/" + type + "?fillWidth=" + std::to_string(width) +
-                   "&quality=90&tag=" + tag);
+                   "&quality=90" + (tag.empty() ? std::string() : "&tag=" + tag));
 }
 
 /*

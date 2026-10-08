@@ -14,7 +14,7 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Movies, TV shows, seasons and episodes
 - Music, artists, albums and playlists
 - Detail pages with artwork, cast and media information
-- Search across media
+- Global search across movies, TV shows, people, and Xtream IPTV channel names (IPTV requires configured credentials)
 - Sort, filter, favourites and watched/unwatched state
 - A-Z library navigation
 - Artwork/backdrop loading and BlurHash placeholders
@@ -62,6 +62,7 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - SRT, ASS/SSA, PGS, DVD, DVB and WebVTT subtitles
 - Embedded and external subtitle tracks
 - Subtitle appearance and timing controls
+- All six Emby subtitle playback modes: Default, Smart, Always, Only Forced, Hearing Impaired (SDH), None
 
 ### Music
 
@@ -85,6 +86,18 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Radarr/Sonarr server, quality-profile and root-folder choices when permitted by Seerr
 - Persistent Seerr configuration across app relaunches and updates
 
+### IPTV (Xtream Codes; PS5 validation pending)
+
+- Native IPTV tab using Emby5's existing visual style
+- Xtream server URL, username and password configured independently in Settings (no chained keyboards)
+- Live channel browsing and Xtream TS/HLS stream URL playback through the existing PS5 player
+- User-managed categories in Settings: create, rename, delete and reorder
+- Assign or remove channels in multiple custom categories from Settings; reorder assigned channels
+- Persistent Xtream account configuration and category assignments
+- IPTV viewer controls: Up from the first channel focuses the category selector; Left/Right changes category, X cycles categories, Down returns to channels; X on a channel plays.
+- Category assignment search: Triangle opens a channel-name search, Square clears it; X assigns/unassigns a channel in filtered results. All configuration remains in Settings → IPTV.
+- Requires a legitimate IPTV provider account; no channels or subscriptions are supplied
+
 ### PS5 integration
 
 - Native PS5 title ID `PPSA99515`
@@ -96,11 +109,15 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Folder-based installation and updating
 - Optional GitHub update checking against `bornaradusin/Emby5`
 
+## HDMI bitstream (1.0.0, pending hardware validation)
+
+Optional HDMI passthrough for compatible AC-3, E-AC-3 and DTS-core audio streams. Unsupported formats or sinks fall back to PCM; night mode disables passthrough. TrueHD Atmos and DTS:X passthrough are not supported.
+
 ## Known limits
 
 These come from the PS5 platform and current playback stack, not from Emby5:
 
-- No bitstream passthrough: Dolby Atmos and DTS:X are decoded and output as multichannel PCM.
+- HDMI passthrough for AC-3, E-AC-3 and DTS core is optional and requires compatible output hardware; TrueHD Atmos and DTS:X are decoded to PCM.
 - No true 24p output: the console runs the display at 60 or 120 Hz.
 - Dolby Vision plays its HDR10-compatible base layer where available. Profile 5, which has no HDR10 base layer, requires server transcoding.
 - AV1 is currently transcoded by the Emby server.
@@ -182,3 +199,18 @@ Emby5 is distributed under the GNU General Public License v3.0 or later. See [LI
 Emby5 is unofficial homebrew software provided without warranty. It contains no media and accesses media supplied by the user's own Emby server.
 
 Emby5 is not affiliated with or endorsed by Emby LLC or Sony Interactive Entertainment. Emby, PlayStation, PS5 and DualSense are names or trademarks belonging to their respective owners and are used only to describe compatibility.
+
+### Are you still watching?
+
+Settings -> Playback: **Off** (default), **After 3 episodes**, or **After 2 hours**.
+During uninterrupted episode autoplay, Emby5 pauses the next-episode transition
+and asks for confirmation. Any controller button starts the next episode;
+controller activity during playback resets the unattended streak. Does not affect music or IPTV.
+
+### PS5 diagnostic log
+
+With USB0 mounted, Emby5 writes to `/mnt/usb0/emby5/emby5.log`,
+separately from EVO Player's `/mnt/usb0/evo.log`. If no USB is connected,
+the app continues without a USB log.
+
+Theme selection: Settings > Theme offers original Glass plus 30 AGC-native visual presets (see docs/THEME_PRESETS.md).

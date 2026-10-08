@@ -40,7 +40,8 @@ class PlayerUi {
 public:
     void begin(const NuvioRequest *req, double now);
     void end() { m_req = nullptr; }
-    bool stats_shown() const { return m_stats; }   /* L3: the playback info panel */
+    bool stats_shown() const { return m_stats; }
+    bool had_user_input() const { return m_had_input; }
 
     /* The controller. In a SyncPlay group, pause, seek and next go to the group
      * (which then tells everyone, this player included). */
@@ -119,6 +120,10 @@ private:
     float m_seek_step = 10;
 
     bool m_skip_done[16] = {};
+    bool m_had_input = false;
+    bool m_still_prompt = false;
+    bool m_still_approved = false;
+    bool check_still_watching(const NuvioStatus &st) const;
     bool m_card_dismissed = false;
     double m_card_since = -1;           /* the next-episode countdown */
 

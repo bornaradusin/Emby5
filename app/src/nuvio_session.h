@@ -80,6 +80,8 @@ struct NuvioPrefs {
     bool clock_24h = true;
     bool skip_intro = true;
     bool auto_skip = false;                  /* Emby5: skip intros without asking */
+    int still_watching_mode = 0;  /* Emby5: 0 off, 1 after 3 episodes, 2 after 2 hours */
+    double unattended_seconds = 0;
     int still_watching_episodes = 3;         /* 0 = never ask */
     bool has_tz = false;                     /* the page's UTC offset, for the clock */
     int tz_offset_min = 0;
@@ -135,6 +137,7 @@ struct NuvioResult {
     std::string audio_lang, subtitle_lang;
     bool subtitles_on = false;
     int subtitle_delay_ms = 0;
+    bool user_interacted = false;
 };
 
 std::string nuvio_result_json(const NuvioRequest &req, const NuvioResult &res);

@@ -36,7 +36,7 @@ struct Item {
     std::vector<std::string> genres;
 
     /* Image owners and tags (an episode's logo/backdrop belong to its series). */
-    std::string primary_tag, thumb_tag, logo_tag, backdrop_tag;
+    std::string primary_tag, primary_owner, thumb_tag, logo_tag, backdrop_tag;
     std::string series_primary_tag;           /* an episode's series poster */
     std::string logo_owner, backdrop_owner, thumb_owner;
     std::string primary_blurhash, backdrop_blurhash, thumb_blurhash;
@@ -282,7 +282,7 @@ public:
     bool playback_info(const std::string &item_id, int64_t start_ticks, int audio_index,
                        int subtitle_index, Playback *out, int64_t max_bitrate = 0);
     std::string image_url(const std::string &owner, const char *type, const std::string &tag,
-                          int width) const;
+                          int width, bool allow_untagged = false) const;
 
     void report_start(const Playback &pb, int64_t position_ticks);
     void report_progress(const Playback &pb, int64_t position_ticks, bool paused);

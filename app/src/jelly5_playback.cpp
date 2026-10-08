@@ -2,6 +2,7 @@
  * Emby5 — Emby for PS5
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+#include "jelly5_bitstream.h"
 #include "jelly5_playback.h"
 #include "evo_audio_out.h"
 
@@ -181,12 +182,15 @@ struct Extras {
 };
 
 std::string request_json(jf::Client &c, const jf::Item &it, const jf::Playback &pb,
-                         const std::vector<jf::Item> &episodes, const Extras &ex)
+                         const std::vector<jf::Item> &episodes, const Extras &ex, int autoplay_count = 0, double unattended_seconds = 0)
 {
     const std::vector<jf::Segment> &segs = ex.segments;
     const bool episode = it.type == "Episode", audio = it.type == "Audio";
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", it.id.c_str());
+    cJSON_AddNumberToObject(o, "autoplayCount", autoplay_count);
+    cJSON_AddNumberToObject(o, "unattendedSeconds", unattended_seconds);
+    cJSON_AddNumberToObject(o, "stillWatchingMode", settings::get().local.still_watching);
     if (audio) {   /* the player's music screen: the album's cover, artist and album */
         cJSON_AddStringToObject(o, "artist", it.album_artist.c_str());
         cJSON_AddStringToObject(o, "album", it.album.c_str());
@@ -386,8 +390,8 @@ std::string request_json(jf::Client &c, const jf::Item &it, const jf::Playback &
         for (const auto &x : l)
             cJSON_AddItemToArray(arr, cJSON_CreateString(x.c_str()));
     };
-    langs(al, set.server.audio_language);
-    langs(sl, set.server.subtitle_language);
+
+
     const std::string mode = set.server.subtitle_mode;
     cJSON_AddItemToObject(prefs, "audioLanguages", al);
     cJSON_AddItemToObject(prefs, "subtitleLanguages", sl);
@@ -752,6 +756,7 @@ bool jelly5_play_theme(jf::Client &client, const jf::Item &song)
     const std::string req = request_json(client, song, pb, {}, ex);
     evo_audio_set_night(0);
     evo_audio_set_gain(0.28f);
+    jelly5_bs_set_allowed(0);   /* a theme plays quietly: decoded, so the gain applies */
     nuvio_player_run(req.c_str());
     evo_audio_set_gain(1.0f);
     client.stop_encoding(pb);
@@ -760,6 +765,8 @@ bool jelly5_play_theme(jf::Client &client, const jf::Item &song)
 
 static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf::Item> episodes, std::string *error)
 {
+    int unattended_count = 0;
+    double unattended_seconds = 0;
     if (item.type == "Audio" && !episodes.empty()) {   /* the music queue starts on this track */
         std::lock_guard<std::mutex> g(s_music.lock);
         s_music.queue = episodes;
@@ -773,6 +780,10 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
     evo_audio_set_gain(1.0f);                                    /* full volume (a theme may have been playing) */
     evo_audio_set_speed(1.0f);                                   /* each playback starts at normal speed */
     evo_audio_set_night(settings::get().local.night_mode ? 1 : 0);   /* Innstillinger: Nattmodus */
+    /* Innstillinger: HDMI-bitstrøm. Night mode needs the sound decoded here, so it wins. */
+    jelly5_bs_set_allowed(settings::get().local.hdmi_bitstream && !settings::get().local.night_mode
+                              ? JELLY5_BS_AC3 | JELLY5_BS_EAC3 | JELLY5_BS_DTS
+                              : 0);
 
     for (int chain = 0; chain < 50; chain++) {
         jf::Playback pb;
@@ -794,7 +805,7 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
         }
         if (ex.trickplay.valid())
             evo_bt("jelly5: trickplay %dx%d, %d thumbnails", ex.trickplay.width, ex.trickplay.height, ex.trickplay.count);
-        const std::string req = request_json(client, item, pb, episodes, ex);
+        const std::string req = request_json(client, item, pb, episodes, ex, unattended_count, unattended_seconds);
 
         s_session.client = &client;
         s_session.pb = pb;
@@ -884,6 +895,23 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
         }
         if (!next_from_result(result, &season, &number))
             return true;
+        /* Buttons reset the unattended run. A next-episode autoplay advances it.
+         * Explicitly chosen episodes reset the count as well. */
+        {
+            cJSON *r = cJSON_Parse(result.c_str());
+            const bool input = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "userInteracted"));
+            const cJSON *action = cJSON_GetObjectItemCaseSensitive(r, "action");
+            const cJSON *type = cJSON_GetObjectItemCaseSensitive(action, "type");
+            const bool auto_next = cJSON_IsString(type) && std::strcmp(type->valuestring, "next") == 0;
+            if (input || !auto_next) {
+                unattended_count = 0;
+                unattended_seconds = 0;
+            } else {
+                ++unattended_count;
+                unattended_seconds += pos;
+            }
+            cJSON_Delete(r);
+        }
         const jf::Item *next = nullptr;
         for (const auto &e : episodes)
             if (e.parent_index == season && e.index == number)

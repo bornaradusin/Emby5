@@ -16,7 +16,10 @@ struct bl_note { char pad[45]; char msg[3075]; };
 extern int sceKernelSendNotificationRequest(int, void *, unsigned long, int);
 #endif
 
-#define EVO_LOG_PATH "/mnt/usb0/evo.log"
+#define EVO_LOG_PATH "/mnt/usb0/emby5/emby5.log"
+#ifdef EVO_LOG_TO_USB
+int sceKernelMkdir(const char *path, int mode);
+#endif
 
 /*
  * Two phases:
@@ -318,6 +321,8 @@ void evo_boot_log_flush(void)
 {
     if (!g_fp) {
 #ifdef EVO_LOG_TO_USB
+        /* Log to our own USB directory; do not touch EVO Player logs. */
+        sceKernelMkdir("/mnt/usb0/emby5", 0777);
         FILE *fp = fopen(EVO_LOG_PATH, "a");
 #else
         FILE *fp = NULL;   /* Emby5: never a file on the viewer's USB stick (dev builds log over UDP) */

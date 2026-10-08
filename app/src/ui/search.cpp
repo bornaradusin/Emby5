@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <utility>
 #include <cstdio>
 #include <set>
 #include <thread>
@@ -71,6 +72,13 @@ std::string id_key(const std::string &id)
     return out;
 }
 
+std::string lower_name(std::string name)
+{
+    for (char &c : name)
+        c = (char)std::tolower((unsigned char)c);
+    return name;
+}
+
 } // namespace
 
 int Search::Grid::row_of(int i) const { return i < library ? i / kResCols : library_rows() + (i - library) / kResCols; }
@@ -98,9 +106,50 @@ Search::Search(jf::Client &client) : m_client(client) {}
 void Search::activate()
 {
     m_in_results = false;   /* arriving (by △ or the tab): straight onto the keyboard */
+    load_iptv_catalog();
     if (!m_suggested) {
         m_suggested = true;
         start_search();
+    }
+}
+
+void Search::load_iptv_catalog()
+{
+    iptv_xtream::Credentials creds;
+    if (!iptv_xtream::load_credentials(&creds)) {
+        std::lock_guard<std::mutex> g(m_data->lock);
+        m_data->iptv.clear();
+        m_data->iptv_catalog = {};
+        m_data->iptv_account.clear();
+        m_data->iptv_loaded = false;
+        return;
+    }
+    /* Credentials are only used in the worker; don't store the password in search results. */
+    const std::string account = creds.server + "|" + creds.username + "|" + creds.password;
+    auto d = m_data;
+    {
+        std::lock_guard<std::mutex> g(d->lock);
+        if (d->iptv_account == account && (d->iptv_loaded || d->iptv_loading))
+            return;
+        d->iptv_account = account;
+        d->iptv_loading = true;
+        d->iptv_loaded = false;
+        d->iptv.clear();
+    }
+    if (!jelly5::spawn([d, creds, account] {
+        iptv_xtream::Catalog catalog;
+        std::string error;
+        const bool ok = iptv_xtream::load_catalog(creds, &catalog, &error);
+        std::lock_guard<std::mutex> g(d->lock);
+        if (d->iptv_account != account)
+            return;
+        if (ok) d->iptv_catalog = std::move(catalog);
+        d->iptv_loaded = ok;
+        d->iptv_loading = false;
+        ++d->iptv_generation;
+    })) {
+        std::lock_guard<std::mutex> g(d->lock);
+        d->iptv_loading = false;
     }
 }
 
@@ -148,7 +197,7 @@ void Search::merge(Data &d)
 Search::Grid Search::grid()
 {
     std::lock_guard<std::mutex> g(m_data->lock);
-    return {(int)m_data->items.size(), (int)m_data->seerr_shown.size()};
+    return {(int)(m_data->items.size() + m_data->iptv.size()), (int)m_data->seerr_shown.size()};
 }
 
 void Search::more_seerr()
@@ -159,7 +208,7 @@ void Search::more_seerr()
     int page;
     {
         std::lock_guard<std::mutex> g(d->lock);
-        const int library = (int)d->items.size(), shown = (int)d->seerr_shown.size();
+        const int library = (int)(d->items.size() + d->iptv.size()), shown = (int)d->seerr_shown.size();
         if (d->seerr_more_failed) {   /* the last page failed: asked again in five seconds */
             d->seerr_more_failed = false;
             d->seerr_more_retry_at = m_now + 5.0;
@@ -225,6 +274,7 @@ void Search::start_search()
         std::lock_guard<std::mutex> g(d->lock);
         seq = ++d->seq;
         d->seerr_pending = sc != nullptr;
+        d->iptv.clear();
         d->seerr_failed = false;
         d->seerr_page = 1;
         d->seerr_more = true;
@@ -261,11 +311,11 @@ void Search::start_search()
             r = c->library("", "Movie,Series", "Random", false, 0, 16).items;
         } else {
             /* Titles and people side by side (people take the server longer); shown
-             * titles first, then people, albums and episodes. */
+             * titles first, then people and episodes. */
             std::vector<jf::Item> people, found;
             jelly5::run_all({[&] { people = c->search(q, "Person", 12); },
-                             [&] { found = c->search(q, "Movie,Series,MusicArtist,MusicAlbum,Episode", 36); }});
-            for (const char *type : {"Movie|Series", "Person", "MusicArtist", "MusicAlbum", "Episode"}) {
+                             [&] { found = c->search(q, "Movie,Series,Episode", 60); }});
+            for (const char *type : {"Movie|Series", "Person", "Episode"}) {
                 const std::string t = type;
                 for (const jf::Item &it : t == "Person" ? people : found)
                     if (t.find(it.type) != std::string::npos)
@@ -277,6 +327,15 @@ void Search::start_search()
             return;   /* the query moved on */
         d->items = std::move(r);
         d->for_query = q;
+        if (d->iptv_loaded && !q.empty()) {
+            const std::string needle = lower_name(q);
+            for (const auto &ch : d->iptv_catalog.channels) {
+                if (lower_name(ch.name).find(needle) != std::string::npos) {
+                    d->iptv.push_back(ch);
+                    if (d->iptv.size() >= 100) break;
+                }
+            }
+        }
         merge(*d);
     });
 }
@@ -317,11 +376,19 @@ Action Search::input(uint32_t p)
             std::lock_guard<std::mutex> g(m_data->lock);
             const int n = (int)m_data->items.size();
             if (m_result < n) {
-                a.kind = Action::Open;
                 a.item = m_data->items[m_result];
-            } else if (m_result - n < (int)m_data->seerr_shown.size()) {
-                a.kind = Action::Open;   /* the server's page when it has the title, else Seerr's */
-                a.item = m_data->seerr_shown[m_result - n];
+                a.kind = Action::Open;
+            } else if (m_result - n < (int)m_data->iptv.size()) {
+                const auto ch = m_data->iptv[(size_t)(m_result - n)];
+                iptv_xtream::Credentials creds;
+                if (iptv_xtream::load_credentials(&creds)) {
+                    a.kind = Action::PlayIPTV;
+                    a.iptv_title = ch.name;
+                    a.iptv_url = iptv_xtream::live_url(creds, ch);
+                }
+            } else if (m_result - n - (int)m_data->iptv.size() < (int)m_data->seerr_shown.size()) {
+                a.kind = Action::Open;
+                a.item = m_data->seerr_shown[m_result - n - (int)m_data->iptv.size()];
             }
         }
         return a;
@@ -368,12 +435,23 @@ void Search::draw(double now, float dt)
         start_search();
     }
     more_seerr();
+    unsigned generation;
+    {
+        std::lock_guard<std::mutex> g(m_data->lock);
+        generation = m_data->iptv_generation;
+    }
+    if (generation != m_iptv_seen_generation) {
+        m_iptv_seen_generation = generation;
+        if (!m_pending) start_search();
+    }
     std::vector<jf::Item> items, seerr;
+    std::vector<iptv_xtream::Channel> iptv;
     std::string for_query;
     bool seerr_pending, seerr_failed, seerr_asked;
     {
         std::lock_guard<std::mutex> g(m_data->lock);
         items = m_data->items;
+        iptv = m_data->iptv;
         seerr = m_data->seerr_shown;
         for_query = m_data->for_query;
         seerr_pending = m_data->seerr_pending;
@@ -385,6 +463,13 @@ void Search::draw(double now, float dt)
         m_seerr_retried != for_query && seerr_service::ready()) {
         m_seerr_retried = for_query;
         start_search();
+    }
+    for (const auto &ch : iptv) {
+        jf::Item it;
+        it.id = ch.id;
+        it.name = ch.name;
+        it.type = "IPTVChannel";
+        items.push_back(std::move(it));
     }
     const Grid gr{(int)items.size(), (int)seerr.size()};
     m_result = std::min(m_result, std::max(0, gr.count() - 1));
@@ -403,7 +488,7 @@ void Search::draw(double now, float dt)
     const float qy = 236;
     float qx = kKbX;
     if (m_query.empty())
-        gfx::text(kKbX, qy, T("Filmer, serier, personer, musikk"), {gfx::Medium, 36, 640}, kText3);
+        gfx::text(kKbX, qy, T("Movies, TV, artists, albums, songs, IPTV"), {gfx::Medium, 36, 640}, kText3);
     else
         qx += gfx::text(kKbX, qy, m_query, {gfx::Bold, 52, 600}, kText);
     if (std::fmod(now, 1.0) < 0.55)
@@ -465,7 +550,14 @@ void Search::draw(double now, float dt)
                 continue;
             const jf::Item &it = item_at(i);
             const float lift = m_lifts.step(it.id, focus, dt, &anim);
-            draw_poster(m_client, it, {kResX + gr.col_of(i) * (kPosterW + kResGap), y, kPosterW, kPosterH}, lift, 1.f);
+            if (it.type == "IPTVChannel") {
+                const gfx::Rect tile{kResX + gr.col_of(i) * (kPosterW + kResGap), y, kPosterW, kPosterH};
+                glass_panel(tile, 18, 1.f, false);
+                gfx::text(tile.x + 16, tile.y + 65, "LIVE IPTV", {gfx::SemiBold, 23}, kText2);
+                gfx::text(tile.x + 16, tile.y + 150, it.name, {gfx::SemiBold, 23, kPosterW - 32}, focus ? kText : kText2);
+            } else {
+                draw_poster(m_client, it, {kResX + gr.col_of(i) * (kPosterW + kResGap), y, kPosterW, kPosterH}, lift, 1.f);
+            }
         }
     if (seerr_on) {
         const float hy = kResY + 26 + library_h - m_scroll.value;   /* the top of Seerr's block */

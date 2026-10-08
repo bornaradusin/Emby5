@@ -178,6 +178,8 @@ bool nuvio_request_parse(const char *json, NuvioRequest &r)
     if (r.start_position < 0)
         r.start_position = 0;
     r.autoplay_count = (int)num_of(root, "autoplayCount", 0);
+    r.prefs.still_watching_mode = (int)num_of(root, "stillWatchingMode", 0);
+    r.prefs.unattended_seconds = num_of(root, "unattendedSeconds", 0);
 
     const cJSON *stream = cJSON_GetObjectItemCaseSensitive(root, "stream");
     r.stream_title = str_of(stream, "title");
@@ -325,6 +327,7 @@ std::string nuvio_result_json(const NuvioRequest &req, const NuvioResult &res)
     cJSON_AddStringToObject(o, "state", res.state.c_str());
     cJSON_AddNumberToObject(o, "position", res.position);
     cJSON_AddNumberToObject(o, "duration", res.duration);
+    cJSON_AddItemToObject(o, "userInteracted", cJSON_CreateBool(res.user_interacted));
     if (!res.error.empty())
         cJSON_AddStringToObject(o, "error", res.error.c_str());
     if (!res.action.empty()) {

@@ -262,7 +262,8 @@ std::string Home::card_url(const jf::Item &it) const
         return m_client.image_url(it.thumb_owner, "Thumb", it.thumb_tag, 640);
     if (!it.backdrop_tag.empty())
         return m_client.image_url(it.backdrop_owner, "Backdrop", it.backdrop_tag, 640);
-    return m_client.image_url(it.id, "Primary", it.primary_tag, 640);
+    const bool music = it.type == "MusicAlbum" || it.type == "MusicArtist";
+    return m_client.image_url(it.primary_owner.empty() ? it.id : it.primary_owner, "Primary", it.primary_tag, 640, music);
 }
 
 std::string Home::backdrop_url(const jf::Item &it) const

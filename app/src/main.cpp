@@ -37,6 +37,7 @@
 #include "ui/profiles.h"
 #include "ui/screensaver.h"
 #include "ui/search.h"
+#include "ui/iptv.h"
 #include "ui/seerr_detail.h"
 #include "ui/settings_screen.h"
 #include "ui/syncplay_screen.h"
@@ -980,6 +981,7 @@ void *boot(void *)
 std::unique_ptr<ui::Home> s_home, s_discover;   /* s_discover: Seerr's tab */
 std::unique_ptr<ui::Library> s_movies, s_shows, s_music;
 std::unique_ptr<ui::Search> s_search;
+std::unique_ptr<ui::IPTV> s_iptv;
 std::unique_ptr<ui::SettingsScreen> s_settings;
 std::unique_ptr<ui::Profiles> s_profiles;
 std::unique_ptr<ui::Login> s_login;
@@ -1141,6 +1143,7 @@ void reset_screens()
     s_shows.reset(new ui::Library(*s_client, T("Serier"), "Series"));
     s_music.reset(new ui::Library(*s_client, T("Musikk"), "MusicAlbum"));
     s_search.reset(new ui::Search(*s_client));
+    s_iptv.reset(new ui::IPTV());
     s_settings.reset(new ui::SettingsScreen(*s_client));
     s_tab = s_nav_tab = ui::Nav::Home;
     s_nav_focus = false;
@@ -1234,6 +1237,7 @@ ui::Screen *screen_for(int tab)
     case ui::Nav::Shows: return s_shows.get();
     case ui::Nav::Music: return s_music.get();
     case ui::Nav::Discover: return s_discover.get();
+    case ui::Nav::IPTV: return s_iptv.get();
     case ui::Nav::Search: return s_search.get();
     case ui::Nav::Settings: return s_settings.get();
     default: return s_home.get();
@@ -1260,7 +1264,7 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
         open_now_playing();
         return;
     }
-    if ((p & NUVIO_BTN_TRIANGLE) && s_stack.empty() && s_tab != ui::Nav::Search) {
+    if ((p & NUVIO_BTN_TRIANGLE) && s_stack.empty() && s_tab != ui::Nav::Search && s_tab != ui::Nav::IPTV && !screen_for(s_tab)->modal()) {
         s_nav_focus = false;   /* △ from any tab: straight to search, as in YouTube on PS5 */
         s_nav_tab = ui::Nav::Search;
         open_tab(ui::Nav::Search);
@@ -1331,6 +1335,32 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
         s_queue = a.queue;
         s_queue_start = a.queue_start;
         break;
+    case ui::Action::PlayIPTV: {
+        if (a.iptv_url.empty()) break;
+        cJSON *req = cJSON_CreateObject();
+        cJSON_AddStringToObject(req,"url",a.iptv_url.c_str());
+        cJSON_AddStringToObject(req,"title",a.iptv_title.c_str());
+        cJSON_AddStringToObject(req,"itemType","movie");
+        cJSON_AddStringToObject(req,"playMethod","DirectPlay");
+        cJSON *stream=cJSON_CreateObject();
+        cJSON_AddStringToObject(stream,"addon","IPTV");
+        cJSON_AddStringToObject(stream,"title","Live TV");
+        cJSON_AddItemToObject(req,"stream",stream);
+        char *json=cJSON_PrintUnformatted(req);
+        cJSON_Delete(req);
+        if (json) {
+            stop_theme(true);
+            // Match the normal Emby video playback transition: the player
+            // owns the controller while active, and the shell reopens it
+            // when returning to IPTV. Without this the shell loses input.
+            nuvio_input_close();
+            nuvio_player_run(json);
+            nuvio_player_leave();
+            nuvio_input_open(s_user);
+            std::free(json);
+        }
+        break;
+    }
     case ui::Action::PlayMix: {   /* Emby's Instant Mix from an album (or song, artist) */
         std::vector<jf::Item> mix = s_client->instant_mix(a.item.id, 60);
         if (mix.empty()) {
@@ -1468,6 +1498,7 @@ void apply_views(const std::vector<jf::Item> &views)
     if (!music.empty()) { tabs.push_back(ui::Nav::Music); s_music->set_sources(music); }
     if (seerr_service::available())
         tabs.push_back(ui::Nav::Discover);
+    tabs.push_back(ui::Nav::IPTV);
     tabs.push_back(ui::Nav::Search);
     s_nav.set_tabs(tabs);
     /* A tab that went away (another account, a library removed): back home. */
@@ -1515,9 +1546,9 @@ void draw_launch(double t, float a, const std::string &title, const std::string 
         y += 10;
     }
     if (!title.empty())
-        gfx::text(gfx::W / 2, y, title, {gfx::SemiBold, 30, 1400}, ui::kText, 1);
+        gfx::text(gfx::W / 2, y, title, {gfx::SemiBold, 30, 1400}, ui::theme_text(), 1);
     if (!line.empty())
-        gfx::text(gfx::W / 2, y + 46, line, {gfx::Medium, 24, 1400}, ui::kText2, 1);
+        gfx::text(gfx::W / 2, y + 46, line, {gfx::Medium, 24, 1400}, ui::theme_text2(), 1);
     gfx::pop_opacity();
     if (!hint.empty())
         ui::draw_pad_hints(gfx::W / 2, 992, {{ui::PadButton::Circle, hint}}, 1);
@@ -1606,6 +1637,7 @@ bool draw_frame(double t, float dt)
                                                            : s_tab == ui::Nav::Shows  ? (ui::Screen *)s_shows.get()
                                                            : s_tab == ui::Nav::Music  ? (ui::Screen *)s_music.get()
                                                            : s_tab == ui::Nav::Discover ? (ui::Screen *)s_discover.get()
+                                                           : s_tab == ui::Nav::IPTV ? (ui::Screen *)s_iptv.get()
                                                            : s_tab == ui::Nav::Search ? (ui::Screen *)s_search.get()
                                                                                       : (ui::Screen *)s_home.get());
                 below->draw(t, dt);
@@ -1644,7 +1676,7 @@ bool draw_frame(double t, float dt)
                                          : st == seerr_service::State::SignedOut
                                              ? T("Ikke pålogget Seerr \xE2\x80\x93 \xE2\x9C\x95 for å logge på igjen")
                                              : T("Seerr svarer ikke \xE2\x80\x93 \xE2\x9C\x95 for å prøve igjen");
-                gfx::text(gfx::W / 2, gfx::H / 2, text, {gfx::SemiBold, 34}, fetching ? ui::kText3 : ui::kText2, 1);
+                gfx::text(gfx::W / 2, gfx::H / 2, text, {gfx::SemiBold, 34}, fetching ? ui::theme_text3() : ui::theme_text2(), 1);
                 discover_wait = fetching;
             }
             if (enter < 1.f)
@@ -1716,7 +1748,7 @@ bool draw_connection(double now)
     const gfx::Rect r{gfx::W / 2 - w / 2, 136, w, 60};
     ui::glass_panel(r, 30, 1.f, true);
     gfx::fill({r.x + 26, r.y + 25, 10, 10}, s_down ? 0xffff9f0au : 0xff30d158u, 5);   /* amber: away, green: back */
-    gfx::text(r.x + 48, r.y + 39, text, ts, ui::kText);
+    gfx::text(r.x + 48, r.y + 39, text, ts, ui::theme_text());
     return true;
 }
 
@@ -1800,7 +1832,7 @@ void play(jf::Item item, bool from_start, bool shuffle = false, const std::vecto
     gfx::begin_frame();
     const gfx::Rect full{0, 0, gfx::W, gfx::H};
     if (item.type == "Audio") {   /* the music screen's ground: its colour and the cover's hues */
-        gfx::fill(full, ui::kBg);
+        gfx::fill(full, ui::theme_bg());
         const std::string &hash = !item.album_blurhash.empty() ? item.album_blurhash : item.primary_blurhash;
         if (const gfx::Texture *bh = art::blurhash(hash))
             gfx::image(full, bh, 0.55f, 0, true);
@@ -1921,6 +1953,7 @@ int main()
     evo_bt("emby5: persistent storage %s (%s)",
            sandbox_open ? "available" : "NOT available",
            evo_data_dir());
+    evo_boot_log_flush();  /* USB is accessible after sandbox promotion. */
     if (ui_text_init() != 0 || !gfx::init())
         evo_bt("emby5: ui init failed");
     nuvio_input_open(s_user);
@@ -1931,9 +1964,12 @@ int main()
     settings::load_local();
     accounts::set_ps5_user(s_user);   /* each PS5 user keeps their own Emby account */
     i18n::set_choice(settings::get().local.language);
-    /* 120 Hz where the display has it: smoother menus, and 24p film without 3:2 judder. */
-    if (settings::get().local.refresh_120 && evo_agc_runtime_supports_120hz())
-        evo_agc_runtime_set_120hz(1);
+    /* Restore the saved refresh rate in both directions. The video output may
+     * have been left at 120 Hz by a previous process or by early initialization. */
+    const bool requested_120hz = settings::get().local.refresh_120 && evo_agc_runtime_supports_120hz();
+    const int refresh_rc = evo_agc_runtime_set_120hz(requested_120hz ? 1 : 0);
+    if (refresh_rc != 0)
+        evo_bt("emby5: applying saved refresh rate %s failed: %d", requested_120hz ? "120Hz" : "60Hz", refresh_rc);
     s_boot_has_account = accounts::last(&s_boot_account);
     s_client = s_boot_client = s_boot_has_account ? client_for(s_boot_account) : new_client(EMBY5_SERVER);
     reset_screens();
