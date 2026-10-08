@@ -1,3 +1,6 @@
+
+![Emby5 Home Screen](docs/emby5-home.jpg)
+
 # Emby5 for PS5
 
 **A native Emby media client for homebrew-enabled PlayStation 5 consoles.**
