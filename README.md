@@ -277,7 +277,7 @@ The following limitations relate to the PS5 platform, the homebrew environment, 
 
 **Application limitations**
 - Emby5 cannot terminate itself. Use the PS button to close it.
-- Subtitle appearance and timing customization code exists, but its menu accessibility has not been validated in the released build.
+- Subtitle timing customization code exists, but its menu accessibility has been implemented yet.
 - Preferred audio-language and subtitle-language selectors are not included in 1.0.0.
 - Some album artwork may fail to appear in the music album grid.
 
