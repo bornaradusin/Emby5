@@ -10,10 +10,6 @@ Emby5 is an independent community project and is not affiliated with or endorsed
 
 ---
 
-Contents: Features · HDMI Bitstream · Known Limitations · Controls · Installation · Updating · Credits · Licence · Disclaimer
-
----
-
 **Contents:** [Features](#features) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
 
 ---
