@@ -11,6 +11,7 @@
 #include "evo_audio_out.h"
 
 #include "app/settings.h"
+#include "app/update_service.h"
 #include "app/seerr_service.h"
 #include "evo_agc_runtime.h"
 #include "app/syncplay.h"
@@ -42,7 +43,7 @@ const Mode kModes[] = {{"Default", "Standard"},
                        {"None", "Av"}};
 constexpr int kNumModes = sizeof(kModes) / sizeof(kModes[0]);
 
-const char *kHeaders[] = {"Konto", "Avspilling", "Seerr", "Live TV", "Generelt", "About", "VOD"};
+const char *kHeaders[] = {"Konto", "Avspilling", "Seerr", "Live TV", "Generelt", "About", "VOD", "System"};
 
 /* Its card: 0 account, 1 playback, 2 Seerr, 3 general, 4 about (no header). */
 int section_of(int row)
@@ -52,8 +53,8 @@ int section_of(int row)
            : row <= SettingsScreen::SeerrTest  ? 2
            : row >= SettingsScreen::VODStatus && row <= SettingsScreen::VODRefresh ? 6
            : row <= SettingsScreen::IPTVCategories ? 3
-           : row == SettingsScreen::About      ? 4
-                                               : 4;
+           : row >= SettingsScreen::Updates ? 7
+           : row == SettingsScreen::About ? 4 : 4;
 }
 
 /* Left/Right changes it (the rest act on Cross). */
@@ -61,7 +62,7 @@ bool adjustable(int r)
 {
     return (r >= SettingsScreen::Quality && r <= SettingsScreen::ThemeMusic) || r == SettingsScreen::SeerrOn ||
            r == SettingsScreen::SeerrAuth || r == SettingsScreen::VODInterval ||
-           (r >= SettingsScreen::AppLanguage && r <= SettingsScreen::Updates);
+           (r >= SettingsScreen::AppLanguage && r <= SettingsScreen::Refresh) || (r == SettingsScreen::Updates || r == SettingsScreen::AutoDownload);
 }
 
 const char *auth_name(seerr_service::Auth a)
@@ -108,10 +109,18 @@ const char *label_of(int row)
                                          T("Språk"),
                                          "Theme",
                                          T("Bildefrekvens"),
-                                         T("Se etter oppdateringer"),
                                          T("Se sammen"),
                                          "Server",
-                                         T("Om Emby5")};
+                                         T("Om Emby5"),
+                                         "Check for updates at startup",
+                                         "Download updates automatically",
+                                         "Check for updates now",
+
+                                         "Install update",
+                                         "What's new",
+                                         "Later",
+                                         "Update status",
+                                         "Installed version"};
     return labels[row];
 }
 
@@ -131,6 +140,8 @@ void SettingsScreen::activate()
 {
     m_row = 0;
     m_tiles = true;
+    m_notes_open = false;
+    m_notes_scroll = 0;
     m_tile = 0;
     m_section = -1;
     m_scroll.snap(0);
@@ -248,7 +259,15 @@ std::string SettingsScreen::value(Row r) const
     case Bitstream:   /* night mode needs the sound decoded here, so it wins */
         return !s.local.hdmi_bitstream ? T("Av") : s.local.night_mode ? T("Av med nattmodus") : T("På");
     case ThemeMusic: return s.local.theme_music ? T("På") : T("Av");
-    case Updates: return s.local.check_updates ? T("På") : T("Av");
+    case Updates: return s.local.check_updates ? "On" : "Off";
+    case AutoDownload: return s.local.auto_download_updates ? "On" : "Off";
+    case CheckNow: return "X to check GitHub Releases";
+
+    case InstallNow: { const auto u=update_service::snapshot(); return u.installing?"Starting installer...":u.downloading?"Downloading and verifying...":u.staged?"X to install verified update":"X to download and install update"; }
+    case UpdateNotes: { const auto u=update_service::snapshot(); return u.notes.empty()?"Check for updates first":"X to read release notes"; }
+    case RemindLater: return "X to dismiss update reminder";
+    case UpdateStatus: { const auto u=update_service::snapshot(); return u.message.empty()?"Not checked yet":u.message; }
+    case AppVersion: return EMBY5_VERSION;
     case AudioDelay:
         return s.local.audio_delay_ms == 0 ? std::string(T("Ingen"))
                                            : (s.local.audio_delay_ms > 0 ? "+" : "") + std::to_string(s.local.audio_delay_ms) + " ms";
@@ -352,6 +371,11 @@ void SettingsScreen::change(Row r, int dir)
         s.local.check_updates = !s.local.check_updates;
         settings::set_local(s.local);
         break;
+    case AutoDownload:
+        s.local.auto_download_updates = !s.local.auto_download_updates;
+        if(s.local.auto_download_updates)s.local.check_updates=true;
+        settings::set_local(s.local);
+        break;
     case AudioDelay:   /* 20 ms steps: a soundbar's delay is typically 40-200 ms */
         s.local.audio_delay_ms = std::max(-500, std::min(500, s.local.audio_delay_ms + dir * 20));
         settings::set_local(s.local);
@@ -412,6 +436,12 @@ void SettingsScreen::change(Row r, int dir)
 Action SettingsScreen::input(uint32_t p)
 {
     if (ime::active()) return {};
+    if (m_notes_open) {
+        if (p & (NUVIO_BTN_CIRCLE | NUVIO_BTN_CROSS)) m_notes_open = false;
+        if (p & NUVIO_BTN_DOWN) m_notes_scroll += 5;
+        if (p & NUVIO_BTN_UP) m_notes_scroll = std::max(0, m_notes_scroll - 5);
+        return {};
+    }
     if (m_iptv_page != IPTVRows) {
         iptv_category_input(p);
         return {};
@@ -419,19 +449,20 @@ Action SettingsScreen::input(uint32_t p)
     Action a;
     if (m_tiles) {
         if(p & NUVIO_BTN_LEFT) m_tile=std::max(0,m_tile-1);
-        if(p & NUVIO_BTN_RIGHT) m_tile=std::min(5,m_tile+1);
+        if(p & NUVIO_BTN_RIGHT) m_tile=std::min(6,m_tile+1);
         if(p & NUVIO_BTN_UP) {if(m_tile>=2)m_tile-=2; else a.kind=Action::ToNav;}
-        if(p & NUVIO_BTN_DOWN) m_tile=std::min(5,m_tile+2);
+        if(p & NUVIO_BTN_DOWN) m_tile=std::min(6,m_tile+2);
         if(p & NUVIO_BTN_CIRCLE) a.kind=Action::ToNav;
         if(p & NUVIO_BTN_CROSS) {
-            const int first[]={SwitchUser,Quality,SeerrOn,EmbyLive,VODStatus,AppLanguage};
-            m_section=m_tile==4?6:(m_tile==5?4:m_tile);
+            const int first[]={SwitchUser,Quality,SeerrOn,EmbyLive,VODStatus,AppLanguage,Updates};
+            m_section=m_tile==4?6:(m_tile==5?4:(m_tile==6?7:m_tile));
             m_row=first[m_tile];m_scroll.snap(0);m_tiles=false;
         }
         return a;
     }
     if (!(p & NUVIO_BTN_CROSS))
-        m_signout_armed = false;   /* moved on: the account row asks again */
+        m_signout_armed = false;
+
     if (p & NUVIO_BTN_DOWN) {
         int r = m_row + 1;
         while (r < RowCount && (!shown(r) || section_of(r)!=m_section))
@@ -477,6 +508,14 @@ Action SettingsScreen::input(uint32_t p)
         else if (m_row == IPTVServer || m_row == IPTVUsername || m_row == IPTVPassword)
             iptv_edit((Row)m_row);
         else if (m_row == VODRefresh) iptv_vod::refresh(true);
+        else if (m_row == CheckNow) update_service::check();
+
+        else if (m_row == InstallNow) update_service::download_and_install();
+        else if (m_row == UpdateNotes) {
+            m_notes_open = true;
+            m_notes_scroll = 0;
+        }
+        else if (m_row == RemindLater) update_service::later();
         else if (m_row == IPTVCategories)
             iptv_open_categories();
         else if (m_row == SeerrAccount)
@@ -650,22 +689,24 @@ void SettingsScreen::draw(double, float dt)
     }
     const seerr_service::State seerr_state = seerr_service::snapshot().state;
     if (seerr_state == seerr_service::State::Connecting || seerr_service::snapshot().testing)
-        m_animating = true;   /* the values change on their own */
+        m_animating = true;
+    { const auto update=update_service::snapshot();
+      if(update.checking || update.downloading || update.installing) m_animating=true; }   /* the values change on their own */
     if (!shown(m_row))
-        m_row = m_section==6?VODStatus:SeerrOn;      /* turned off under the focus */
+        m_row = m_section==6?VODStatus:(m_section==7?Updates:SeerrOn);      /* turned off under the focus */
     gfx::fill({0, 0, gfx::W, gfx::H}, kBg);
     gfx::fill_vgradient({0, 0, gfx::W, 500}, 0x33302048u, 0x00000000u);
     if (m_tiles) {
         gfx::text(300,205,"Settings",{gfx::Bold,64},kText);
-        const char *names[]={"Accounts & Servers","Playback","Discover / Seerr","Live TV","VOD","Appearance & About"};
-        const char *sub[]={"Accounts, sign out","Audio, video, subtitles","Seerr connection","Xtream, M3U, groups","Cache, refresh, loading","Themes, display, language"};
-        for(int i=0;i<6;++i){
+        const char *names[]={"Accounts & Servers","Playback","Discover / Seerr","Live TV","VOD","Appearance & About","System"};
+        const char *sub[]={"Accounts, sign out","Audio, video, subtitles","Seerr connection","Xtream, M3U, groups","Cache, refresh, loading","Themes, display, language","Updates and application info"};
+        for(int i=0;i<7;++i){
             const int col=i%2,row=i/2;
-            const gfx::Rect r{300.f+col*670.f,280.f+row*220.f,630.f,186.f};
+            const gfx::Rect r{300.f+col*670.f,265.f+row*174.f,630.f,150.f};
             glass_panel(r,24,1.f,false);
             if(m_focused && i==m_tile) glass_panel({r.x+4,r.y+4,r.w-8,r.h-8},22,1.f,true);
-            gfx::text(r.x+32,r.y+74,names[i],{gfx::Bold,31,580},kText);
-            gfx::text(r.x+32,r.y+125,sub[i],{gfx::Medium,23,580},kText2);
+            gfx::text(r.x+32,r.y+62,names[i],{gfx::Bold,31,580},kText);
+            gfx::text(r.x+32,r.y+106,sub[i],{gfx::Medium,23,580},kText2);
         }
         return;
     }
@@ -721,7 +762,7 @@ void SettingsScreen::draw(double, float dt)
         const int sec = section_of(r);
         if (sec != last_section) {
             last_section = sec;
-            if (sec < 7)
+            if (sec < 8)
                 gfx::text(left + 8, ys[r] - 22 - off, (sec == 2 || sec == 3) ? kHeaders[sec] : T(kHeaders[sec]), {gfx::Bold, 22}, kText3);
         }
         const bool focus = r == m_row;
@@ -748,6 +789,47 @@ void SettingsScreen::draw(double, float dt)
         gfx::text(left, y + 136 - off,
                   T("Seerr henter alt fra TMDB selv: PS5-en snakker bare med Emby og Seerr."),
                   {gfx::Regular, 20, width}, kText3);
+    if (m_notes_open) {
+        gfx::fill({0, 0, gfx::W, gfx::H}, 0xc608101bu);
+        const gfx::Rect panel{270, 145, gfx::W-540, gfx::H-290};
+        glass_panel(panel, 26, 1.f, true);
+        gfx::text(panel.x+45, panel.y+70, "What's New", {gfx::Bold, 42}, kText);
+        const auto u = update_service::snapshot();
+        gfx::text(panel.x+45, panel.y+116,
+                  u.latest.empty()?"Release notes":("Emby5 "+u.latest),
+                  {gfx::Medium,25}, kText2);
+        std::vector<std::string> lines;
+        const std::string notes=u.notes.empty()?
+            "No release notes available. Check for updates first.":u.notes;
+        const float max_w=panel.w-110;
+        std::string line;
+        auto flush=[&]{lines.push_back(line);line.clear();};
+        size_t cursor=0;
+        while(cursor<notes.size() && lines.size()<500){
+            if(notes[cursor]=='\n'){flush();++cursor;continue;}
+            size_t end=notes.find_first_of(" \n",cursor);
+            if(end==std::string::npos)end=notes.size();
+            const std::string word=notes.substr(cursor,end-cursor);
+            if(!word.empty()){
+                const std::string next=line.empty()?word:line+" "+word;
+                if(!line.empty() &&
+                   gfx::text_width(next,{gfx::Regular,25})>max_w)flush();
+                line+=(line.empty()?"":" ")+word;
+            }
+            cursor=end;
+            if(cursor<notes.size() && notes[cursor]==' ')++cursor;
+        }
+        if(!line.empty())flush();
+        const int visible=std::max(1,(int)((panel.h-230)/37));
+        const int start=std::min(m_notes_scroll,
+                                  std::max(0,(int)lines.size()-visible));
+        for(int j=0;j<visible && start+j<(int)lines.size();++j)
+            gfx::text(panel.x+48,panel.y+172+j*37,
+                      lines[(size_t)(start+j)],{gfx::Regular,25},kText);
+        gfx::text(panel.x+48,panel.y+panel.h-42,
+                  "Up/Down: scroll     X / O: close",
+                  {gfx::Medium,22},kText2);
+    }
 }
 
 } // namespace ui

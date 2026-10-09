@@ -30,7 +30,7 @@ public:
         ThemeMusic,
         SeerrOn, SeerrUrl, SeerrAuth, SeerrAccount, SeerrTest,
         EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, M3UUrl, IPTVSummary, VODStatus, VODInterval, VODRefresh, IPTVCategories,
-        AppLanguage, Theme, Refresh, Updates, Together, ServerInfo, About, RowCount
+        AppLanguage, Theme, Refresh, Together, ServerInfo, About, Updates, AutoDownload, CheckNow, InstallNow, UpdateNotes, RemindLater, UpdateStatus, AppVersion, RowCount
     };
     explicit SettingsScreen(jf::Client &client) : m_client(client) {}
     ~SettingsScreen() override;   /* the keyboard's callback points here */
@@ -44,7 +44,7 @@ public:
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }
-    bool modal() const override { return m_iptv_page != IPTVRows || m_tiles; }
+    bool modal() const override { return m_iptv_page != IPTVRows || m_tiles || m_notes_open; }
     float nav_alpha() const override { return m_scroll.value < 1.f ? 1.f : 0.f; }
 
 private:
@@ -73,6 +73,8 @@ private:
 
     std::string m_seerr_email;       /* a local Seerr account: the e-mail, then the password */
     bool m_want_password = false;
+    bool m_notes_open = false;
+    int m_notes_scroll = 0;
     bool m_signout_armed = false;    /* Seerr's account row: the first ✕ asks, the second signs out */
 
     jf::Client &m_client;

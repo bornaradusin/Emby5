@@ -19,6 +19,7 @@
 #include "app/spawn.h"
 #include "app/syncplay.h"
 #include "app/settings.h"
+#include "app/update_service.h"
 #include "platform/ime.h"
 #include "jf/jf_client.h"
 #include "nuvio_input.h"
@@ -92,6 +93,7 @@ int sceUserServiceGetLoginUserIdList(int user_ids[4]);
 int scePadInit(void);
 int sceKernelSendNotificationRequest(int, void *, unsigned long, int);
 int sceSystemServiceHideSplashScreen(void);
+int sceSystemServiceLoadExec(const char *, const char *const *);
 void evo_log_alloc_state(const char *when);
 extern int g_ps5_user_id;
 }
@@ -945,7 +947,7 @@ void use_account(jf::Client &c, unsigned session, accounts::Account a)
             remote::start(&c, [session] { return session == s_session; });
             syncplay::attach(&c);
             load_extras(c, session);
-            check_for_update();
+            if(settings::get().local.check_updates) update_service::check();
             return;
         }
         const std::string err = c.last_error();
@@ -2020,6 +2022,10 @@ int main()
     [[maybe_unused]] bool waited = true;   /* the loop chose to wait since the last frame (nothing moved; read by
                                             * the development builds' frame timing) */
     for (;;) {
+        if (update_service::should_exit()) {
+            const int result=sceSystemServiceLoadExec("exit", nullptr);
+            if(result!=0)notify("Updater ready: close Emby5 from the PS5 menu to install");
+        }
         nuvio_input_state in;
         nuvio_input_poll(&in);
         ime::poll();
@@ -2118,6 +2124,8 @@ int main()
         /* Frames only while something moves; idle, the last frame stays up. */
         /* Seerr's state moves on its own (the settings show it). */
         seerr_service::poll();
+        {const auto notice=update_service::take_notification();
+         if(!notice.empty()) notify(notice.c_str()); }
         const bool seerr_moved = seerr_gen != seerr_service::generation();
         seerr_gen = seerr_service::generation();
         if (seerr_moved && phase == Phase::Home) {   /* Seerr's tab comes and goes with it */

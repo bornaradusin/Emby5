@@ -128,6 +128,8 @@ void load_local()
         s_all.local.theme_music = cJSON_IsTrue(v);
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "checkUpdates"))
         s_all.local.check_updates = cJSON_IsTrue(v);
+    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "autoDownloadUpdates"))
+        s_all.local.auto_download_updates = cJSON_IsTrue(v);
     s_all.local.audio_delay_ms =
         std::max(-500, std::min(500, (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j, "audioDelayMs"))));
     if (const cJSON *hz = cJSON_GetObjectItemCaseSensitive(j, "refresh120"))
@@ -171,6 +173,7 @@ static bool save_local_snapshot(const Local &l)
     cJSON_AddBoolToObject(j, "hdmiBitstream", l.hdmi_bitstream);
     cJSON_AddBoolToObject(j, "themeMusic", l.theme_music);
     cJSON_AddBoolToObject(j, "checkUpdates", l.check_updates);
+    cJSON_AddBoolToObject(j, "autoDownloadUpdates", l.auto_download_updates);
     cJSON *st = cJSON_CreateObject();
     cJSON_AddNumberToObject(st, "size", l.sub_size);
     cJSON_AddNumberToObject(st, "offset", l.sub_offset);

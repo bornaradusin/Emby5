@@ -292,6 +292,14 @@ if (( FFPFSC )); then
     "${MKPFS}" pack folder --no-adjust-output-file-extension --version PS5 --verify \
         "${APPDIR}" "${BUILD}/app/${TITLE_ID}.ffpfsc"
 fi
+# Independent updater ELF: built using the Payload SDK's payload CRT, not
+# the app-title linker. It is embedded in the same PPSA99515 install folder.
+log "independent updater payload"
+make -C "${APP_ROOT}/update_helper" -j"$(nproc)" \
+    PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK}" OUTPUT="${APPDIR}/update-helper.elf" \
+    > "${BUILD}/helper-compile.log" 2>&1 || { tail -40 "${BUILD}/helper-compile.log"; die "updater payload build failed"; }
+need "${APPDIR}/update-helper.elf" "updater payload was not created"
+
 if (( RELEASE )); then
     CONTENT_VER="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["contentVersion"])' "${PARAM}")"
     VER="$(python3 -c 'import sys; p=[int(x) for x in sys.argv[1].split(".")]; print(f"{p[0]}.{p[1]}.{p[2]}")' "${CONTENT_VER}")"

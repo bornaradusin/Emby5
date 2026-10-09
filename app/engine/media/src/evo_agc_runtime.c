@@ -3371,6 +3371,16 @@ static int agc_upscale_alloc(int blk, uint32_t sw, uint32_t sh,
         else
             capacity[i] = fp16_src;
     }
+    /* Reserve 1080p scratch capacity for SDR-to-4K playback. */
+    if (!blk && sw <= 1920u && sh <= 1080u &&
+        dw <= 3840u && dh <= 2160u) {
+        const size_t rgba = up_surface_bytes(1920u, 1080u, 4u);
+        const size_t fp16 = up_surface_bytes(1920u, 1080u, 8u);
+        if (capacity[0] < rgba) capacity[0] = rgba;
+        if (capacity[1] < fp16) capacity[1] = fp16;
+        for (int i = 2; i < count; ++i)
+            if (capacity[i] < fp16) capacity[i] = fp16;
+    }
     /* Existing blocks may be reused for any smaller stream. For a larger
      * source choose the spare base tier; never remap an in-flight surface.
      * The first small IPTV stream must not lock out a later 1080p movie. */
