@@ -54,6 +54,7 @@ struct Action {
     } kind = None;
     jf::Item item;
     std::string iptv_url, iptv_title;
+    bool iptv_is_vod=false;
     UserDataChange change;
     std::vector<jf::Item> queue;   /* Play: a queue to play from queue_start (a playlist) */
     size_t queue_start = 0;

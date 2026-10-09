@@ -5,6 +5,8 @@
  */
 #include "ui/settings_screen.h"
 #include "app/iptv_live.h"
+#include "app/iptv_vod.h"
+#include "app/iptv_m3u.h"
 #include "ui/theme_presets.h"
 #include "evo_audio_out.h"
 
@@ -40,7 +42,7 @@ const Mode kModes[] = {{"Default", "Standard"},
                        {"None", "Av"}};
 constexpr int kNumModes = sizeof(kModes) / sizeof(kModes[0]);
 
-const char *kHeaders[] = {"Konto", "Avspilling", "Seerr", "IPTV", "Generelt"};
+const char *kHeaders[] = {"Konto", "Avspilling", "Seerr", "Live TV", "Generelt", "About", "VOD"};
 
 /* Its card: 0 account, 1 playback, 2 Seerr, 3 general, 4 about (no header). */
 int section_of(int row)
@@ -48,8 +50,9 @@ int section_of(int row)
     return row <= SettingsScreen::SignOut      ? 0
            : row <= SettingsScreen::ThemeMusic ? 1
            : row <= SettingsScreen::SeerrTest  ? 2
+           : row >= SettingsScreen::VODStatus && row <= SettingsScreen::VODRefresh ? 6
            : row <= SettingsScreen::IPTVCategories ? 3
-           : row == SettingsScreen::About      ? 5
+           : row == SettingsScreen::About      ? 4
                                                : 4;
 }
 
@@ -57,7 +60,7 @@ int section_of(int row)
 bool adjustable(int r)
 {
     return (r >= SettingsScreen::Quality && r <= SettingsScreen::ThemeMusic) || r == SettingsScreen::SeerrOn ||
-           r == SettingsScreen::SeerrAuth ||
+           r == SettingsScreen::SeerrAuth || r == SettingsScreen::VODInterval ||
            (r >= SettingsScreen::AppLanguage && r <= SettingsScreen::Updates);
 }
 
@@ -95,7 +98,11 @@ const char *label_of(int row)
                                          "Xtream username",
                                          "Xtream password",
                                          "Xtream source status",
-                                         "Unified IPTV",
+                                         "M3U / M3U8 playlist URL",
+                                         "Unified Live TV",
+                                         "VOD catalogue status",
+                                         "VOD automatic refresh",
+                                         "Refresh VOD now",
                                          "Manage IPTV categories",
                                          T("Språk"),
                                          "Theme",
@@ -122,6 +129,9 @@ SettingsScreen::~SettingsScreen() { ime::cancel(); }
 void SettingsScreen::activate()
 {
     m_row = 0;
+    m_tiles = true;
+    m_tile = 0;
+    m_section = -1;
     m_scroll.snap(0);
     ime::init();
     m_iptv_page = IPTVRows;
@@ -194,9 +204,20 @@ std::string SettingsScreen::value(Row r) const
     }
     case IPTVSummary: {
         const auto live=iptv_live::snapshot();
-        const unsigned count=live.emby_count+live.xtream_count;
-        return count ? std::to_string(count)+" channels - IPTV visible" : "No channels - IPTV hidden";
+        const unsigned count=live.emby_count+live.xtream_count+live.m3u_count;
+        return count ? std::to_string(count)+" channels - Live TV visible" : "No channels - Live TV hidden";
     }
+    case VODInterval: {
+        const int hours=iptv_vod::refresh_interval_hours();
+        return hours==0 ? "Manual only" : "Every "+std::to_string(hours)+" hours";
+    }
+    case VODRefresh: return "X to refresh catalogue";
+    case VODStatus: {
+        const auto vod=iptv_vod::snapshot();
+        const std::string counts=std::to_string(vod.movie_count)+" movies, "+std::to_string(vod.show_count)+" TV shows";
+        return vod.loading ? counts+" - loading..." : counts+(vod.movie_count==0&&vod.show_count==0?" - VOD hidden":" - ready");
+    }
+    case M3UUrl: {const auto url=iptv_m3u::playlist_url();return url.empty()?"X to enter":url;}
     case IPTVServer: return m_iptv_creds.server.empty() ? "X to enter" : m_iptv_creds.server;
     case IPTVUsername: return m_iptv_creds.username.empty() ? "X to enter" : m_iptv_creds.username;
     case IPTVPassword: return m_iptv_creds.password.empty() ? "X to enter" : "********";
@@ -278,6 +299,13 @@ void SettingsScreen::change(Row r, int dir)
     settings::All s = settings::get();
     auto cycle = [dir](int i, int n) { return ((i + dir) % n + n) % n; };
     switch (r) {
+    case VODInterval: {
+        const int intervals[]={0,12,24,48,168};
+        int i=2;
+        for(int j=0;j<5;++j)if(intervals[j]==iptv_vod::refresh_interval_hours())i=j;
+        iptv_vod::set_refresh_interval_hours(intervals[cycle(i,5)]);
+        break;
+    }
     case Quality: {
         int i = 0;
         for (int k = 0; k < kNumQualities; k++)
@@ -377,27 +405,37 @@ Action SettingsScreen::input(uint32_t p)
         return {};
     }
     Action a;
+    if (m_tiles) {
+        if(p & NUVIO_BTN_LEFT) m_tile=std::max(0,m_tile-1);
+        if(p & NUVIO_BTN_RIGHT) m_tile=std::min(5,m_tile+1);
+        if(p & NUVIO_BTN_UP) {if(m_tile>=2)m_tile-=2; else a.kind=Action::ToNav;}
+        if(p & NUVIO_BTN_DOWN) m_tile=std::min(5,m_tile+2);
+        if(p & NUVIO_BTN_CIRCLE) a.kind=Action::ToNav;
+        if(p & NUVIO_BTN_CROSS) {
+            const int first[]={SwitchUser,Quality,SeerrOn,EmbyLive,VODStatus,AppLanguage};
+            m_section=m_tile==4?6:(m_tile==5?4:m_tile);
+            m_row=first[m_tile];m_scroll.snap(0);m_tiles=false;
+        }
+        return a;
+    }
     if (!(p & NUVIO_BTN_CROSS))
         m_signout_armed = false;   /* moved on: the account row asks again */
     if (p & NUVIO_BTN_DOWN) {
         int r = m_row + 1;
-        while (r < RowCount && !shown(r))
+        while (r < RowCount && (!shown(r) || section_of(r)!=m_section))
             r++;
-        if (r < RowCount)
+        if (r < RowCount && section_of(r)==m_section)
             m_row = r;
     } else if (p & NUVIO_BTN_UP) {
-        if (m_row == 0)
-            a.kind = Action::ToNav;
+        if (m_row == 0 || section_of(m_row-1)!=m_section)
+            m_tiles=true;
         else
             do
                 m_row--;
             while (m_row > 0 && !shown(m_row));
     } else if (p & NUVIO_BTN_CIRCLE) {
         /* Back, as elsewhere: to the top of the list first, then up to the tabs. */
-        if (m_row > 0)
-            m_row = 0;
-        else
-            a.kind = Action::ToNav;
+        m_tiles=true;
     } else if (p & (NUVIO_BTN_LEFT | NUVIO_BTN_RIGHT)) {
         change((Row)m_row, (p & NUVIO_BTN_RIGHT) ? 1 : -1);
     } else if (p & NUVIO_BTN_CROSS) {
@@ -418,8 +456,15 @@ Action SettingsScreen::input(uint32_t p)
                              seerr_service::set_config(n);
                          });
         }
+        else if(m_row==M3UUrl) {
+            ime::request(ime::Kind::Url,"M3U playlist URL (empty to remove)",iptv_m3u::playlist_url(),
+                         [this](const std::string &url) {
+                             if(iptv_m3u::save_playlist_url(url)) iptv_live::refresh(&m_client,true);
+                         });
+        }
         else if (m_row == IPTVServer || m_row == IPTVUsername || m_row == IPTVPassword)
             iptv_edit((Row)m_row);
+        else if (m_row == VODRefresh) iptv_vod::refresh(true);
         else if (m_row == IPTVCategories)
             iptv_open_categories();
         else if (m_row == SeerrAccount)
@@ -595,9 +640,23 @@ void SettingsScreen::draw(double, float dt)
     if (seerr_state == seerr_service::State::Connecting || seerr_service::snapshot().testing)
         m_animating = true;   /* the values change on their own */
     if (!shown(m_row))
-        m_row = SeerrOn;      /* turned off under the focus */
+        m_row = m_section==6?VODStatus:SeerrOn;      /* turned off under the focus */
     gfx::fill({0, 0, gfx::W, gfx::H}, kBg);
     gfx::fill_vgradient({0, 0, gfx::W, 500}, 0x33302048u, 0x00000000u);
+    if (m_tiles) {
+        gfx::text(300,205,"Settings",{gfx::Bold,64},kText);
+        const char *names[]={"Accounts & Servers","Playback","Discover / Seerr","Live TV","VOD","Appearance & About"};
+        const char *sub[]={"Accounts, sign out","Audio, video, subtitles","Seerr connection","Xtream, M3U, groups","Cache, refresh, loading","Themes, display, language"};
+        for(int i=0;i<6;++i){
+            const int col=i%2,row=i/2;
+            const gfx::Rect r{300.f+col*670.f,280.f+row*220.f,630.f,186.f};
+            glass_panel(r,24,1.f,false);
+            if(m_focused && i==m_tile) glass_panel({r.x+4,r.y+4,r.w-8,r.h-8},22,1.f,true);
+            gfx::text(r.x+32,r.y+74,names[i],{gfx::Bold,31,580},kText);
+            gfx::text(r.x+32,r.y+125,sub[i],{gfx::Medium,23,580},kText2);
+        }
+        return;
+    }
 
     const float row_h = 84, head_h = 70, left = 360, width = gfx::W - 2 * left;
     /* Layout: each section's header, then its rows. */
@@ -606,7 +665,7 @@ void SettingsScreen::draw(double, float dt)
     int last_section = -1;
     for (int r = 0; r < RowCount; r++) {
         ys[r] = y;
-        if (!shown(r))
+        if (!shown(r) || section_of(r)!=m_section)
             continue;
         const int sec = section_of(r);
         if (sec != last_section) {
@@ -625,7 +684,7 @@ void SettingsScreen::draw(double, float dt)
     gfx::text(left, 200 - off, T("Innstillinger"), {gfx::Bold, 64}, kText);
     /* Each section is one glass card (a grouped list); the focus is the drop. */
     for (int r0 = 0; r0 < RowCount;) {
-        if (!shown(r0)) {
+        if (!shown(r0) || section_of(r0)!=m_section) {
             r0++;
             continue;
         }
@@ -645,12 +704,12 @@ void SettingsScreen::draw(double, float dt)
     m_drop.draw(dt, 1.f, &m_animating, 16);
     last_section = -1;
     for (int r = 0; r < RowCount; r++) {
-        if (!shown(r))
+        if (!shown(r) || section_of(r)!=m_section)
             continue;
         const int sec = section_of(r);
         if (sec != last_section) {
             last_section = sec;
-            if (sec < 5)
+            if (sec < 7)
                 gfx::text(left + 8, ys[r] - 22 - off, (sec == 2 || sec == 3) ? kHeaders[sec] : T(kHeaders[sec]), {gfx::Bold, 22}, kText3);
         }
         const bool focus = r == m_row;

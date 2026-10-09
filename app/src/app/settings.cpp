@@ -18,6 +18,8 @@
 #include <mutex>
 #include <sys/stat.h>
 #include <thread>
+#include <chrono>
+#include <unistd.h>
 
 extern "C" {
 #include "cJSON.h"
@@ -34,14 +36,15 @@ bool s_local_worker_running = false;
 std::mutex s_server_write_lock;
 
 
-// Do not write preference files into the transient /download0 fallback.
-bool durable_storage()
+// Use the same resolved data root as accounts, IPTV and the catalogue caches.
+// Never make settings alone depend on a synchronous sandbox-promotion attempt:
+// that prevented saving any preference when promotion was unavailable.
+bool settings_storage_ready()
 {
-    if (!evo_jailbreak_is_open() && !evo_jailbreak_ensure()) {
-        return false;
-    }
-    evo_data_path_rebind();
-    if (evo_mkdir(evo_data_dir()) != 0 || evo_mkdir(evo_data_path("emby5")) != 0) {
+    const std::string root = evo_data_dir();
+    const std::string directory = evo_data_path("emby5");
+    if (evo_mkdir(root.c_str()) != 0 || evo_mkdir(directory.c_str()) != 0) {
+        evo_bt("emby5: settings directory unavailable: %s", directory.c_str());
         return false;
     }
     return true;
@@ -58,8 +61,18 @@ bool write_atomic(const std::string &file, const char *text)
     const size_t len = std::strlen(text);
     const bool written = std::fwrite(text, 1, len, f) == len;
     const bool flushed = std::fflush(f) == 0;
+    // Some PS5 mounts reject fsync despite accepting durable file writes.
+    // Treat only unsupported-sync errors as non-fatal; keep real I/O errors fatal.
+    bool synced = false;
+    if (flushed) {
+        if (::fsync(::fileno(f)) == 0) synced = true;
+        else {
+            const int e = errno;
+            synced = (e == EINVAL || e == ENOSYS || e == ENOTSUP || e == EOPNOTSUPP);
+        }
+    }
     const bool closed = std::fclose(f) == 0;
-    if (!written || !flushed || !closed || std::rename(tmp.c_str(), file.c_str()) != 0) {
+    if (!written || !flushed || !synced || !closed || std::rename(tmp.c_str(), file.c_str()) != 0) {
         std::remove(tmp.c_str());
         return false;
     }
@@ -76,6 +89,8 @@ All get()
 
 void load_local()
 {
+    // Read from the exact shared root used by saved accounts and catalogues.
+    // Loading does not require creating the directory or re-jailbreaking.
     std::string body;
     if (FILE *f = std::fopen(settings_file(), "rb")) {
         char buf[1024];
@@ -93,6 +108,12 @@ void load_local()
         s_all.local.max_mbps = 0;
     s_all.local.auto_skip_intro = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "autoSkipIntro"));
     s_all.local.language = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j, "language"));
+    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "autoplayNextLocal")) {
+        if (cJSON_IsBool(v)) {
+            s_all.local.autoplay_next_override_valid = true;
+            s_all.local.autoplay_next_override = cJSON_IsTrue(v);
+        }
+    }
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "theme"))
         if (cJSON_IsNumber(v)) s_all.local.theme = std::max(0, std::min(30, (int)v->valuedouble));
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "stillWatching"))
@@ -130,12 +151,14 @@ void load_local()
 
 // Serialize local writes on a worker. Persistent-storage promotion can wait
 // several seconds, so never perform it on the controller/UI thread.
-static void save_local_snapshot(const Local &l)
+static bool save_local_snapshot(const Local &l)
 {
-    if (!durable_storage()) return;
+    if (!settings_storage_ready()) return false;
     cJSON *j = cJSON_CreateObject();
     cJSON_AddNumberToObject(j, "maxMbps", l.max_mbps);
     cJSON_AddBoolToObject(j, "autoSkipIntro", l.auto_skip_intro);
+    if (l.autoplay_next_override_valid)
+        cJSON_AddBoolToObject(j, "autoplayNextLocal", l.autoplay_next_override);
     cJSON_AddNumberToObject(j, "stillWatching", l.still_watching);
     cJSON_AddNumberToObject(j, "theme", l.theme);
     cJSON_AddNumberToObject(j, "language", l.language);
@@ -154,8 +177,9 @@ static void save_local_snapshot(const Local &l)
     cJSON_AddItemToObject(j, "subtitles", st);
     char *text = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
-    if (!write_atomic(settings_file(), text))
+    const bool saved = text && write_atomic(settings_file(), text);
     std::free(text);
+    return saved;
 }
 
 void set_local(const Local &l)
@@ -180,7 +204,26 @@ void set_local(const Local &l)
                 snapshot = s_all.local;
                 revision = s_local_revision;
             }
-            save_local_snapshot(snapshot);
+            // Retry transient storage errors instead of silently discarding a preference.
+            // Keep the newest revision rather than overwriting it with an old snapshot.
+            bool saved = false;
+            for (int attempt = 0; attempt < 6; ++attempt) {
+                saved = save_local_snapshot(snapshot);
+                if (saved) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(250 * (attempt + 1)));
+                {
+                    std::lock_guard<std::mutex> g(s_lock);
+                    if (revision != s_local_revision) break;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> g(s_lock);
+                if (!saved && revision == s_local_revision) {
+                    s_local_worker_running = false;
+                    evo_bt("emby5: local settings persist failed after retries");
+                    return;
+                }
+            }
             {
                 std::lock_guard<std::mutex> g(s_lock);
                 if (revision == s_local_revision) {
@@ -198,14 +241,21 @@ void load_server(jf::Client &c)
     if (!c.get_prefs(&p)) return;
     std::lock_guard<std::mutex> g(s_lock);
     s_all.server = p;
+    if (s_all.local.autoplay_next_override_valid)
+        s_all.server.autoplay_next = s_all.local.autoplay_next_override;
 }
 
 void set_server(jf::Client &c, const jf::UserPrefs &p)
 {
+    Local local;
     {
         std::lock_guard<std::mutex> g(s_lock);
         s_all.server = p;
+        s_all.local.autoplay_next_override_valid = true;
+        s_all.local.autoplay_next_override = p.autoplay_next;
+        local = s_all.local;
     }
+    set_local(local);
     jf::Client *cp = &c;
     std::thread([cp, p] { cp->set_prefs(p); }).detach();
 }

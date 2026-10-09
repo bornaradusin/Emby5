@@ -1,12 +1,15 @@
 #include "ui/iptv.h"
 #include "nuvio_input.h"
 #include "gfx/gfx.h"
+#include "gfx/art.h"
 #include "ui/screen.h"
 #include "platform/ime.h"
 #include <cctype>
 #include <ctime>
 #include <algorithm>
 #include <thread>
+#include <map>
+#include <unordered_map>
 
 namespace ui {
 IPTV::IPTV(jf::Client &client) : m_client(client) { m_connected = iptv_xtream::load_credentials(&m_creds); if (m_connected) reload_store(); }
@@ -47,129 +50,144 @@ std::vector<iptv_xtream::Channel> IPTV::visible(const iptv_xtream::Catalog &c) c
     }
     return out;
 }
-void IPTV::move_selection(int delta, bool allow_category) {
-    iptv_xtream::Catalog cat; cat.channels=current();
-    const int count=(int)visible(cat).size();
-    if (delta<0 && m_index==0 && allow_category && !m_search) {
-        m_category_focus=true;
-    } else {
-        m_index=std::clamp(m_index+delta,0,std::max(0,count-1));
+void IPTV::build_groups(const iptv_live::Snapshot &snapshot) {
+    const std::string previous = m_row>=0 && m_row<(int)m_groups.size() ? m_groups[(size_t)m_row].title : "";
+    std::map<std::string,int> positions;
+    std::vector<Group> groups;
+    std::string query=m_query;
+    std::transform(query.begin(),query.end(),query.begin(),[](unsigned char c){return (char)std::tolower(c);});
+    const auto matches_search = [&](const iptv_xtream::Channel &channel) {
+        if (!m_search || query.empty()) return true;
+        std::string name=channel.name;
+        std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return (char)std::tolower(c);});
+        return name.find(query)!=std::string::npos;
+    };
+    // User-defined categories take precedence over provider groups. Respect the
+    // saved category and per-category channel order from Settings.
+    for (const auto &category : m_store.categories()) {
+        Group row{category.name,{}};
+        for (const auto &saved_id : category.channels) {
+            for (const auto &channel : snapshot.channels) {
+                if (channel.source!="Xtream" || !matches_search(channel)) continue;
+                if (channel.id==saved_id || channel.id=="xtream:"+saved_id) {
+                    row.channels.push_back(channel);
+                    break;
+                }
+            }
+        }
+        if (!row.channels.empty()) groups.push_back(std::move(row));
     }
+    // Follow with the source playlist/provider groups, retaining their ordering.
+    // A channel may intentionally appear in a custom row and its provider row.
+    for (const auto &channel : snapshot.channels) {
+        if (!matches_search(channel)) continue;
+        std::string group=channel.category_id;
+        if(group.empty()) group=channel.source=="Emby" ? "Emby Live TV" : "Other Channels";
+        const auto it=positions.find(group);
+        if(it==positions.end()) {
+            positions[group]=(int)groups.size();
+            groups.push_back({group,{channel}});
+        } else groups[(size_t)it->second].channels.push_back(channel);
+    }
+    std::map<std::string,int> saved;
+    for(size_t i=0;i<m_groups.size() && i<m_columns.size();++i) saved[m_groups[i].title]=m_columns[i];
+    m_groups=std::move(groups);
+    m_columns.resize(m_groups.size());
+    for(size_t i=0;i<m_groups.size();++i) m_columns[i]=std::clamp(saved[m_groups[i].title],0,(int)m_groups[i].channels.size()-1);
+    m_row=0;
+    for(size_t i=0;i<m_groups.size();++i) if(m_groups[i].title==previous) {m_row=(int)i;break;}
+}
+void IPTV::move_selection(int delta,bool) {
+    if(m_groups.empty()) return;
+    m_row=std::clamp(m_row+delta,0,(int)m_groups.size()-1);
 }
 void IPTV::update_hold(uint32_t held, double now) {
     const uint32_t dir=(held & NUVIO_BTN_DOWN) ? NUVIO_BTN_DOWN :
                        (held & NUVIO_BTN_UP) ? NUVIO_BTN_UP : 0;
-    if (!dir || (m_search && ime::active()) || m_category_focus) {
-        m_hold_dir=0; m_hold_since=0; return;
-    }
-    if (dir!=m_hold_dir) {
-        m_hold_dir=dir; m_hold_since=now; m_hold_last=now; return;
-    }
+    if(!dir || ime::active()) {m_hold_dir=0;m_hold_since=0;return;}
+    if(dir!=m_hold_dir) {m_hold_dir=dir;m_hold_since=now;m_hold_last=now;return;}
     const double duration=now-m_hold_since;
-    if (duration<1.0) return;
-    // First second arms acceleration; 2x, 3x, 4x, then 5x after four seconds.
-    const int speed=std::min(5,2+(int)(duration-1.0));
-    const double interval=0.19/speed;
-    if (now-m_hold_last>=interval) {
-        move_selection(dir==NUVIO_BTN_DOWN ? 1 : -1,false);
-        m_hold_last=now;
-    }
+    if(duration<1) return;
+    const int speed=std::min(5,2+(int)(duration-1));
+    if(now-m_hold_last>=0.19/speed) {move_selection(dir==NUVIO_BTN_DOWN?1:-1,false);m_hold_last=now;}
 }
 Action IPTV::input(uint32_t p) {
     Action a;
-    
-    if (ime::active()) return a;
-    if (p & NUVIO_BTN_TRIANGLE) {
-        if (!m_search) m_saved_index=m_index;
-        m_search=true; m_index=0; m_category_focus=false; m_hold_dir=0;
-        ime::request(ime::Kind::Text,"Search all IPTV channels",m_query,
-                     [this](const std::string &q){m_query=q; m_index=0;});
+    if(ime::active()) return a;
+    const auto snap=iptv_live::snapshot();
+    if(snap.generation!=m_seen) {build_groups(snap);m_seen=snap.generation;}
+    if(p & NUVIO_BTN_TRIANGLE) {
+        m_search=true;
+        ime::request(ime::Kind::Text,"Search Live TV channels",m_query,
+            [this](const std::string &q){m_query=q;m_row=0;build_groups(iptv_live::snapshot());});
         return a;
     }
-    if (m_search && (p & NUVIO_BTN_CIRCLE)) {
-        m_search=false; m_query.clear(); m_index=m_saved_index; m_hold_dir=0;
-        return a;
-    }
-    const int last_filter = (int)m_store.categories().size()+2;
-    // The category selector is a real focusable control above the channel list.
-    if (!m_search && (p & NUVIO_BTN_LEFT)) {
-        if (m_filter > 0) { --m_filter; m_index = 0; }
-    }
-    if (!m_search && (p & NUVIO_BTN_RIGHT)) {
-        if (m_filter < last_filter) { ++m_filter; m_index = 0; }
-    }
-    if (m_category_focus) {
-        if (p & NUVIO_BTN_UP) a.kind = Action::ToNav;
-        if (p & NUVIO_BTN_DOWN) m_category_focus = false;
-        if (p & NUVIO_BTN_CROSS) {
-            m_filter = m_filter < last_filter ? m_filter + 1 : 0;
-            m_index = 0;
-        }
-        return a;
-    }
-    iptv_xtream::Catalog cat; cat.channels=current();
-    auto ch = visible(cat);
-    if (p & NUVIO_BTN_UP) move_selection(-1);
-    if (p & NUVIO_BTN_DOWN) move_selection(1);
-    if (p & NUVIO_BTN_CROSS) {
-        if (m_index >= 0 && m_index < (int)ch.size()) {
-            const auto &selected=ch[(size_t)m_index];
+    if(m_search && (p & NUVIO_BTN_CIRCLE)) {m_search=false;m_query.clear();build_groups(snap);return a;}
+    if(p & NUVIO_BTN_UP) {if(m_row==0) a.kind=Action::ToNav;else move_selection(-1);}
+    if(p & NUVIO_BTN_DOWN) move_selection(1);
+    if(m_row>=0 && m_row<(int)m_groups.size()) {
+        auto &group=m_groups[(size_t)m_row];
+        int &col=m_columns[(size_t)m_row];
+        if(p & NUVIO_BTN_LEFT) col=std::max(0,col-1);
+        if(p & NUVIO_BTN_RIGHT) col=std::min((int)group.channels.size()-1,col+1);
+        if((p & NUVIO_BTN_CROSS) && col<(int)group.channels.size()) {
+            const auto &selected=group.channels[(size_t)col];
             iptv_live::set_playing_channel(selected.id);
-            if (selected.source=="Emby") {
-                a.kind=Action::Play;
-                a.item.id=selected.emby_id;
-                a.item.name=selected.name;
-                a.item.type="LiveTvChannel";
+            if(selected.source=="Emby") {
+                a.kind=Action::Play;a.item.id=selected.emby_id;
+                a.item.name=selected.name;a.item.type="LiveTvChannel";
             } else {
-                a.kind = Action::PlayIPTV;
-                a.iptv_title = selected.name;
-                iptv_xtream::Channel original=selected; original.id=selected.id.substr(7);
-                a.iptv_url = iptv_xtream::live_url(m_creds, original);
+                a.kind=Action::PlayIPTV;a.iptv_title=selected.name;
+                if(selected.source=="M3U") a.iptv_url=selected.extension;
+                else {
+                    auto original=selected;original.id=selected.id.substr(7);
+                    a.iptv_url=iptv_xtream::live_url(m_creds,original);
+                }
             }
-        } else refresh();
+        }
     }
     return a;
 }
 void IPTV::draw(double, float) {
-    gfx::text(kPad,210,"IPTV",{gfx::Bold,58},kText);
+    gfx::text(kPad,210,"Live TV",{gfx::Bold,58},kText);
     const auto snap=iptv_live::snapshot();
-    if (snap.generation != m_seen) m_seen=snap.generation;
-    iptv_xtream::Catalog cat; cat.channels=snap.channels;
-    gfx::text(kPad,268,"Up: Category    Left/Right: Change category    Triangle: Search    X: Play",{gfx::Medium,21},kText2);
-    if (snap.loading && cat.channels.empty()) gfx::text(kPad,360,"Loading live TV channels...",{gfx::Medium,28},kText2);
-    if (m_filter > (int)m_store.categories().size()+2) m_filter=0;
-    std::string filter=m_filter==0?"All channels":m_filter==1?"Emby Live TV":m_filter==2?"Xtream":m_store.categories()[(size_t)m_filter-3].name;
-    const std::string category_label = m_search ? "Search all channels: " + (m_query.empty()?"(all)":m_query) + "  |  Circle: Close" : "Category: " + filter + "  <  >";
-    if (m_category_focus) glass_panel({kPad-15,290,1450,60},18,1.f,false);
-    gfx::text(kPad,328,category_label,{gfx::SemiBold,29},m_category_focus?kText:kText2);
-    auto channels=visible(cat);
-    if(m_index>=(int)channels.size()) m_index=std::max(0,(int)channels.size()-1);
-    const int first=std::max(0,m_index-5);
-    for(int i=first;i<(int)channels.size() && i<first+11;++i) {
-        float y=395+(i-first)*52;
-        if(i==m_index && !m_category_focus) glass_panel({kPad-15,y-31,1450,48},18,1.f,false);
-        const auto &ch=channels[(size_t)i];
-        std::string title=ch.name+"  ["+ch.source+"]";
-        if (!ch.now.empty()) title += "  |  " + ch.now;
-        gfx::text(kPad,y,title,{gfx::SemiBold,25,1350},i==m_index?kText:kText2);
+    if(snap.generation!=m_seen) {build_groups(snap);m_seen=snap.generation;}
+    if(snap.loading && m_groups.empty()) {
+        gfx::text(kPad,345,"Loading Live TV channels...",{gfx::Medium,28},kText2);return;
     }
-    if (!channels.empty() && m_index<(int)channels.size()) {
-        const auto &selected=channels[(size_t)m_index];
-        if (selected.source=="Xtream" && selected.id!=m_guide_requested) {
-            m_guide_requested=selected.id;
-            iptv_live::request_guide(&m_client,selected);
-        }
-        if (!selected.now.empty()) {
-            gfx::text(kPad,980,"Now playing: " + selected.now,{gfx::Medium,21,1350},kText2);
-            const auto epoch=(int64_t)std::time(nullptr);
-            if (selected.now_end>selected.now_start) {
-                const double ratio=std::clamp(double(epoch-selected.now_start)/double(selected.now_end-selected.now_start),0.0,1.0);
-                gfx::fill({kPad,993,950,5},0x50ffffffu,2.5f);
-                gfx::fill({kPad,993,(float)(950*ratio),5},0xffffffffu,2.5f);
+    if(m_groups.empty()) {
+        gfx::text(kPad,345,"No channels available. Add a playlist or Xtream account in Settings.",{gfx::Medium,26},kText2);return;
+    }
+    constexpr float cardW=260, cardH=146, gap=24;
+    // Keep the selected row centred, with its neighbours visible above/below.
+    for(int r=0;r<(int)m_groups.size();++r) {
+        const float y=430+(r-m_row)*255.f;
+        if(y<230 || y>1050) continue;
+        const Group &row=m_groups[(size_t)r];
+        gfx::text(kPad,y-35,row.title,{gfx::SemiBold,31,1500},r==m_row?kText:kText2);
+        const int focus=m_columns[(size_t)r];
+        const int begin=std::max(0,focus-2);
+        for(int i=begin;i<(int)row.channels.size() && i<begin+6;++i) {
+            const float x=kPad+(i-begin)*(cardW+gap);
+            const bool selected=r==m_row && i==focus;
+            const auto &ch=row.channels[(size_t)i];
+            gfx::Rect box{x,y,cardW,cardH};
+            glass_panel(box,14,selected?1.f:0.48f,false);
+            if(!ch.logo.empty()) if(const gfx::Texture *image=art::get(ch.logo,320,200)) {
+                gfx::image({x+16,y+8,cardW-32,cardH-42},image,1.f,0,true);
             }
+            gfx::text(x+10,y+cardH-14,ch.name,{gfx::SemiBold,19,cardW-20},selected?kText:kText2);
+            if(selected) gfx::text(x+8,y+cardH+25,ch.source,{gfx::Medium,17},kText2);
         }
-        if (!selected.next.empty()) gfx::text(kPad,1030,"Up next: " + selected.next,{gfx::Medium,21,1350},kText2);
     }
-    if(channels.empty() && !snap.loading) gfx::text(kPad,425,"No channels available from Emby or Xtream.",{gfx::Medium,24},kText2);
+    if(m_row>=0 && m_row<(int)m_groups.size()) {
+        const auto &row=m_groups[(size_t)m_row];
+        const auto &ch=row.channels[(size_t)m_columns[(size_t)m_row]];
+        if(ch.source=="Xtream" && ch.id!=m_guide_requested) {
+            m_guide_requested=ch.id;iptv_live::request_guide(&m_client,ch);
+        }
+        if(!ch.now.empty()) gfx::text(kPad,1005,"Now: "+ch.now,{gfx::Medium,22,1350},kText2);
+        if(!ch.next.empty()) gfx::text(kPad,1040,"Next: "+ch.next,{gfx::Medium,20,1350},kText2);
+    }
 }
 } // namespace ui

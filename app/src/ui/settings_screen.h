@@ -29,7 +29,7 @@ public:
         Quality, SubMode, SubSize, SubBackground, Autoplay, StillWatching, AutoSkip, AudioDelay, NightMode, Bitstream,
         ThemeMusic,
         SeerrOn, SeerrUrl, SeerrAuth, SeerrAccount, SeerrTest,
-        EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, IPTVSummary, IPTVCategories,
+        EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, M3UUrl, IPTVSummary, VODStatus, VODInterval, VODRefresh, IPTVCategories,
         AppLanguage, Theme, Refresh, Updates, Together, ServerInfo, About, RowCount
     };
     explicit SettingsScreen(jf::Client &client) : m_client(client) {}
@@ -44,7 +44,7 @@ public:
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }
-    bool modal() const override { return m_iptv_page != IPTVRows; }
+    bool modal() const override { return m_iptv_page != IPTVRows || m_tiles; }
     float nav_alpha() const override { return m_scroll.value < 1.f ? 1.f : 0.f; }
 
 private:
@@ -77,6 +77,9 @@ private:
 
     jf::Client &m_client;
     int m_row = 0;
+    bool m_tiles = true;
+    int m_tile = 0;
+    int m_section = -1;
     Anim m_scroll;
     Lifts m_lifts;
     Drop m_drop;                        /* the focus */

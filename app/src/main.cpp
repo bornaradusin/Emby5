@@ -38,6 +38,8 @@
 #include "ui/screensaver.h"
 #include "ui/search.h"
 #include "ui/iptv.h"
+#include "ui/vod.h"
+#include "app/iptv_vod.h"
 #include "app/iptv_live.h"
 #include "ui/seerr_detail.h"
 #include "ui/settings_screen.h"
@@ -983,6 +985,7 @@ std::unique_ptr<ui::Home> s_home, s_discover;   /* s_discover: Seerr's tab */
 std::unique_ptr<ui::Library> s_movies, s_shows, s_music;
 std::unique_ptr<ui::Search> s_search;
 std::unique_ptr<ui::IPTV> s_iptv;
+std::unique_ptr<ui::Vod> s_vod;
 std::unique_ptr<ui::SettingsScreen> s_settings;
 std::unique_ptr<ui::Profiles> s_profiles;
 std::unique_ptr<ui::Login> s_login;
@@ -1145,6 +1148,8 @@ void reset_screens()
     s_music.reset(new ui::Library(*s_client, T("Musikk"), "MusicAlbum"));
     s_search.reset(new ui::Search(*s_client));
     s_iptv.reset(new ui::IPTV(*s_client));
+    s_vod.reset(new ui::Vod());
+    iptv_vod::refresh();
     iptv_live::refresh(s_client,true);
     s_settings.reset(new ui::SettingsScreen(*s_client));
     s_tab = s_nav_tab = ui::Nav::Home;
@@ -1240,6 +1245,7 @@ ui::Screen *screen_for(int tab)
     case ui::Nav::Music: return s_music.get();
     case ui::Nav::Discover: return s_discover.get();
     case ui::Nav::IPTV: return s_iptv.get();
+    case ui::Nav::VOD: return s_vod.get();
     case ui::Nav::Search: return s_search.get();
     case ui::Nav::Settings: return s_settings.get();
     default: return s_home.get();
@@ -1264,12 +1270,6 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
     if ((p & NUVIO_BTN_TOUCHPAD) && s_music_on) {   /* the mini player: the now-playing page */
         s_nav_focus = false;
         open_now_playing();
-        return;
-    }
-    if ((p & NUVIO_BTN_TRIANGLE) && s_stack.empty() && s_tab != ui::Nav::Search && s_tab != ui::Nav::IPTV && !screen_for(s_tab)->modal()) {
-        s_nav_focus = false;   /* △ from any tab: straight to search, as in YouTube on PS5 */
-        s_nav_tab = ui::Nav::Search;
-        open_tab(ui::Nav::Search);
         return;
     }
     /* L1/R1: the previous / next tab, as across the PS5's own menus. */
@@ -1346,7 +1346,7 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
         cJSON_AddStringToObject(req,"playMethod","DirectPlay");
         cJSON *stream=cJSON_CreateObject();
         cJSON_AddStringToObject(stream,"addon","IPTV");
-        cJSON_AddStringToObject(stream,"title","Live TV");
+        cJSON_AddStringToObject(stream,"title",a.iptv_is_vod?"VOD":"Live TV");
         cJSON_AddItemToObject(req,"stream",stream);
         char *json=cJSON_PrintUnformatted(req);
         cJSON_Delete(req);
@@ -1497,11 +1497,10 @@ void apply_views(const std::vector<jf::Item> &views)
     std::vector<int> tabs{ui::Nav::Home};
     if (!movies.empty()) { tabs.push_back(ui::Nav::Movies); s_movies->set_sources(movies); }
     if (!shows.empty()) { tabs.push_back(ui::Nav::Shows); s_shows->set_sources(shows); }
-    if (!music.empty()) { tabs.push_back(ui::Nav::Music); s_music->set_sources(music); }
-    if (seerr_service::available())
-        tabs.push_back(ui::Nav::Discover);
     if (!iptv_live::snapshot().channels.empty()) tabs.push_back(ui::Nav::IPTV);
-    tabs.push_back(ui::Nav::Search);
+    { const auto vod=iptv_vod::snapshot(); if (vod.movie_count || vod.show_count) tabs.push_back(ui::Nav::VOD); }
+    if (!music.empty()) { tabs.push_back(ui::Nav::Music); s_music->set_sources(music); }
+    if (seerr_service::available()) tabs.push_back(ui::Nav::Discover);
     s_nav.set_tabs(tabs);
     /* A tab that went away (another account, a library removed): back home. */
     auto shown = [&](int t) { return t == ui::Nav::Settings || std::find(tabs.begin(), tabs.end(), t) != tabs.end(); };
@@ -1640,6 +1639,7 @@ bool draw_frame(double t, float dt)
                                                            : s_tab == ui::Nav::Music  ? (ui::Screen *)s_music.get()
                                                            : s_tab == ui::Nav::Discover ? (ui::Screen *)s_discover.get()
                                                            : s_tab == ui::Nav::IPTV ? (ui::Screen *)s_iptv.get()
+                                                           : s_tab == ui::Nav::VOD ? (ui::Screen *)s_vod.get()
                                                            : s_tab == ui::Nav::Search ? (ui::Screen *)s_search.get()
                                                                                       : (ui::Screen *)s_home.get());
                 below->draw(t, dt);
@@ -2109,6 +2109,15 @@ int main()
             refresh_discover(again ? 0 : 1e9, again);
         }
         static uint64_t seen_iptv = 0;
+        static uint64_t seen_vod = 0;
+        iptv_vod::refresh();
+        const auto vod_now=iptv_vod::snapshot();
+        const bool vod_moved=vod_now.generation!=seen_vod;
+        if(vod_moved && phase==Phase::Home) {
+            seen_vod=vod_now.generation;
+            std::lock_guard<std::mutex> g(s_state.lock);
+            apply_views(s_state.views);
+        }
         iptv_live::refresh(s_client);
         const auto live_now=iptv_live::snapshot();
         const bool iptv_moved=live_now.generation!=seen_iptv;
@@ -2117,7 +2126,7 @@ int main()
             std::lock_guard<std::mutex> g(s_state.lock);
             apply_views(s_state.views);
         }
-        const bool changed = iptv_moved || in.pressed || phase != last_phase || s_model_version != last_model ||
+        const bool changed = vod_moved || iptv_moved || in.pressed || phase != last_phase || s_model_version != last_model ||
                              gate.kind != Gate::None || seerr_moved || s_discover_version != last_discover ||
                              s_discover_appended != last_appended;
         if (changed || animating || idle_frames < 2) {

@@ -27,6 +27,10 @@ private:
     iptv_categories::Store m_store;
     bool m_connected=false;
     bool m_category_focus=false;
+    struct Group { std::string title; std::vector<iptv_xtream::Channel> channels; };
+    std::vector<Group> m_groups;
+    int m_row=0;
+    std::vector<int> m_columns;
     int m_filter=0, m_index=0, m_category=0, m_scroll=0;
     bool m_search=false;
     int m_saved_index=0;
@@ -34,6 +38,7 @@ private:
     uint32_t m_hold_dir=0;
     double m_hold_since=0, m_hold_last=0;
     void refresh();
+    void build_groups(const iptv_live::Snapshot &snapshot);
     std::vector<iptv_xtream::Channel> current() const;
     void reload_store();
     std::vector<iptv_xtream::Channel> visible(const iptv_xtream::Catalog &c) const;

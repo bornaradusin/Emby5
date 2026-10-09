@@ -6,7 +6,7 @@
 namespace iptv_live {
 struct Snapshot {
     std::vector<iptv_xtream::Channel> channels;
-    unsigned emby_count=0, xtream_count=0;
+    unsigned emby_count=0, xtream_count=0, m3u_count=0;
     bool loading=false;
     uint64_t generation=0;
 };

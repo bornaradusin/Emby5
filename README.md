@@ -14,7 +14,7 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Movies, TV shows, seasons and episodes
 - Music, artists, albums and playlists
 - Detail pages with artwork, cast and media information
-- Global search across movies, TV shows, people, and Xtream IPTV channel names (IPTV requires configured credentials)
+- Global search across movies, TV shows and people; Live TV has a dedicated channel-name search
 - Sort, filter, favourites and watched/unwatched state
 - A-Z library navigation
 - Artwork/backdrop loading and BlurHash placeholders
@@ -86,17 +86,16 @@ Emby5 is an independent community project. It is not affiliated with or endorsed
 - Radarr/Sonarr server, quality-profile and root-folder choices when permitted by Seerr
 - Persistent Seerr configuration across app relaunches and updates
 
-### IPTV (Xtream Codes; PS5 validation pending)
+### Live TV (Emby, Xtream, M3U/M3U8; 1.2.0 development preview)
 
-- Native IPTV tab using Emby5's existing visual style
-- Xtream server URL, username and password configured independently in Settings (no chained keyboards)
-- Live channel browsing and Xtream TS/HLS stream URL playback through the existing PS5 player
-- User-managed categories in Settings: create, rename, delete and reorder
-- Assign or remove channels in multiple custom categories from Settings; reorder assigned channels
-- Persistent Xtream account configuration and category assignments
-- IPTV viewer controls: Up from the first channel focuses the category selector; Left/Right changes category, X cycles categories, Down returns to channels; X on a channel plays.
-- Category assignment search: Triangle opens a channel-name search, Square clears it; X assigns/unassigns a channel in filtered results. All configuration remains in Settings → IPTV.
-- Requires a legitimate IPTV provider account; no channels or subscriptions are supplied
+- A single **Live TV** tab combines available channels from Emby Live TV, the configured Xtream account and a configured HTTP(S) M3U/M3U8 playlist URL.
+- Channel cards appear in horizontal Home-style rows named after provider categories or M3U `group-title` values, in the order first encountered. Identical group names across sources share a row.
+- M3U `tvg-logo` artwork appears on cards when provided; otherwise the channel name is shown. Direct HLS (`.m3u8`) manifests are supported as a single channel.
+- Configure the playlist URL separately in Settings; an empty URL removes the external playlist. Xtream server, username and password remain separate settings.
+- Existing Xtream custom-category management remains available in Settings. EPG for Emby/Xtream channels remains supported where available.
+- **Live TV controls:** D-pad Left/Right changes channel within a row; Up/Down changes group; X plays; Triangle searches channel names; Circle exits search. Up from the first row focuses navigation.
+- Requires your own legitimate stream source. No playlists, accounts or subscriptions are provided.
+- **Development source only:** 1.2.0 has not been built on the PS5 toolchain or validated on console.
 
 ### PS5 integration
 

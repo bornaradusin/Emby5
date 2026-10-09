@@ -16,6 +16,8 @@ namespace settings {
 struct Local {
     int max_mbps = 0;            /* 0 = no cap (direct play whatever the network allows) */
     bool auto_skip_intro = false;
+    bool autoplay_next_override_valid = false;
+    bool autoplay_next_override = false;
     int theme = 0;             /* Glass or one of 30 native AGC palette presets */
     int still_watching = 0;  /* 0 off, 1 after 3 autoplayed episodes, 2 after 2 hours */
     int language = 0;            /* i18n::Choice: 0 follow the PS5, 1 Norsk, 2 English */
