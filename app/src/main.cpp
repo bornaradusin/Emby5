@@ -45,6 +45,7 @@
 #include "ui/settings_screen.h"
 #include "ui/syncplay_screen.h"
 #include "ui_image.h"
+#include "splash_art.inc"
 #include "ui_assets.h"
 #include "ui_text.h"
 
@@ -278,23 +279,21 @@ void install_crash_handler()
     sigaction(SIGABRT, &sa, nullptr);
 }
 
-int init_hardware()
+int init_display()
 {
+    /* Only the native graphics runtime is needed before the first branded frame. */
+    if (evo_agc_runtime_init(evo::DisplayWidth, evo::DisplayHeight, 0) != 0)
+        return -1;
+    evo_agc_runtime_get_size(&evo::DisplayWidth, &evo::DisplayHeight);
+    return 0;
+}
+
+void init_services()
+{
+    /* These services are not required to present the splash artwork. */
     evo_vdec_probe();
     evo_adec_native_probe();
     evo_hw_probe();
-
-    if (evo_agc_runtime_init(evo::DisplayWidth, evo::DisplayHeight, 0) != 0) {
-        evo_bt("emby5: display init failed");
-        return -1;
-    }
-    evo_agc_runtime_get_size(&evo::DisplayWidth, &evo::DisplayHeight);
-    evo_agc_runtime_frame_begin();
-    evo_agc_runtime_present();
-    evo_bt("emby5: display %dx%d hdr=%d 120hz=%d", evo::DisplayWidth, evo::DisplayHeight,
-           evo_agc_runtime_is_display_hdr(), evo_agc_runtime_supports_120hz());
-    sceSystemServiceHideSplashScreen();
-
     av_log_set_callback(av_log_to_boot_log);
     av_log_set_level(AV_LOG_WARNING);
     avformat_network_init();
@@ -305,9 +304,7 @@ int init_hardware()
     int users[4] = {0};
     sceUserServiceGetLoginUserIdList(users);
     g_ps5_user_id = s_user = users[0];
-    evo_bt("emby5: user %d", users[0]);
     nuvio_player_init(users[0]);
-    return 0;
 }
 
 /* ---- signing in --------------------------------------------------------------------- */
@@ -1511,48 +1508,50 @@ void apply_views(const std::vector<jf::Item> &views)
 }
 
 /* ---- drawing (GPU, src/gfx) ------------------------------------------------------ */
-/* The launch screen: starting up, a server that does not answer, nothing to show.
- * The backdrop the PS5 shows while it launches the app (the same picture), the
- * mark in the middle, and under it what is going on. busy: a thin line runs
- * under the mark. The line and the text come a second after start, so a quick
- * start shows only the mark. */
-void draw_launch(double t, float a, const std::string &title, const std::string &line, bool busy,
-                 const std::string &hint = "")
+/* Native startup artwork: fixed illustration + one GPU-rendered glass progress bar.
+ * Progress reflects initialization phases; it never uses an artificial timer.
+ * Online VOD/Live TV refreshes continue after Home becomes usable. */
+const gfx::Texture *startup_art()
 {
-    if (a <= 0.f)
-        return;
-    static double first = -1;
-    if (first < 0)
-        first = t;
-    const double age = t - first;
-    gfx::push_opacity(a);
-    if (const gfx::Texture *bg = ui::launch_backdrop())
-        gfx::image({0, 0, gfx::W, gfx::H}, bg, 1.f, 0, true);
-    else
-        gfx::fill({0, 0, gfx::W, gfx::H}, 0xff07070cu);
-    gfx::push_opacity(ui::smoothstep(std::min(1.f, (float)age / 0.6f)));   /* the mark fades in */
-    ui::draw_brand(gfx::W / 2 - ui::brand_width(110) / 2, 560, 110);
-    gfx::pop_opacity();
-    gfx::push_opacity(ui::smoothstep(std::max(0.f, std::min(1.f, (float)(age - 1.0) / 0.5f))));
-    float y = 650;
-    if (busy) {   /* a short light sliding along a faint track, eased at both ends */
-        const gfx::Rect track{gfx::W / 2 - 110, y, 220, 3};
-        gfx::fill(track, 0x24ffffffu, 1.5f);
-        const float p = ui::smoothstep((float)std::fmod(age, 1.6) / 1.6f), seg = 72;
-        gfx::push_scissor(track);
-        gfx::fill({track.x - seg + (track.w + seg) * p, y, seg, 3}, 0xd9ffffffu, 1.5f);
-        gfx::pop_scissor();
-        y += 60;
-    } else {
-        y += 10;
+    static gfx::Texture *image = nullptr;
+    static bool attempted = false;
+    if (!attempted) {
+        attempted = true;
+        ui_image decoded{};
+        if (ui_image_decode(kSplashArt, sizeof kSplashArt, 1672, 941, &decoded) == 0) {
+            image = gfx::texture_from_image(&decoded);
+            ui_image_free(&decoded);
+        }
     }
-    if (!title.empty())
-        gfx::text(gfx::W / 2, y, title, {gfx::SemiBold, 30, 1400}, ui::theme_text(), 1);
-    if (!line.empty())
-        gfx::text(gfx::W / 2, y + 46, line, {gfx::Medium, 24, 1400}, ui::theme_text2(), 1);
-    gfx::pop_opacity();
+    return image;
+}
+
+void draw_launch(double t, float a, const std::string &title, const std::string &line, bool busy,
+                 const std::string &hint = "", float progress = 0.2f)
+{
+    (void)t; (void)line; (void)busy;
+    if (a <= 0.f) return;
+    gfx::push_opacity(a);
+    if (const gfx::Texture *art = startup_art())
+        gfx::image({0, 0, gfx::W, gfx::H}, art, 1.f, 0, true);
+    else
+        gfx::fill({0, 0, gfx::W, gfx::H}, 0xff061225u);
+
+    /* The original graphic has no loading bar. This is the sole glass bar. */
+    const gfx::Rect track{gfx::W * (458.f / 1672.f), gfx::H * (595.f / 941.f),
+                          gfx::W * (734.f / 1672.f), gfx::H * (39.f / 941.f)};
+    gfx::fill(track, 0xbd08253du, 19.f);
+    gfx::fill({track.x + 3, track.y + 3, track.w - 6, track.h - 6}, 0x55456d82u, 16.f);
+    const float p = std::max(0.f, std::min(1.f, progress));
+    if (p > 0.f) {
+        const gfx::Rect inner{track.x + 6, track.y + 6, (track.w - 12) * p, track.h - 12};
+        gfx::fill_hgradient(inner, 0xff0bd54cu, 0xff53ff7eu, 13.f);
+        gfx::fill({inner.x + 2, inner.y + 2, std::max(0.f, inner.w - 4), 3}, 0x99e6ffdfu, 2.f);
+    }
+    gfx::rim(track, 19.f, .65f);
     if (!hint.empty())
         ui::draw_pad_hints(gfx::W / 2, 992, {{ui::PadButton::Circle, hint}}, 1);
+    (void)title;  /* Design's loading caption is already part of the static artwork. */
     gfx::pop_opacity();
 }
 
@@ -1611,10 +1610,10 @@ bool draw_frame(double t, float dt)
     case Phase::Connecting:
     case Phase::Loading:
         s_splash.snap(1.f);
-        draw_launch(t, 1.f, message, "", true);
+        draw_launch(t, 1.f, message, "", true, "", phase == Phase::Loading ? .72f : .24f);
         break;
     case Phase::Failed:
-        draw_launch(t, 1.f, message, "", true, T("Bytt bruker eller server"));   /* (it tries again) */
+        draw_launch(t, 1.f, message, "", true, T("Bytt bruker eller server"), .72f);   /* (it tries again) */
         break;
     case Phase::Gate:
         s_splash.snap(0.f);
@@ -1703,7 +1702,7 @@ bool draw_frame(double t, float dt)
         s_splash.to(0.f);
         if (s_splash.step(dt, 6.f))
             animating = true;
-        draw_launch(t, s_splash.value, "", "", true);   /* (the line fades with it) */
+        draw_launch(t, s_splash.value, "", "", true, "", 1.f);   /* (the line fades with it) */
         break;
     }
     gfx::end_frame();
@@ -1943,21 +1942,41 @@ int main()
         if (const char *name = nuvio_import_null(i))
             evo_bt("emby5: import %s is NULL on this console", name);
 
-    if (init_hardware() != 0) {
+    if (init_display() != 0) {
         notify(T("Emby5: skjermen kunne ikke startes"));
         for (;;)
             usleep(1000 * 1000);
     }
 
+    /* First app-owned frame: no decoder, controller, network, settings, account,
+     * sandbox promotion, or font loading is required to draw the static artwork. */
+    const bool graphics_ok = gfx::init();
+    auto present_splash = [&](float progress) {
+        if (!graphics_ok) return;
+        gfx::begin_frame();
+        draw_launch(0., 1.f, "", "", true, "", progress);
+        gfx::end_frame();
+    };
+    present_splash(0.05f);
+    if (graphics_ok)
+        sceSystemServiceHideSplashScreen();
+
+    /* Keep presenting completed milestones rather than delaying launch for a
+     * simulated timer. Subsequent online catalogue refresh remains asynchronous. */
+    init_services();
+    present_splash(0.28f);
+
     const int sandbox_open = evo_jailbreak_self();
     if (sandbox_open)
         evo_data_path_rebind();
-    evo_bt("emby5: persistent storage %s (%s)",
-           sandbox_open ? "available" : "NOT available",
-           evo_data_dir());
-    evo_boot_log_flush();  /* USB is accessible after sandbox promotion. */
-    if (ui_text_init() != 0 || !gfx::init())
+    evo_boot_log_flush();
+    present_splash(0.42f);
+
+    const bool text_ok = ui_text_init() == 0;
+    if (!text_ok || !graphics_ok) {
         evo_bt("emby5: ui init failed");
+    }
+    present_splash(0.52f);
     nuvio_input_open(s_user);
 
     char device[48];
@@ -1975,6 +1994,7 @@ int main()
     s_boot_has_account = accounts::last(&s_boot_account);
     s_client = s_boot_client = s_boot_has_account ? client_for(s_boot_account) : new_client(EMBY5_SERVER);
     reset_screens();
+    present_splash(0.66f);
 
     pthread_t w;
     pthread_create(&w, nullptr, boot, nullptr);
