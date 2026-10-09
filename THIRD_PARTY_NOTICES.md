@@ -1,6 +1,6 @@
 # Third-party notices
 
-Jelly5 is free software under the GNU General Public License v3.0 or later
+Emby5 is free software under the GNU General Public License v3.0 or later
 (see [LICENSE](LICENSE)). It builds on, links or bundles the following work,
 each under its own licence. All of them allow use and redistribution, and all
 are compatible with GPL-3.0-or-later, under which the combined program is
@@ -53,7 +53,7 @@ source code is available from those projects and from the upstream projects belo
 | LLVM libc++, libc++abi, libunwind | Apache-2.0 WITH LLVM-exception |
 | The SDK's C library and system-call stubs | as in the ps5-payload-dev SDK |
 
-## Source code of Jelly5
+## Source code of Emby5
 
 The complete source of each release is in this repository, at the release's
 tag (for example `v0.1.0`). The libraries above are built from their published
@@ -61,7 +61,7 @@ sources by the SDK's and pacbrew's build recipes.
 
 ## Trademarks
 
-Jelly5 is not affiliated with or endorsed by Sony Interactive Entertainment or
+Emby5 is not affiliated with or endorsed by Sony Interactive Entertainment or
 the Jellyfin project. *PlayStation*, *PS5* and *DualSense* are trademarks of
-Sony Interactive Entertainment Inc.; *Jellyfin* is the name of the Jellyfin
-project. They are used here only to say what Jelly5 runs on and works with.
+Sony Interactive Entertainment Inc.; *Emby* is the name of the Emby
+project. They are used here only to say what Emby5 runs on and works with.
