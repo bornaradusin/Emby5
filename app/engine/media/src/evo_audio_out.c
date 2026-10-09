@@ -140,6 +140,9 @@ volatile int audio_thread_running = 0;
 pthread_t audio_thread;
 
 volatile int audio_decode_thread_running = 0;
+/* Seek handshake: never flush an audio decoder while its worker is inside it. */
+volatile int audio_decode_hold = 0;
+volatile int audio_decode_parked = 1;
 pthread_t audio_decode_thread;
 
 
@@ -607,14 +610,14 @@ static void mix_audio_frame_to_queue(
 
             if (audio_accum_pos >= AUDIO_BLOCK_SAMPLES) {
                 while (
-                    audio_decode_thread_running &&
+                    audio_decode_thread_running && !audio_decode_hold &&
                     audio_queue_count >=
                         AUDIO_QUEUE_BLOCKS - 2
                 ) {
                     usleep(1000);
                 }
 
-                if (!audio_decode_thread_running) {
+                if (!audio_decode_thread_running || audio_decode_hold) {
                     break;
                 }
 
@@ -639,6 +642,13 @@ void *audio_decode_thread_func(void *arg) {
     if (!af) return NULL;
 
     while (audio_decode_thread_running) {
+        /* The demux seek may clear queues and flush codecs only once parked. */
+        if (audio_decode_hold) {
+            audio_decode_parked = 1;
+            usleep(1000);
+            continue;
+        }
+        audio_decode_parked = 0;
         /*
          * pb_prebuffer_hold parks audio alongside video at open. It has to be
          * both or neither: audio is the master clock, so letting it run while
@@ -651,15 +661,16 @@ void *audio_decode_thread_func(void *arg) {
             continue;
         }
 
-        while (audio_decode_thread_running && audio_queue_count > 10) {
+        while (audio_decode_thread_running && !audio_decode_hold && audio_queue_count > 10) {
             usleep(1000);
         }
         /* Jelly5: an HDMI bitstream keeps about as little ahead as the PCM queue does. */
-        while (audio_decode_thread_running && jelly5_bs_active() && jelly5_bs_buffered_ms() > 400 &&
+        while (audio_decode_thread_running && !audio_decode_hold && jelly5_bs_active() && jelly5_bs_buffered_ms() > 400 &&
                !pb_prebuffer_hold && !pb_scrub_hold) {
             usleep(1000);
         }
 
+        if (audio_decode_hold) continue;
         AVPacket *pkt = packet_queue_pop(&audio_packet_queue);
         if (pkt && audio_seek_discard_until >= 0.0) {
             /*
@@ -780,7 +791,8 @@ void *audio_decode_thread_func(void *arg) {
                     af->nb_samples = produced / (int)sizeof(int16_t) / ch;
                     if (af->nb_samples > 0 &&
                         av_frame_get_buffer(af, 0) == 0) {
-                        memcpy(af->data[0], g_adec_pcm, (size_t)produced);
+                        memcpy(af->data[0], g_adec_pcm,
+                               (size_t)af->nb_samples * (size_t)ch * sizeof(int16_t));
                         if (pkt->pts != AV_NOPTS_VALUE && play_fmt && audio_stream_index >= 0) {
                             audio_pts_seconds = pkt->pts *
                                 av_q2d(play_fmt->streams[audio_stream_index]->time_base);
@@ -814,6 +826,7 @@ void *audio_decode_thread_func(void *arg) {
         av_packet_free(&pkt);
     }
 
+    audio_decode_parked = 1;
     av_frame_free(&af);
     return NULL;
 }

@@ -68,6 +68,7 @@ struct NuvioTrickplay {
 struct NuvioPrefs {
     std::vector<std::string> audio_langs;     /* preferred, in order */
     std::vector<std::string> subtitle_langs;
+    std::string subtitle_mode = "Default";
     bool subtitles_enabled = true;
     bool forced_only_when_off = true;
     nuvio_sub_style style = {100, 0xffffff, 0, 1, 0.0f, 0.0f};

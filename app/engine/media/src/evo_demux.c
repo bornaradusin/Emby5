@@ -11,6 +11,7 @@
 #include "evo_demux.h"
 #include "evo_thread.h"
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +64,9 @@ extern AVPacket *video_video_pending_pkt;
 extern volatile int video_thread_running;  /* evo_playback.c */
 extern volatile int video_decode_parked;
 extern volatile int video_decode_hold;
+extern volatile int audio_decode_hold;
+extern volatile int audio_decode_parked;
+extern volatile int audio_decode_thread_running;
 
 extern int      playback_profile;
 extern int      video_packet_cap;
@@ -225,6 +229,7 @@ static int prospero_process_seek_request(void) {
      * unsynchronized anyway. The hold belongs to the seek alone.
      */
     video_decode_hold = 1;
+    audio_decode_hold = 1;
     usleep(5000);
     if (video_thread_running) {
         int waited_ms = 0;
@@ -241,6 +246,29 @@ static int prospero_process_seek_request(void) {
     }
 
     
+    /* Audio, unlike video, previously had no seek handshake. The demux
+     * flushed audio_ctx and reset accumulator state while its worker could
+     * still be decoding or appending pre-seek PCM. Park it first. */
+    if (audio_decode_thread_running) {
+        int waited_ms = 0;
+        while (!audio_decode_parked && waited_ms < 2000) {
+            usleep(1000);
+            waited_ms++;
+        }
+        if (!audio_decode_parked) {
+            pp_stage_bc("SEEK_AUDIO_PARK", "audio worker did not park; seek deferred");
+            audio_decode_hold = 0;
+            video_decode_hold = 0;
+            prospero_seek_in_progress = 0;
+            s_seek_done_ms = now_ms();
+            pp_playback_notify_seek_end(&g_pp_pb, 0, 0, 0);
+            if (!restore_paused) pp_playback_resume(&g_pp_pb);
+            player_paused = restore_paused ? 1 : 0;
+            toast("SEEK", "Audio decoder busy; please retry");
+            return 0;
+        }
+    }
+
     /*
      * Clear EOF immediately. This wakes the video and audio decoder
      * loops while the seek and queue reset are being completed.
@@ -308,6 +336,15 @@ packet_queue_clear(
             decoder_seek_seconds /
             av_q2d(time_base)
         );
+
+#ifdef NUVIO_APP
+    /* HLS timestamps may begin at a nonzero offset. Seek relative to the
+     * stream's actual start rather than absolute timestamp zero. */
+    if (play_fmt->iformat && strcmp(play_fmt->iformat->name, "hls") == 0 &&
+        play_fmt->streams[seek_stream]->start_time != AV_NOPTS_VALUE &&
+        play_fmt->streams[seek_stream]->start_time > 0)
+        seek_timestamp += play_fmt->streams[seek_stream]->start_time;
+#endif
 
     /* #94: a seek in a raw .obu (no index - the demuxer scans forward from
      * the last keyframe it has seen) took EVO down with nothing after it in
@@ -442,6 +479,7 @@ packet_queue_clear(
     prospero_seek_in_progress = 0;
     s_seek_done_ms = now_ms();
     video_decode_hold = 0;
+    audio_decode_hold = 0;
 
     pp_playback_notify_seek_end(
         &g_pp_pb,
@@ -779,6 +817,8 @@ void *demux_thread_func(void *arg) {
         s_audio_bytes_cap = NO_RING_BYTES_CAP;
     }
 
+    /* Avoid tight 5 ms loops on persistent network errors or EOF. */
+    unsigned int consecutive_read_errors = 0;
     while (demux_thread_running) {
         /*
          * Process seek requests before checking the paused state.
@@ -802,17 +842,21 @@ void *demux_thread_func(void *arg) {
             );
 
         if (read_result < 0) {
-            /*
-             * Keep the demux thread alive so seeking backward from EOF
-             * does not require reopening the file.
-             */
-            video_decode_done = 1;
-            evo_demux_state = 5;
-            prebuffer_check(1);
-            usleep(5000);
+            /* EAGAIN is temporary: do not signal end-of-video. Retain the
+             * existing EOF behavior so seeks can still work after EOF. */
+            if (read_result != AVERROR(EAGAIN)) {
+                video_decode_done = 1;
+                evo_demux_state = 5;
+                prebuffer_check(1);
+            }
+            if (consecutive_read_errors < 8) consecutive_read_errors++;
+            unsigned int delay_ms = 5U << consecutive_read_errors;
+            if (delay_ms > 1000U) delay_ms = 1000U;
+            usleep(delay_ms * 1000U);
             continue;
         }
 
+        consecutive_read_errors = 0;
         video_decode_done = 0;
         prebuffer_check(0);
 

@@ -280,6 +280,8 @@ bool nuvio_request_parse(const char *json, NuvioRequest &r)
         NuvioPrefs &pr = r.prefs;
         pr.audio_langs = strings_of(p, "audioLanguages");
         pr.subtitle_langs = strings_of(p, "subtitleLanguages");
+        pr.subtitle_mode = str_of(p, "subtitleMode");
+        if (pr.subtitle_mode.empty()) pr.subtitle_mode = "Default";
         pr.subtitles_enabled = bool_of(p, "subtitlesEnabled", true);
         pr.autoplay_next = bool_of(p, "autoplayNext", true);
         pr.next_by_minutes = str_of(p, "nextThresholdMode") == "MINUTES_BEFORE_END";

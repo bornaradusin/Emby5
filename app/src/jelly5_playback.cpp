@@ -381,25 +381,20 @@ std::string request_json(jf::Client &c, const jf::Item &it, const jf::Playback &
     const settings::All set = settings::get();
     cJSON *prefs = cJSON_CreateObject();
     cJSON *al = cJSON_CreateArray(), *sl = cJSON_CreateArray();
-    auto langs = [](cJSON *arr, const std::string &first) {
-        std::vector<std::string> l;
-        if (!first.empty())
-            l.push_back(first);
-        if (first == "nor" || first == "nob" || first == "nno")
-            l.insert(l.end(), {"nob", "nor", "no", "nb"});
-        for (const auto &x : l)
-            cJSON_AddItemToArray(arr, cJSON_CreateString(x.c_str()));
+    auto language = [](cJSON *arr, const std::string &preferred) {
+        if (!preferred.empty())
+            cJSON_AddItemToArray(arr, cJSON_CreateString(preferred.c_str()));
     };
-
-
-    const std::string mode = set.server.subtitle_mode;
+    language(al, set.server.audio_language);
+    language(sl, set.server.subtitle_language);
+    const std::string mode = set.server.subtitle_mode.empty() ? "Default" : set.server.subtitle_mode;
     cJSON_AddItemToObject(prefs, "audioLanguages", al);
     cJSON_AddItemToObject(prefs, "subtitleLanguages", sl);
-    /* Always: on in the preferred language. OnlyForced/Default/Smart: forced
-     * subtitles only (Default/Smart also turn them on when the audio is not in
-     * the viewer's language - the player has no such rule yet). None: off. */
-    cJSON_AddItemToObject(prefs, "subtitlesEnabled", cJSON_CreateBool(mode == "Always"));
-    cJSON_AddItemToObject(prefs, "forcedOnlyWhenOff", cJSON_CreateBool(mode != "None"));
+    cJSON_AddStringToObject(prefs, "subtitleMode", mode.c_str());
+    /* The player applies Emby's mode to the selected audio and subtitle languages.
+     * Keep these legacy flags for older playback request consumers. */
+    cJSON_AddItemToObject(prefs, "subtitlesEnabled", cJSON_CreateBool(mode == "Always" || mode == "HearingImpaired"));
+    cJSON_AddItemToObject(prefs, "forcedOnlyWhenOff", cJSON_CreateBool(mode == "OnlyForced"));
     cJSON_AddItemToObject(prefs, "autoplayNext", cJSON_CreateBool(set.server.autoplay_next));
     cJSON_AddItemToObject(prefs, "skipIntro", cJSON_CreateBool(1));
     cJSON_AddItemToObject(prefs, "autoSkipIntro", cJSON_CreateBool(set.local.auto_skip_intro));

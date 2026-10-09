@@ -578,40 +578,70 @@ void refresh_audio(Session &s)
     }
 }
 
-/* The viewer's subtitle preference: their language, else a forced track in
- * the audio's language when subtitles are off. Re-run as addon tracks arrive
- * until the viewer picks one themselves. */
+/* Apply the Emby account's subtitle mode to the preferred language and current
+ * audio. Re-evaluate when external subtitles arrive, but never override a track
+ * manually selected or disabled by the viewer. */
 void auto_select_subtitles(Session &s)
 {
     if (s.user_picked_subs || nuvio_subs_selected() >= 0)
         return;
     const NuvioPrefs &p = s.req.prefs;
+    if (p.subtitle_mode == "None")
+        return;
     const int n = nuvio_subs_count();
-    auto find = [&](const std::string &lang, bool forced_only) {
+    const std::string audio = s.st.audio_active >= 0
+        ? nuvio_language_key(s.st.audio[s.st.audio_active].lang) : std::string();
+    const std::string preferred_audio = p.audio_langs.empty() ? std::string()
+        : nuvio_language_key(p.audio_langs.front());
+    auto find = [&](const std::string &lang, bool forced_only, bool hearing_only) {
         const std::string key = nuvio_language_key(lang);
+        if (key.empty() || key == "und" || key == "unknown") return -1;
         int best = -1, best_score = -1;
         for (int i = 0; i < n; i++) {
             nuvio_sub_track t;
             if (nuvio_subs_track(i, &t) != 0 || t.state != 1)
                 continue;
-            if (nuvio_language_key(t.lang) != key || forced_only != (t.forced != 0))
+            if (nuvio_language_key(t.lang) != key ||
+                (forced_only && !t.forced) ||
+                (hearing_only && !t.hearing_impaired))
                 continue;
-            const int score = (t.external ? 0 : 20) + (t.hearing_impaired ? 0 : 5) +
+            const int score = (t.external ? 0 : 20) +
+                              (hearing_only ? (t.hearing_impaired ? 50 : 0)
+                                            : (t.hearing_impaired ? 0 : 5)) +
                               (t.is_default ? 2 : 0) + (t.bitmap ? 0 : 1);
-            if (score > best_score) {
-                best_score = score;
-                best = i;
-            }
+            if (score > best_score) { best_score = score; best = i; }
         }
         return best;
     };
+    auto preferred = [&](bool forced_only, bool hearing_only) {
+        for (const std::string &l : p.subtitle_langs) {
+            int pick = find(l, forced_only, hearing_only);
+            if (pick >= 0) return pick;
+        }
+        return -1;
+    };
+
     int pick = -1;
-    if (p.subtitles_enabled) {
-        for (const std::string &l : p.subtitle_langs)
-            if ((pick = find(l, false)) >= 0)
-                break;
-    } else if (p.forced_only_when_off && s.st.audio_active >= 0) {
-        pick = find(s.st.audio[s.st.audio_active].lang, true);
+    if (p.subtitle_mode == "OnlyForced") {
+        pick = preferred(true, false);
+        if (pick < 0) pick = find(audio, true, false);
+    } else if (p.subtitle_mode == "Always" || p.subtitle_mode == "HearingImpaired") {
+        pick = preferred(false, p.subtitle_mode == "HearingImpaired");
+        if (pick < 0 && p.subtitle_mode == "HearingImpaired")
+            pick = preferred(false, false);
+    } else if (p.subtitle_mode == "Default" || p.subtitle_mode == "Smart") {
+        /* An audio track in the viewer's preferred language needs no regular
+         * subtitles. Foreign-language audio should use preferred subtitles. */
+        if (!preferred_audio.empty() && !audio.empty() && audio != preferred_audio)
+            pick = preferred(false, false);
+        if (pick < 0) {
+            pick = preferred(true, false);
+            if (pick < 0) pick = find(audio, true, false);
+        }
+    } else if (p.subtitles_enabled) { /* Preserve legacy request behavior. */
+        pick = preferred(false, false);
+    } else if (p.forced_only_when_off) {
+        pick = find(audio, true, false);
     }
     if (pick >= 0) {
         nuvio_subs_select(pick);
