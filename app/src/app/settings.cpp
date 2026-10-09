@@ -103,6 +103,8 @@ void load_local()
     if (!j)
         return;
     std::lock_guard<std::mutex> g(s_lock);
+    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "upscaling"))
+        if (cJSON_IsNumber(v)) s_all.local.upscale_mode = std::max(0, std::min(3, (int)v->valuedouble));
     s_all.local.max_mbps = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j, "maxMbps"));
     if (s_all.local.max_mbps < 0)
         s_all.local.max_mbps = 0;
@@ -155,6 +157,7 @@ static bool save_local_snapshot(const Local &l)
 {
     if (!settings_storage_ready()) return false;
     cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "upscaling", l.upscale_mode);
     cJSON_AddNumberToObject(j, "maxMbps", l.max_mbps);
     cJSON_AddBoolToObject(j, "autoSkipIntro", l.auto_skip_intro);
     if (l.autoplay_next_override_valid)

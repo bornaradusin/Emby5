@@ -301,6 +301,7 @@ enum {
     EVO_AGC_UPSCALE_OFF = 0,
     EVO_AGC_UPSCALE_SHARP = 1,
     EVO_AGC_UPSCALE_AI = 2,
+    EVO_AGC_UPSCALE_AUTO = 3, /* choose one pass per frame from source/output ratio */
 };
 void        evo_agc_upscale_set_mode(int mode);
 /* Which Anime4K network AI mode runs. AUTO = Large on a detected PS5 Pro,

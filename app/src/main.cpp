@@ -1983,6 +1983,12 @@ int main()
     std::snprintf(device, sizeof device, "emby5-ps5-%d", s_user);
     s_device = device;
     settings::load_local();
+    {
+        const int mode = settings::get().local.upscale_mode;
+        evo_agc_upscale_set_mode(mode == 0 ? EVO_AGC_UPSCALE_OFF
+            : mode == 1 ? EVO_AGC_UPSCALE_AUTO
+            : mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+    }
     accounts::set_ps5_user(s_user);   /* each PS5 user keeps their own Emby account */
     i18n::set_choice(settings::get().local.language);
     /* Restore the saved refresh rate in both directions. The video output may

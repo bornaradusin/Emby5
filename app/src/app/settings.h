@@ -14,6 +14,7 @@
 namespace settings {
 
 struct Local {
+    int upscale_mode = 0;       /* 0 Off, 1 Auto, 2 FSR 1, 3 Anime4K */
     int max_mbps = 0;            /* 0 = no cap (direct play whatever the network allows) */
     bool auto_skip_intro = false;
     bool autoplay_next_override_valid = false;

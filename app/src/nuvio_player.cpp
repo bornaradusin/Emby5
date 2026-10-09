@@ -529,6 +529,18 @@ std::vector<std::pair<std::string, std::string>> playback_stats(const Session &s
         evo_agc_runtime_get_size(&w, &h);
         std::snprintf(b, sizeof b, "%d\xC3\x97%d  \xC2\xB7  %s", w, h, evo_agc_runtime_hdr_output_active() ? "HDR10" : "SDR");
         v.push_back({T("Skjerm"), b});
+        /* This is the renderer's last-frame result, not merely the requested
+         * Settings mode. It includes automatic selection and bypasses. */
+        const char *up = evo_agc_upscale_label();
+        std::string active = up ? up : "Off";
+        if (active == "Sharp") active = "FSR 1 - Active";
+        else if (active.rfind("AI (", 0) == 0) active = "Anime4K - Active " + active.substr(3);
+        else if (active == "Off") active = "Native - Off";
+        else if (active.rfind("Off (", 0) == 0) {
+            active = "Native - " + active.substr(5);
+            if (!active.empty() && active.back() == ')') active.pop_back();
+        }
+        v.push_back({"Upscaling", active});
     }
     if (audio_stream_index >= 0 && audio_stream_index < (int)play_fmt->nb_streams) {
         const AVCodecParameters *p = play_fmt->streams[audio_stream_index]->codecpar;

@@ -78,6 +78,7 @@ const char *label_of(int row)
     const char *const labels[] = {T("Bytt bruker eller server"),
                                          T("Logg ut"),
                                          T("Maks kvalitet"),
+                                         "Video upscaling",
                                          T("Undertekster"),
                                          T("Undertekststørrelse"),
                                          T("Undertekstbakgrunn"),
@@ -222,6 +223,10 @@ std::string SettingsScreen::value(Row r) const
     case IPTVUsername: return m_iptv_creds.username.empty() ? "X to enter" : m_iptv_creds.username;
     case IPTVPassword: return m_iptv_creds.password.empty() ? "X to enter" : "********";
     case IPTVCategories: return std::to_string(m_iptv_store.categories().size()) + " categories - X to manage";
+    case Upscaling: {
+        const char *const modes[] = {"Off", "Auto", "FSR 1", "Anime4K"};
+        return modes[std::max(0, std::min(3, s.local.upscale_mode))];
+    }
     case Quality:
         return s.local.max_mbps == 0 ? T("Automatisk (maks)") : std::to_string(s.local.max_mbps) + " Mbit/s";
     case SubMode: return T(kModes[index_of(kModes, s.server.subtitle_mode)].name);
@@ -306,6 +311,13 @@ void SettingsScreen::change(Row r, int dir)
         iptv_vod::set_refresh_interval_hours(intervals[cycle(i,5)]);
         break;
     }
+    case Upscaling:
+        s.local.upscale_mode = cycle(s.local.upscale_mode, 4);
+        settings::set_local(s.local);
+        evo_agc_upscale_set_mode(s.local.upscale_mode == 0 ? EVO_AGC_UPSCALE_OFF
+            : s.local.upscale_mode == 1 ? EVO_AGC_UPSCALE_AUTO
+            : s.local.upscale_mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+        break;
     case Quality: {
         int i = 0;
         for (int k = 0; k < kNumQualities; k++)

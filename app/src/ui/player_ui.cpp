@@ -6,6 +6,7 @@
  */
 #include "ui/player_ui.h"
 #include "evo_audio_out.h"
+#include "evo_agc_runtime.h"
 #include "jelly5_bitstream.h"
 
 #include "app/remote.h"
@@ -219,6 +220,14 @@ static std::string speed_label()
     return b;
 }
 
+/* Changes take effect on the currently playing video; the setting persists. */
+static const char *upscaling_button_label()
+{
+    static const char *names[] = {"Upscaling: Off", "Upscaling: Auto", "Upscaling: FSR 1", "Upscaling: Anime4K"};
+    const int mode = settings::get().local.upscale_mode;
+    return names[mode >= 0 && mode < 4 ? mode : 0];
+}
+
 std::vector<PlayerUi::Button> PlayerUi::buttons() const
 {
     std::vector<Button> b{Button::PlayPause};
@@ -228,6 +237,7 @@ std::vector<PlayerUi::Button> PlayerUi::buttons() const
         b.push_back(Button::Chapters);
     b.push_back(Button::Tracks);
     b.push_back(Button::Speed);
+    b.push_back(Button::Upscaling);
     if (m_req && m_req->has_next)
         b.push_back(Button::Next);
     return b;
@@ -757,6 +767,18 @@ void PlayerUi::input_local(const nuvio_input_state &in, const NuvioStatus &st, s
                 show_controls(now, Zone::Buttons);
                 break;
             }
+            case Button::Upscaling: {
+                settings::All prefs = settings::get();
+                prefs.local.upscale_mode = (prefs.local.upscale_mode + 1) % 4;
+                settings::set_local(prefs.local);
+                const int mode = prefs.local.upscale_mode;
+                evo_agc_upscale_set_mode(mode == 0 ? EVO_AGC_UPSCALE_OFF
+                    : mode == 1 ? EVO_AGC_UPSCALE_AUTO
+                    : mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+                toast(upscaling_button_label(), now);
+                show_controls(now, Zone::Buttons);
+                break;
+            }
             case Button::Next: out.push_back({OsdCmd::PlayNext}); break;
             }
         } else {
@@ -1031,6 +1053,7 @@ void PlayerUi::draw_controls(const NuvioStatus &st)
         case Button::Episodes: return T("Episoder");
         case Button::Chapters: return T("Kapitler");
         case Button::Speed: return speed_label();
+        case Button::Upscaling: return upscaling_button_label();
         case Button::Tracks: return T("Lyd og undertekster");
         case Button::Next: return T("Neste episode");
         }
@@ -1061,6 +1084,7 @@ void PlayerUi::draw_controls(const NuvioStatus &st)
         case Button::Episodes: label = T("Episoder"); break;
         case Button::Chapters: label = T("Kapitler"); break;
         case Button::Speed: label = speed_label(); break;
+        case Button::Upscaling: label = upscaling_button_label(); break;
         case Button::Tracks: label = T("Lyd og undertekster"); break;
         case Button::Next: label = T("Neste episode"); break;
         }
@@ -1080,6 +1104,10 @@ void PlayerUi::draw_controls(const NuvioStatus &st)
         case Button::Episodes:   /* a stack of cards */
             gfx::fill({ix + 4, cy - 11, 22, 3}, fg, 1.5f);
             gfx::fill({ix + 1, cy - 6, 28, 17}, fg, 3);
+            break;
+        case Button::Upscaling:  /* stacked video enhancement layers */
+            gfx::fill({ix + 2, cy - 9, 24, 17}, fg, 3);
+            gfx::fill({ix + 7, cy - 14, 24, 17}, fg, 3);
             break;
         case Button::Speed:      /* two chevrons: forward, faster */
             for (int k2 = 0; k2 < 2; k2++)
