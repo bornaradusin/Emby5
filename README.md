@@ -4,13 +4,13 @@
 
 **A native Emby media client for homebrew-enabled PlayStation 5 consoles.**
 
-**Emby Libraries · Native PS5 Playback · IPTV · EPG · 31 Visual Themes**
+**Emby Libraries · Native PS5 Playback · Live TV · M3U/Xtream · VOD · 31 Visual Themes**
 
 Emby5 is an unofficial native Emby client for homebrew-capable PlayStation 5 consoles, derived from [Jelly5 by 02dnot](https://github.com/02dnot/Jelly5).
 
 ---
 
-**Contents:** [Features](#features) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
+**Contents:** [Features](#features) · [Live TV](#live-tv--emby-xtream-and-m3um3u8) · [VOD](#video-on-demand-vod) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
 
 ---
 
@@ -24,7 +24,7 @@ Emby5 provides a native, GPU-rendered interface designed for navigating your Emb
 - Native GPU-rendered PS5 interface.
 - **31 selectable visual themes**, including the original Glass design.
 - Theme-specific colors, panel treatments, borders, shadows, highlights, and bevels.
-- Theme selection available under **Settings → Theme**.
+- Themes and other appearance options are available through the **Appearance & About** Settings tile.
 
 **Browsing and navigation**
 - Home screen with featured content, Continue Watching, Next Up, and Recently Added.
@@ -33,10 +33,12 @@ Emby5 provides a native, GPU-rendered interface designed for navigating your Emb
 - Music libraries, artists, albums, and playlists.
 - Media detail pages with artwork and metadata.
 - Upcoming episodes appear in TV Show season details.
-- Global search across movies, TV shows, and configured Xtream IPTV channels.
+- Main navigation: **Home · Movies · TV Shows · Live TV · VOD · Music · Discover**, with content-dependent tabs.
+- Dedicated search within Live TV and VOD; the standalone main Search tab has been removed.
 - Library sorting, filtering, favourites, and watched/unwatched status.
 - A–Z library navigation.
 - Artwork and backdrop loading, including placeholder rendering.
+- Tile-based Settings screen for Accounts & Servers, Playback, Discover/Seerr, Live TV, VOD, and Appearance & About.
 - Local storage for saved accounts and application settings.
 
 **Note:** Some artwork may be unavailable or fail to load for particular items or libraries, depending on the Emby server and image-handling behavior.
@@ -73,6 +75,7 @@ Emby5 uses a native PS5 playback engine with hardware video decoding.
 - Audio delay adjustment.
 - Night mode.
 - Seeking and trickplay thumbnails where supported by the server.
+- Improved audio/video synchronization after seeking and HLS timestamp handling.
 
 **Playback information and continuity**
 - Playback progress, resume, and watched-state reporting.
@@ -133,7 +136,7 @@ Controller activity during playback resets the unattended streak.
 
 **Subtitle customization**
 
-Emby5 1.1.0 makes subtitle customization available through **Audio & Subtitles → Customize Subtitles** during playback.
+Subtitle customization is available through **Audio & Subtitles → Customize Subtitles** during playback.
 
 - Adjust subtitle font size.
 - Change subtitle vertical position.
@@ -146,7 +149,7 @@ Emby5 1.1.0 makes subtitle customization available through **Audio & Subtitles �
 
 Subtitle delay adjustments apply to the current playback session. Appearance customization depends on the selected subtitle format; some bitmap subtitles do not support text-style adjustments.
 
-**Language preferences:** Preferred audio-language and preferred subtitle-language settings were removed from Emby5 1.0.0 because their behaviour was unreliable.
+**Language preferences:** Emby5 uses subtitle preferences provided by the Emby server for automatic subtitle selection. Separate in-app preferred-language selectors are not included.
 
 ### Music
 
@@ -179,101 +182,58 @@ Emby5 includes optional integration with supported Seerr servers for media disco
 
 **Note:** Available functions depend on the connected Seerr version, server configuration, and account permissions.
 
-### IPTV — Emby Live TV & Xtream Codes
+### Live TV — Emby, Xtream, and M3U/M3U8
 
-Emby5 1.1.0 expands the existing IPTV integration with **native Emby Live TV support**, including configured TV tuners, while retaining Xtream Codes compatibility.
+Emby5 1.2.0 replaces the older IPTV list with a **Home-style Live TV screen**. Channels are displayed as horizontal logo cards, with one row per group or provider category.
 
-**Live TV sources**
-- Automatically detect available Live TV channels from the connected Emby server.
-- Use TV tuners and Live TV sources configured on the Emby server without separate PS5 tuner hardware.
-- Connect to Xtream Codes-compatible providers using the existing IPTV settings.
-- Combine **Emby Live TV** and **Xtream IPTV** channels in one unified interface.
-- Automatically display the IPTV tab when either source provides channels.
-- Hide the IPTV tab when neither source has available channels.
-- Browse all channels or filter by Emby and Xtream sources.
-- Keep each channel associated with its original provider for playback.
+**Sources and organisation**
+- Native **Emby Live TV** channels supplied by the connected Emby server (including supported configured M3U tuners).
+- **Xtream Codes** providers configured with server URL, username, and password.
+- **M3U/M3U8** playlist URLs configured in Settings. An individual M3U8 HLS URL can represent a single playable stream rather than a multi-channel playlist.
+- Channels from configured sources are combined in one Live TV screen, while retaining their provider-specific playback routes.
+- Playlist `group-title` values and Xtream category names determine the horizontal rows (for example, Brazil, USA, Sports); no countries or genres are hard-coded.
+- **Custom channel groups appear first** in their saved order, followed by provider and playlist groups. Channels can remain visible in their original groups.
+- Channel logos are used when supplied; otherwise the channel name is shown.
+- Previously discovered Live TV metadata may be restored from local cache. Actual playback requires a valid stream and available provider.
+- The Live TV tab is hidden when no channels are available from configured sources.
 
-**IPTV features**
-- Dedicated IPTV tab with automatic visibility.
-- Xtream Codes-compatible server configuration.
-- Separate server URL, username, and password entry under **Settings → IPTV**.
-- Automatic Emby Live TV detection without additional credentials.
-- Live television channel browsing.
-- Emby Live TV playback through the existing playback engine.
-- Xtream TS/HLS stream playback through Emby5's existing player.
-- Channel categories.
-- Custom category creation, renaming, deletion, and reordering.
-- Assigning and removing channels from custom categories.
-- Channel ordering within custom categories.
-- Channel-name search during category assignment.
-- IPTV channel-name support in global search.
-- Local storage of Xtream configuration and category assignments.
+**Guide and navigation**
+- Now Playing and Up Next programme information, times and progress are shown when the source provides EPG data.
+- Programme details are also available in the player overlay when controls are visible.
+- Navigate **Left/Right** across channels in a row and **Up/Down** between rows.
+- Press **X** to play the focused channel and **Triangle** to search loaded Live TV channels by name; **Circle** exits search.
+- Custom category creation, channel assignments and ordering are managed from the **Live TV** Settings tile.
+- EPG availability and stream compatibility depend on the provider; there is no complete interactive EPG grid.
 
-**Electronic Programme Guide (EPG)**
+**Note:** Emby5 does not provide channels, IPTV subscriptions, playlists, or credentials. Use sources you are entitled to access.
 
-Emby5 1.1.0 integrates programme information from both **Emby Live TV** and **Xtream IPTV** sources.
+### Video on Demand (VOD)
 
-- **Now Playing** information for the currently airing programme.
-- **Up Next** information for the following scheduled programme.
-- Programme start and end times when available.
-- Programme progress bar showing how much of the current programme has elapsed.
-- Programme information directly within the IPTV channel interface.
-- **In-player EPG overlay** in the top-left corner when playback controls are visible.
-- Channel name, current programme, upcoming programme, and programme progress displayed in the player overlay.
-- Programme information retrieved from each channel's respective provider.
+Emby5 1.2.0 adds a dedicated **VOD** section for supported Xtream catalogues and compatible standalone video entries from M3U playlists.
 
-EPG availability depends on the information supplied by the Emby server or Xtream IPTV provider.
+- Separate **Movies** and **TV Shows** areas with artwork, group/category rows and title browsing.
+- Xtream series browsing includes seasons, episodes and episode playback when provider metadata is available.
+- **Triangle** opens a VOD title search; search covers titles indexed in the locally stored catalogue, not just the currently visible cards.
+- Progressive catalogue discovery and disk-backed metadata caching, with visible content read in bounded pages instead of copying an entire large catalogue into the UI.
+- Previously cached items can appear on launch while catalogue refresh runs; newly discovered batches become available progressively.
+- VOD is shown in main navigation only when at least one movie or series is available. Movies-only or TV-shows-only providers show the relevant area.
+- **Settings → VOD** displays catalogue status and loaded title counts, offers manual refresh, and controls the automatic refresh interval: **Manual only, 12 hours, 24 hours (default), 48 hours, or 7 days**.
+- Cached catalogue metadata reduces repeated downloads; a live provider connection may still be required to start playback.
 
-**Note:** This release includes Now Playing and Up Next information, not a full interactive TV-guide grid.
+**Limitations:** Xtream API response sizes, provider category responses and available metadata can affect catalogue completeness. M3U entries do not necessarily include sufficient information to identify series, seasons or episodes; a video-file entry may appear as a standalone title. Large-library loading and compatibility vary by provider.
 
-**Channel search**
-- Press **Triangle (△)** in IPTV to open channel search.
-- Search across Emby Live TV, Xtream IPTV, and custom channel categories.
-- Case-insensitive matching.
-- Partial channel-name matching.
-- Search all loaded channels regardless of the currently selected category.
-- Return to normal channel browsing using **Circle (○)**.
+### Settings and Persistence
 
-**Accelerated channel scrolling**
-- Hold **Up or Down** while browsing channels to increase navigation speed.
-- Normal navigation during the first second.
-- Progressive acceleration after the first second.
-- Maximum scrolling speed of **5×** after approximately four seconds.
-- Releasing the button immediately resets scrolling speed.
-- Works across Emby, Xtream, and custom channel categories.
+Settings are organised into tiles: **Accounts & Servers, Playback, Discover/Seerr, Live TV, VOD, and Appearance & About**.
 
-The IPTV channel list also displays **11 visible channels instead of 12** to prevent channel text from overlapping the EPG information.
-
-#### IPTV Controller Navigation
-
-| Button | Action |
-| --- | --- |
-| **Up** | From the first channel, focus the category selector |
-| **Left / Right** | Change the selected category |
-| **X** | Cycle categories when the category selector is focused |
-| **Down** | Return to the channel list |
-| **X** | Start playback when a channel is selected |
-| **Triangle** | Open IPTV-wide channel search |
-| **Circle** | Close channel search and return to browsing |
-| **Hold Up / Down** | Accelerate channel scrolling up to 5× |
-
-#### Custom Category Management
-
-Manage custom categories under **Settings → IPTV**.
-
-| Button | Action |
-| --- | --- |
-| **Triangle** | Open channel-name search |
-| **Square** | Clear the search |
-| **X** | Assign or remove a channel from the selected category |
-
-IPTV browsing, custom categories, and live playback have been tested on PS5. Compatibility with individual providers and streams may vary.
-
-**Important:** Emby5 does not supply IPTV channels, subscriptions, or credentials. A legitimate IPTV provider account is required.
+- Existing options remain available within their categories, including intro skipping, autoplay, Night Mode, Are You Still Watching?, refresh rate, themes and provider configuration.
+- Settings are saved locally and restored across application restarts and normal folder-based updates.
+- Live TV and VOD maintain separate catalogue caches; changing an item in Settings does not require downloading those catalogues again.
+- Avoid deleting application data when updating, or saved preferences and catalogues may be lost.
 
 ### Visual Themes
 
-Customize the appearance of Emby5 through **Settings → Theme**.
+Customize the appearance of Emby5 through **Settings → Appearance & About**.
 
 Emby5 includes **31 selectable themes**:
 
@@ -343,8 +303,9 @@ The following limitations relate to the PS5 platform, the homebrew environment, 
 **Application limitations**
 - Emby5 cannot terminate itself. Use the PS button to close it.
 - Subtitle appearance customization depends on the subtitle format and is not available for all bitmap subtitle types.
-- Preferred audio-language and subtitle-language selectors are not included.
+- Separate preferred audio-language and subtitle-language selectors are not included; automatic subtitle selection follows supported Emby server preferences.
 - EPG depends on the channel provider supplying programme information; a full interactive TV-guide grid is not included.
+- The completeness and playback compatibility of third-party IPTV/VOD catalogues depends on the provider and source format.
 
 ---
 
@@ -359,13 +320,13 @@ Emby5 is designed for navigation using the DualSense controller.
 | **D-pad** | Navigate | Show controls; Left/Right seek |
 | **L1 / R1** | Previous / next tab | Seek backward / forward |
 | **L2 / R2** | Previous / next A–Z letter | Adaptive rewind / fast-forward |
-| **Triangle** | Search | Episodes |
+| **Triangle** | Search in Live TV/VOD where available | Episodes |
 | **Square** | Sort and filter | Audio and subtitle selection |
 | **Options** | Item options | Playback controls |
 | **Touchpad** | Now Playing while music plays | Playback controls |
 | **L3** | — | Playback information |
 
-Some buttons have additional functions within the IPTV interface and its category-management screens.
+Live TV uses Left/Right to browse channels within a group and Up/Down to move between group rows. Triangle opens Live TV or VOD search when supported. Some buttons have additional functions in custom-group management.
 
 ---
 
@@ -402,7 +363,7 @@ After transferring, confirm that the installed application files have the requir
 
 3. **Do not delete the existing application directory or persistent data unless specifically necessary.**
 
-Account information, local settings, and Seerr configuration are stored separately from the installed application files and are intended to be retained across normal folder-based updates.
+Account information, local settings, Seerr configuration, and catalogue caches are stored separately from the installed application files and are intended to be retained across normal folder-based updates.
 
 ---
 
