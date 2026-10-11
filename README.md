@@ -42,7 +42,6 @@ Emby5 provides a native, GPU-rendered interface designed for navigating your Emb
 - Tile-based Settings screen for Accounts & Servers, Playback, Discover/Seerr, Live TV, VOD, Appearance & About, and System.
 - Local storage for saved accounts and application settings.
 
-**Note:** Some artwork may be unavailable or fail to load for particular items or libraries, depending on the Emby server and image-handling behavior.
 
 ### Servers and Accounts
 
