@@ -1,3 +1,4 @@
+
 ![Emby5 Home Screen](docs/emby5-home.jpg)
 
 # Emby5 for PS5
@@ -12,7 +13,7 @@ Emby5 is an unofficial native Emby client for homebrew-capable PlayStation 5 con
 
 **Contents:** [Features](#features) · [Live TV](#live-tv--emby-xtream-and-m3um3u8) · [VOD](#video-on-demand-vod) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
 
---- 
+---
 
 ## Features
 
@@ -243,6 +244,55 @@ Settings are organised into tiles: **Accounts & Servers, Playback, Discover/Seer
 - Live TV and VOD maintain separate catalogue caches; changing an item in Settings does not require downloading those catalogues again.
 - Avoid deleting application data when updating, or saved preferences and catalogues may be lost.
 
+### Persistent Storage
+
+Emby5 uses a dedicated application data directory to keep saved configuration, accounts, and cached content separate from the installed application files.
+
+**Application data location:** `/data/Emby5/`
+
+The storage directory is organized as follows:
+
+```text
+/data/Emby5/
+├── config/
+│   ├── accounts.json
+│   ├── settings.json
+│   ├── iptv-categories-*.json
+│   └── Other application configuration
+├── cache/
+│   └── images/
+└── logs/
+```
+
+**Configuration and saved data**
+- Emby server connections, saved accounts, and authentication details.
+- IPTV provider settings, Xtream credentials, and M3U playlist configurations.
+- Custom Live TV categories and channel organization.
+- Live TV and VOD catalogue metadata and locally stored catalogue state.
+- Seerr connection and account configuration.
+- Playback preferences, screen modes, audio settings, and upscaling choices.
+- Visual themes and other application preferences.
+
+**Cached content**
+- Downloaded posters, thumbnails, and other artwork are stored in `cache/images/`.
+- Live TV and VOD may maintain additional disk-backed catalogue data within the application's configuration storage.
+- Rebuildable caches can be refreshed without changing the saved server and provider configuration.
+
+**Diagnostic storage**
+- The `logs/` directory is reserved for application diagnostics.
+
+**Storage and updates**
+
+Emby5's application files are installed separately at:
+
+`/data/homebrew/PPSA99515/`
+
+Saved application data remains under `/data/Emby5/`, allowing normal application-file updates and reinstalls to preserve accounts, preferences, and cached information without replacing the data directory.
+
+Emby5 requires writable access to `/data/` through a compatible PS5 homebrew environment. The storage directory must remain available for settings to be loaded and saved.
+
+**Important:** Keep `/data/Emby5/` intact when updating or reinstalling the application. Deleting this directory removes locally saved settings, account information, and cached data.
+
 ### Visual Themes
 
 Customize the appearance of Emby5 through **Settings → Appearance & About**.
@@ -284,7 +334,7 @@ See [docs/THEME_PRESETS.md](docs/THEME_PRESETS.md) for additional information.
 
 ## HDMI Audio Bitstream
 
-Emby5 1.0.0 includes optional HDMI bitstream handling for compatible audio streams.
+Emby5 includes optional HDMI bitstream handling for compatible audio streams.
 
 | Format | Description |
 | --- | --- |
@@ -358,7 +408,7 @@ Live TV uses Left/Right to browse channels within a group and Up/Down to move be
 
    `/data/homebrew/PPSA99515/eboot.bin`
 
-5. If required by your ShadowMountPlus setup, set the `PPSA99515/` directory and its contents recursively to permission **777**.
+5. Ensure the PS5 homebrew environment provides the application with writable access to `/data/`.
 6. Allow ShadowMountPlus approximately **15 seconds** to discover the application. If it does not appear, redeploy ShadowMountPlus and allow it to scan `/data/homebrew/` again.
 
 ### File Transfer Recommendation
@@ -366,8 +416,6 @@ Live TV uses Left/Right to browse channels within a group and Up/Down to move be
 During development and testing, **PS5Upload caused problems with transferred application files and permissions**.
 
 For manual transfers, [ps5-web-file-manager by owendswang](https://github.com/owendswang/ps5-web-file-manager) or another compatible file-management tool is recommended.
-
-After transferring, confirm that the installed application files have the required **0777 permissions** for your homebrew environment.
 
 ---
 
@@ -378,11 +426,11 @@ After transferring, confirm that the installed application files have the requir
 
    `/data/homebrew/PPSA99515/`
 
-3. **Do not delete the existing application directory or persistent data unless specifically necessary.**
+3. **Preserve `/data/Emby5/` when updating or reinstalling.**
 
 Account information, local settings (including screen mode and upscaling choices), Seerr configuration, and catalogue caches are stored separately from the installed application files and are intended to be retained across normal folder-based updates.
 
-Emby5 1.2.2 does **not** install updates automatically. Download and copy release files manually; preserve the existing saved-data directory.
+Emby5 does **not** install updates automatically. Download and copy release files manually, preserving the existing application data directory.
 
 ---
 
