@@ -70,8 +70,8 @@ typedef struct {
 } evo_vdec_open_params;
 
 /* Preload the native backend's system module (libSceVideodec2, sysmodule 207).
- * MUST be called from main() BEFORE the first evo_jailbreak_self() — the
- * self-unjail's mid-run credential swap makes the module load fail
+ * MUST be called from main() BEFORE the first storage initialization — the
+ * storage availability's mid-run filesystem availability makes the module load fail
  * (docs/evo-pro/status.md, 2026-09-03). No-op returning 0 on host + payload
  * builds. Returns 1 if native decode may be available this session — the
  * caller then requests EVO_VDEC_BACKEND_NATIVE; evo_vdec_open() still falls

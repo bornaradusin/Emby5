@@ -22,7 +22,7 @@ extern "C" {
 #if defined(EVO_APP_MODULE)
 
 /* Pre-unjail slot, next to evo_keyboard_ime_probe(): sceSysmoduleLoadModule
- * stops working after evo_jailbreak_self(), so the dialog's module has to be
+ * stops working after storage initialization, so the dialog's module has to be
  * loaded there even though nothing opens it until much later. */
 void evo_webui_preload(void);
 

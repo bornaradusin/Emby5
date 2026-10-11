@@ -1,19 +1,16 @@
-
 ![Emby5 Home Screen](docs/emby5-home.jpg)
 
 # Emby5 for PS5
 
 **A native Emby media client for homebrew-enabled PlayStation 5 consoles.**
 
-**Emby Libraries · Native PS5 Playback · FSR 1 / Anime4K · Live TV · M3U/Xtream · VOD · 31 Visual Themes**
+**Emby Libraries · Native PS5 Playback · Live TV · M3U/Xtream · VOD · 31 Visual Themes**
 
 Emby5 is an unofficial native Emby client for homebrew-capable PlayStation 5 consoles, derived from [Jelly5 by 02dnot](https://github.com/02dnot/Jelly5).
 
 ---
 
-
-**Contents:** [Features](#features) · [Live TV](#live-tv--emby-xtream-and-m3um3u8) · [VOD](#video-on-demand-vod) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Downloads](https://github.com/bornaradusin/Emby5/releases) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
-
+**Contents:** [Features](#features) · [Live TV](#live-tv--emby-xtream-and-m3um3u8) · [VOD](#video-on-demand-vod) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
 
 ---
 
@@ -41,9 +38,10 @@ Emby5 provides a native, GPU-rendered interface designed for navigating your Emb
 - Library sorting, filtering, favourites, and watched/unwatched status.
 - A–Z library navigation.
 - Artwork and backdrop loading, including placeholder rendering.
-- Tile-based Settings screen for Accounts & Servers, Playback, Discover/Seerr, Live TV, VOD, Appearance & About, and System.
+- Tile-based Settings screen for Accounts & Servers, Playback, Discover/Seerr, Live TV, VOD, and Appearance & About.
 - Local storage for saved accounts and application settings.
 
+**Note:** Some artwork may be unavailable or fail to load for particular items or libraries, depending on the Emby server and image-handling behavior.
 
 ### Servers and Accounts
 
@@ -71,15 +69,6 @@ Emby5 uses a native PS5 playback engine with hardware video decoding.
 - Media-source/version selection when multiple versions are available.
 - **AV1 direct-play capability advertised to Emby for streams up to 4K, 10-bit, and 30 fps**, using the existing FFmpeg AV1 decoder.
 
-**Video upscaling and screen modes**
-- **FSR 1 and Anime4K** GPU upscaling for compatible video sources.
-- **Auto** is the default upscaling mode; Off, FSR 1, and Anime4K can also be selected.
-- Switch upscaling modes directly from the in-player controls.
-- Choose **Fit Screen** (preserve aspect ratio), **Fill Screen** (fill the display with cropping), or **Stretch** (fill the display without preserving aspect ratio) from the player.
-- The selected screen mode is saved in local settings and restored for later videos and application launches.
-- Improved scratch-memory allocation for higher-resolution playback, including 1080p video displayed at 4K output resolution.
-- GPU scratch buffers are released when the player closes, after pending GPU work is finished, to improve availability for the next video.
-
 **Playback controls**
 - Audio-track and subtitle-track selection.
 - Playback speed options: **0.75×, 1×, 1.25×, 1.5×, and 2×**.
@@ -91,9 +80,9 @@ Emby5 uses a native PS5 playback engine with hardware video decoding.
 **Playback information and continuity**
 - Playback progress, resume, and watched-state reporting.
 - Automatic reconnection attempts after some network or stream interruptions.
-- Playback information accessible through **L3**, including available codec, delivery, buffering, and active upscaling details.
+- Playback information accessible through **L3**, including available codec, delivery, and buffering details.
 
-**Note:** Playback speeds and audio handling may be limited by the selected output mode. Automatic recovery is not guaranteed for every connection failure. AV1 software-decoding performance depends on the video and PS5 playback environment. GPU upscaling support varies by source format and output path; the upscaler is not an HDR conversion feature. Scratch allocation can still fail under GPU memory pressure.
+**Note:** Playback speeds and audio handling may be limited by the selected output mode. Automatic recovery is not guaranteed for every connection failure. AV1 software-decoding performance depends on the video and PS5 playback environment.
 
 ### Intros, Credits, and Episodes
 
@@ -167,6 +156,7 @@ Subtitle delay adjustments apply to the current playback session. Appearance cus
 Browse and play music from your Emby library.
 
 - Artist, album, and playlist browsing.
+- Music playback while navigating the application.
 - Mini player and Now Playing screen.
 - Playback queue navigation.
 - Shuffle and repeat.
@@ -213,8 +203,6 @@ Emby5 1.2.0 replaces the older IPTV list with a **Home-style Live TV screen**. C
 - Navigate **Left/Right** across channels in a row and **Up/Down** between rows.
 - Press **X** to play the focused channel and **Triangle** to search loaded Live TV channels by name; **Circle** exits search.
 - Custom category creation, channel assignments and ordering are managed from the **Live TV** Settings tile.
-- In the custom-category channel picker, hold **Up/Down** to accelerate scrolling: approximately **3 channels per repeat** after one second and **8 per repeat** after two seconds.
-- Use **L1/R1** in the channel picker to jump **20 channels** backward or forward.
 - EPG availability and stream compatibility depend on the provider; there is no complete interactive EPG grid.
 
 **Note:** Emby5 does not provide channels, IPTV subscriptions, playlists, or credentials. Use sources you are entitled to access.
@@ -236,63 +224,12 @@ Emby5 1.2.0 adds a dedicated **VOD** section for supported Xtream catalogues and
 
 ### Settings and Persistence
 
-Settings are organised into tiles: **Accounts & Servers, Playback, Discover/Seerr, Live TV, VOD, Appearance & About, and System**.
+Settings are organised into tiles: **Accounts & Servers, Playback, Discover/Seerr, Live TV, VOD, and Appearance & About**.
 
 - Existing options remain available within their categories, including intro skipping, autoplay, Night Mode, Are You Still Watching?, refresh rate, themes and provider configuration.
-- **System** includes a **What's New** window showing release highlights. It does not include automatic update installation.
-- Video upscaling and screen-mode choices are stored locally; screen-mode choices are restored across videos and application restarts.
 - Settings are saved locally and restored across application restarts and normal folder-based updates.
 - Live TV and VOD maintain separate catalogue caches; changing an item in Settings does not require downloading those catalogues again.
 - Avoid deleting application data when updating, or saved preferences and catalogues may be lost.
-
-### Persistent Storage
-
-Emby5 uses a dedicated application data directory to keep saved configuration, accounts, and cached content separate from the installed application files.
-
-**Application data location:** `/data/Emby5/`
-
-The storage directory is organized as follows:
-
-```text
-/data/Emby5/
-├── config/
-│   ├── accounts.json
-│   ├── settings.json
-│   ├── iptv-categories-*.json
-│   └── Other application configuration
-├── cache/
-│   └── images/
-└── logs/
-```
-
-**Configuration and saved data**
-- Emby server connections, saved accounts, and authentication details.
-- IPTV provider settings, Xtream credentials, and M3U playlist configurations.
-- Custom Live TV categories and channel organization.
-- Live TV and VOD catalogue metadata and locally stored catalogue state.
-- Seerr connection and account configuration.
-- Playback preferences, screen modes, audio settings, and upscaling choices.
-- Visual themes and other application preferences.
-
-**Cached content**
-- Downloaded posters, thumbnails, and other artwork are stored in `cache/images/`.
-- Live TV and VOD may maintain additional disk-backed catalogue data within the application's configuration storage.
-- Rebuildable caches can be refreshed without changing the saved server and provider configuration.
-
-**Diagnostic storage**
-- The `logs/` directory is reserved for application diagnostics.
-
-**Storage and updates**
-
-Emby5's application files are installed separately at:
-
-`/data/homebrew/PPSA99515/`
-
-Saved application data remains under `/data/Emby5/`, allowing normal application-file updates and reinstalls to preserve accounts, preferences, and cached information without replacing the data directory.
-
-Emby5 requires writable access to `/data/` through a compatible PS5 homebrew environment. The storage directory must remain available for settings to be loaded and saved.
-
-**Important:** Keep `/data/Emby5/` intact when updating or reinstalling the application. Deleting this directory removes locally saved settings, account information, and cached data.
 
 ### Visual Themes
 
@@ -326,7 +263,7 @@ See [docs/THEME_PRESETS.md](docs/THEME_PRESETS.md) for additional information.
 - DualSense light-bar integration.
 - HDMI Device Link / HDMI-CEC input handling where supported.
 - Optional 120 Hz UI output on compatible displays and PS5 configurations.
-- Folder-based homebrew installation and **manual updating**.
+- Folder-based homebrew installation and updating.
 - Optional GitHub update checking for `bornaradusin/Emby5`.
 
 **Note:** Hardware-dependent features may behave differently across PS5 firmware versions and homebrew environments.
@@ -335,7 +272,7 @@ See [docs/THEME_PRESETS.md](docs/THEME_PRESETS.md) for additional information.
 
 ## HDMI Audio Bitstream
 
-Emby5 includes optional HDMI bitstream handling for compatible audio streams.
+Emby5 1.0.0 includes optional HDMI bitstream handling for compatible audio streams.
 
 | Format | Description |
 | --- | --- |
@@ -364,7 +301,6 @@ The following limitations relate to the PS5 platform, the homebrew environment, 
 - Native stereoscopic 3D output is not supported. Side-by-side and top-and-bottom 3D content is rejected by the application.
 
 **Application limitations**
-- Automatic update download and installation are not included. Release ZIPs must be installed manually.
 - Emby5 cannot terminate itself. Use the PS button to close it.
 - Subtitle appearance customization depends on the subtitle format and is not available for all bitmap subtitle types.
 - Separate preferred audio-language and subtitle-language selectors are not included; automatic subtitle selection follows supported Emby server preferences.
@@ -390,11 +326,7 @@ Emby5 is designed for navigation using the DualSense controller.
 | **Touchpad** | Now Playing while music plays | Playback controls |
 | **L3** | — | Playback information |
 
-Live TV uses Left/Right to browse channels within a group and Up/Down to move between group rows. Triangle opens Live TV or VOD search when supported.
-
-**Custom IPTV categories:** Hold Up/Down in the channel picker to scroll progressively faster, or press **L1/R1** to jump 20 channels backward or forward. These shortcuts apply to category editing; in other menus L1/R1 retains its usual behavior.
-
-**In the player:** Use the on-screen **Upscaling** control to change enhancement modes and **Screen** to cycle through Fit Screen, Fill Screen, and Stretch. Screen-mode changes are saved for future playback.
+Live TV uses Left/Right to browse channels within a group and Up/Down to move between group rows. Triangle opens Live TV or VOD search when supported. Some buttons have additional functions in custom-group management.
 
 ---
 
@@ -409,7 +341,7 @@ Live TV uses Left/Right to browse channels within a group and Up/Down to move be
 
    `/data/homebrew/PPSA99515/eboot.bin`
 
-5. Ensure the PS5 homebrew environment provides the application with writable access to `/data/`.
+5. If required by your ShadowMountPlus setup, set the `PPSA99515/` directory and its contents recursively to permission **777**.
 6. Allow ShadowMountPlus approximately **15 seconds** to discover the application. If it does not appear, redeploy ShadowMountPlus and allow it to scan `/data/homebrew/` again.
 
 ### File Transfer Recommendation
@@ -417,6 +349,8 @@ Live TV uses Left/Right to browse channels within a group and Up/Down to move be
 During development and testing, **PS5Upload caused problems with transferred application files and permissions**.
 
 For manual transfers, [ps5-web-file-manager by owendswang](https://github.com/owendswang/ps5-web-file-manager) or another compatible file-management tool is recommended.
+
+After transferring, confirm that the installed application files have the required **0777 permissions** for your homebrew environment.
 
 ---
 
@@ -427,11 +361,9 @@ For manual transfers, [ps5-web-file-manager by owendswang](https://github.com/ow
 
    `/data/homebrew/PPSA99515/`
 
-3. **Preserve `/data/Emby5/` when updating or reinstalling.**
+3. **Do not delete the existing application directory or persistent data unless specifically necessary.**
 
-Account information, local settings (including screen mode and upscaling choices), Seerr configuration, and catalogue caches are stored separately from the installed application files and are intended to be retained across normal folder-based updates.
-
-Emby5 does **not** install updates automatically. Download and copy release files manually, preserving the existing application data directory.
+Account information, local settings, Seerr configuration, and catalogue caches are stored separately from the installed application files and are intended to be retained across normal folder-based updates.
 
 ---
 

@@ -8,8 +8,7 @@
  * Norwegian (logged once), so nothing goes blank. English is in i18n.cpp, the
  * others in i18n_<code>.cpp.
  *
- * The language follows the PS5's system language (English for one Emby5 does
- * not have) unless Innstillinger -> Språk picks one.
+ * The PS5 console language is used. Unsupported values fall back to English.
  */
 #pragma once
 
@@ -17,14 +16,9 @@
 
 namespace i18n {
 
-enum class Lang { Norwegian, English, Spanish, French, German, Portuguese, Italian };
-/* The setting: Auto, or a language (Lang + 1). */
-enum Choice { Auto = 0, Norwegian = 1, English = 2, ChoiceCount = 8 };
-/* A choice's name in its own language ("Español"); Auto's is empty. */
-const char *choice_name(int choice);
-
-/* Applies the setting (Auto reads the system language). */
-void set_choice(int choice);
+enum class Lang { English, Japanese, FrenchFrance, FrenchCanada, SpanishSpain, SpanishLatam, German, Italian, PortuguesePortugal, PortugueseBrazil, Dutch, Russian, Korean, ChineseSimplified, ChineseTraditional, Polish, Danish, Swedish, Norwegian, Finnish, Turkish, Arabic, Czech, Greek, Hungarian, Romanian, Thai, Indonesian, Vietnamese, Ukrainian, Croatian, SerbianCyrillic };
+/* Called once after system services initialize. No manual override exists. */
+void use_ps5_system_language();
 Lang lang();
 /* Not Norwegian: what is outside the tables (dates, genre and language names)
  * is then English. */

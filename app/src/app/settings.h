@@ -4,7 +4,7 @@
  *
  * Settings. Subtitle mode and autoplay live on the Emby account;
  * console-side preferences (quality
- * cap, automatic intro skipping, language, subtitle look) live in
+ * cap, automatic intro skipping, subtitle look) live in
  * the Emby5 persistent data store.
  */
 #pragma once
@@ -21,7 +21,6 @@ struct Local {
     bool autoplay_next_override = false;
     int theme = 0;             /* Glass or one of 30 native AGC palette presets */
     int still_watching = 0;  /* 0 off, 1 after 3 autoplayed episodes, 2 after 2 hours */
-    int language = 0;            /* i18n::Choice: 0 follow the PS5, 1 Norsk, 2 English */
     /* How text subtitles look (set in Innstillinger or in the player). */
     int sub_size = 100;          /* % */
     float sub_offset = 0;        /* % of the height, lift from the bottom */
@@ -33,8 +32,6 @@ struct Local {
     bool night_mode = false;     /* compress loud and quiet together, dialogue lifted */
     bool hdmi_bitstream = false; /* Dolby Digital (Plus) and DTS to the TV/receiver undecoded (jelly5_bitstream) */
     bool theme_music = true;     /* a title's theme song, quietly, on its page */
-    bool auto_download_updates = false; /* requires update checking to be enabled */
-    bool check_updates = false;  /* opt-in: ask GitHub for a newer release at start */     /* the display at 120 Hz when it can (smoother menus, 24p without judder) */
 };
 
 struct All {

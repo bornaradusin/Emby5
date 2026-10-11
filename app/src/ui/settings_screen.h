@@ -30,7 +30,7 @@ public:
         ThemeMusic,
         SeerrOn, SeerrUrl, SeerrAuth, SeerrAccount, SeerrTest,
         EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, M3UUrl, IPTVSummary, VODStatus, VODInterval, VODRefresh, IPTVCategories,
-        AppLanguage, Theme, Refresh, Together, ServerInfo, About, Updates, AutoDownload, CheckNow, InstallNow, UpdateNotes, RemindLater, UpdateStatus, AppVersion, RowCount
+        Theme, Refresh, Together, ServerInfo, About, UpdateNotes, AppVersion, RowCount
     };
     explicit SettingsScreen(jf::Client &client) : m_client(client) {}
     ~SettingsScreen() override;   /* the keyboard's callback points here */

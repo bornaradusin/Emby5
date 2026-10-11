@@ -21,7 +21,7 @@
  * lands (#41 section 4); AV1 has no sceVideodec2 route at all.
  *
  * RESIDENT DECODERS — historical context and on-demand lifecycle.
- * The original claim (2026-09-03) that the mid-run credential swap breaks
+ * The original claim (2026-09-03) that the mid-run filesystem availability breaks
  * libSceVideodec2 (0x811D0111) and prevents lazy per-playback creation was
  * disproven on 2026-09-24. Hardware measurements with AUTHZ and LATE CREATE
  * probes confirmed that complete decoder bring-up (AllocateComputeQueue,
@@ -385,7 +385,7 @@ static void note(const char *fmt, ...)
      * unobservable.
      *
      * evo_vdec_native_probe() runs PRE-UNJAIL, and evo_boot_log only buffers in
-     * memory until /mnt/usb0 opens after evo_jailbreak_self(). So a fault
+     * memory until /mnt/usb0 opens after storage initialization. So a fault
      * anywhere inside a bring-up takes every line describing where it got to
      * down with it: "crashed pre-log", which is exactly how the 2026-09-10
      * attempt presented. The kernel writes klog straight through, so it
@@ -519,7 +519,7 @@ static int slot_renew_decoder(struct dec_slot *s)
 
 /* Full bring-up for `d`'s decoder at (w x h). Returns 0 on success with
  * everything stored in `*s`; non-zero rc (and `*s` left torn down) on any
- * failure. Safe before or after evo_jailbreak_self(). */
+ * failure. Safe before or after storage initialization. */
 /*
  * Test-only overrides for the decoder configuration: the payload's
  * /data/nuvio/vdec.conf, fetched by the player at each playback start into

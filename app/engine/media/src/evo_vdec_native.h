@@ -29,7 +29,7 @@ typedef struct evo_vdec_native evo_vdec_native;
 
 /*
  * Preload libSceVideodec2 (sysmodule 207). MUST be called from main() BEFORE
- * the first evo_jailbreak_self() — the self-unjail's mid-run credential swap
+ * the first storage initialization — the storage availability's mid-run filesystem availability
  * makes sceSysmoduleLoadModule(207) return ESDKVERSION and the module never
  * finishes loading (docs/evo-pro/status.md, 2026-09-03). Idempotent.
  *   1 => native decode may be available this session

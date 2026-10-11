@@ -16,8 +16,8 @@
  * the library, not a replacement for it.
  *
  * Lifetime mirrors evo_vdec_native: the sysmodule load and library init happen
- * once in evo_adec_native_probe(), which must run BEFORE evo_jailbreak_self()
- * because the credential swap that makes libSceVideodec2 calls fail applies
+ * once in evo_adec_native_probe(), which must run BEFORE storage initialization
+ * because the filesystem availability that makes libSceVideodec2 calls fail applies
  * here too. The per-stream decoder handle is created on open, deleted on close.
  */
 

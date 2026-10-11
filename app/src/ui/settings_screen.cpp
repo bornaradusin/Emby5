@@ -20,6 +20,7 @@
 #include "platform/ime.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <thread>
 
 #ifndef EMBY5_VERSION
@@ -53,7 +54,7 @@ int section_of(int row)
            : row <= SettingsScreen::SeerrTest  ? 2
            : row >= SettingsScreen::VODStatus && row <= SettingsScreen::VODRefresh ? 6
            : row <= SettingsScreen::IPTVCategories ? 3
-           : row >= SettingsScreen::Updates ? 7
+           : row >= SettingsScreen::UpdateNotes ? 7
            : row == SettingsScreen::About ? 4 : 4;
 }
 
@@ -62,7 +63,7 @@ bool adjustable(int r)
 {
     return (r >= SettingsScreen::Quality && r <= SettingsScreen::ThemeMusic) || r == SettingsScreen::SeerrOn ||
            r == SettingsScreen::SeerrAuth || r == SettingsScreen::VODInterval ||
-           (r >= SettingsScreen::AppLanguage && r <= SettingsScreen::Refresh) || (r == SettingsScreen::Updates || r == SettingsScreen::AutoDownload);
+           (r == SettingsScreen::Theme || r == SettingsScreen::Refresh);
 }
 
 const char *auth_name(seerr_service::Auth a)
@@ -106,20 +107,12 @@ const char *label_of(int row)
                                          "VOD automatic refresh",
                                          "Refresh VOD now",
                                          "Manage IPTV categories",
-                                         T("Språk"),
                                          "Theme",
                                          T("Bildefrekvens"),
                                          T("Se sammen"),
                                          "Server",
                                          T("Om Emby5"),
-                                         "Check for updates at startup",
-                                         "Download updates automatically",
-                                         "Check for updates now",
-
-                                         "Install update",
-                                         "What's new",
-                                         "Later",
-                                         "Update status",
+                                         "What's New",
                                          "Installed version"};
     return labels[row];
 }
@@ -157,8 +150,7 @@ bool SettingsScreen::shown(int r) const
     /* SyncPlay is Jellyfin-specific and remains hidden in the Emby port.
      * Seerr is supported by current Seerr releases for Emby, so expose the
      * existing native Seerr settings and request/discovery UI. */
-    if (r == Together)
-        return false;
+    if (r == Together) return false;
     return true;
 }
 
@@ -242,11 +234,6 @@ std::string SettingsScreen::value(Row r) const
         return s.local.max_mbps == 0 ? T("Automatisk (maks)") : std::to_string(s.local.max_mbps) + " Mbit/s";
     case SubMode: return T(kModes[index_of(kModes, s.server.subtitle_mode)].name);
     case Theme: return theme_name(s.local.theme);
-    case AppLanguage: {   /* each language in its own name */
-        if (s.local.language > i18n::Auto)
-            return i18n::choice_name(s.local.language);
-        return std::string(T("Automatisk")) + " (" + i18n::choice_name((int)i18n::lang() + 1) + ")";
-    }
     case SubSize: return std::to_string(s.local.sub_size) + " %";
     case SubBackground:
         return s.local.sub_background < 0.05f ? std::string(T("Av"))
@@ -259,15 +246,13 @@ std::string SettingsScreen::value(Row r) const
     case Bitstream:   /* night mode needs the sound decoded here, so it wins */
         return !s.local.hdmi_bitstream ? T("Av") : s.local.night_mode ? T("Av med nattmodus") : T("På");
     case ThemeMusic: return s.local.theme_music ? T("På") : T("Av");
-    case Updates: return s.local.check_updates ? "On" : "Off";
-    case AutoDownload: return s.local.auto_download_updates ? "On" : "Off";
-    case CheckNow: return "X to check GitHub Releases";
-
-    case InstallNow: { const auto u=update_service::snapshot(); return u.installing?"Starting installer...":u.downloading?"Downloading and verifying...":u.staged?"X to install verified update":"X to download and install update"; }
-    case UpdateNotes: { const auto u=update_service::snapshot(); return u.notes.empty()?"Check for updates first":"X to read release notes"; }
-    case RemindLater: return "X to dismiss update reminder";
-    case UpdateStatus: { const auto u=update_service::snapshot(); return u.message.empty()?"Not checked yet":u.message; }
-    case AppVersion: return EMBY5_VERSION;
+    case UpdateNotes: { const auto u=update_service::snapshot(); return u.notes.empty()?"Release notes unavailable":"X to read release notes"; }
+    case AppVersion: {
+        int major = 0, minor = 0, patch = 0;
+        if (std::sscanf(EMBY5_VERSION, "%d.%d.%d", &major, &minor, &patch) == 3)
+            return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
+        return EMBY5_VERSION;
+    }
     case AudioDelay:
         return s.local.audio_delay_ms == 0 ? std::string(T("Ingen"))
                                            : (s.local.audio_delay_ms > 0 ? "+" : "") + std::to_string(s.local.audio_delay_ms) + " ms";
@@ -367,15 +352,6 @@ void SettingsScreen::change(Row r, int dir)
         s.local.theme_music = !s.local.theme_music;
         settings::set_local(s.local);
         break;
-    case Updates:
-        s.local.check_updates = !s.local.check_updates;
-        settings::set_local(s.local);
-        break;
-    case AutoDownload:
-        s.local.auto_download_updates = !s.local.auto_download_updates;
-        if(s.local.auto_download_updates)s.local.check_updates=true;
-        settings::set_local(s.local);
-        break;
     case AudioDelay:   /* 20 ms steps: a soundbar's delay is typically 40-200 ms */
         s.local.audio_delay_ms = std::max(-500, std::min(500, s.local.audio_delay_ms + dir * 20));
         settings::set_local(s.local);
@@ -400,11 +376,6 @@ void SettingsScreen::change(Row r, int dir)
     case Theme:
         s.local.theme = cycle(s.local.theme, kThemeCount);
         settings::set_local(s.local);
-        break;
-    case AppLanguage:
-        s.local.language = cycle(s.local.language, i18n::ChoiceCount);   /* Automatisk, then each language */
-        settings::set_local(s.local);
-        i18n::set_choice(s.local.language);
         break;
     case SubMode:
         s.server.subtitle_mode = kModes[cycle(index_of(kModes, s.server.subtitle_mode), kNumModes)].code;
@@ -454,7 +425,7 @@ Action SettingsScreen::input(uint32_t p)
         if(p & NUVIO_BTN_DOWN) m_tile=std::min(6,m_tile+2);
         if(p & NUVIO_BTN_CIRCLE) a.kind=Action::ToNav;
         if(p & NUVIO_BTN_CROSS) {
-            const int first[]={SwitchUser,Quality,SeerrOn,EmbyLive,VODStatus,AppLanguage,Updates};
+            const int first[]={SwitchUser,Quality,SeerrOn,EmbyLive,VODStatus,Theme,UpdateNotes};
             m_section=m_tile==4?6:(m_tile==5?4:(m_tile==6?7:m_tile));
             m_row=first[m_tile];m_scroll.snap(0);m_tiles=false;
         }
@@ -508,14 +479,10 @@ Action SettingsScreen::input(uint32_t p)
         else if (m_row == IPTVServer || m_row == IPTVUsername || m_row == IPTVPassword)
             iptv_edit((Row)m_row);
         else if (m_row == VODRefresh) iptv_vod::refresh(true);
-        else if (m_row == CheckNow) update_service::check();
-
-        else if (m_row == InstallNow) update_service::download_and_install();
         else if (m_row == UpdateNotes) {
             m_notes_open = true;
             m_notes_scroll = 0;
         }
-        else if (m_row == RemindLater) update_service::later();
         else if (m_row == IPTVCategories)
             iptv_open_categories();
         else if (m_row == SeerrAccount)
@@ -691,15 +658,15 @@ void SettingsScreen::draw(double, float dt)
     if (seerr_state == seerr_service::State::Connecting || seerr_service::snapshot().testing)
         m_animating = true;
     { const auto update=update_service::snapshot();
-      if(update.checking || update.downloading || update.installing) m_animating=true; }   /* the values change on their own */
+      if(update.checking) m_animating=true; }   /* the values change on their own */
     if (!shown(m_row))
-        m_row = m_section==6?VODStatus:(m_section==7?Updates:SeerrOn);      /* turned off under the focus */
+        m_row = m_section==6?VODStatus:(m_section==7?UpdateNotes:SeerrOn);      /* turned off under the focus */
     gfx::fill({0, 0, gfx::W, gfx::H}, kBg);
     gfx::fill_vgradient({0, 0, gfx::W, 500}, 0x33302048u, 0x00000000u);
     if (m_tiles) {
         gfx::text(300,205,"Settings",{gfx::Bold,64},kText);
         const char *names[]={"Accounts & Servers","Playback","Discover / Seerr","Live TV","VOD","Appearance & About","System"};
-        const char *sub[]={"Accounts, sign out","Audio, video, subtitles","Seerr connection","Xtream, M3U, groups","Cache, refresh, loading","Themes, display, language","Updates and application info"};
+        const char *sub[]={"Accounts, sign out","Audio, video, subtitles","Seerr connection","Xtream, M3U, groups","Cache, refresh, loading","Themes and display","Release notes and installed version"};
         for(int i=0;i<7;++i){
             const int col=i%2,row=i/2;
             const gfx::Rect r{300.f+col*670.f,265.f+row*174.f,630.f,150.f};
@@ -782,11 +749,10 @@ void SettingsScreen::draw(double, float dt)
     gfx::text(left, y + 40 - off,
               T("Lyd, undertekster og autoavspilling lagres på Emby-kontoen din og gjelder i alle Emby-apper."),
               {gfx::Regular, 20, width}, kText3);
-    gfx::text(left, y + 72 - off, T("Språk følger PS5-en, eller velg her."), {gfx::Regular, 20, width}, kText3);
-    gfx::text(left, y + 104 - off, T("Emby5 er fri programvare (GPL-3.0) og bygger på EVO Player og Nuvio PS5."),
+    gfx::text(left, y + 72 - off, T("Emby5 er fri programvare (GPL-3.0) og bygger på EVO Player og Nuvio PS5."),
               {gfx::Regular, 20, width}, kText3);
     if (seerr_service::config().enabled)   /* only where it means something */
-        gfx::text(left, y + 136 - off,
+        gfx::text(left, y + 104 - off,
                   T("Seerr henter alt fra TMDB selv: PS5-en snakker bare med Emby og Seerr."),
                   {gfx::Regular, 20, width}, kText3);
     if (m_notes_open) {
@@ -800,7 +766,7 @@ void SettingsScreen::draw(double, float dt)
                   {gfx::Medium,25}, kText2);
         std::vector<std::string> lines;
         const std::string notes=u.notes.empty()?
-            "No release notes available. Check for updates first.":u.notes;
+            "No new release notes available.":u.notes;
         const float max_w=panel.w-110;
         std::string line;
         auto flush=[&]{lines.push_back(line);line.clear();};

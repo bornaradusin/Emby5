@@ -37,7 +37,7 @@ typedef struct {
 
 /*
  * Load libSceAudiodec and report whether the native route is usable at all.
- * Call once early in boot, before evo_jailbreak_self(): the same credential
+ * Call once early in boot, before storage initialization: the same credential
  * swap that makes libSceVideodec2 calls fail applies here.
  */
 int evo_adec_native_probe(void);

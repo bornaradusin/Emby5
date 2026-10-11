@@ -15,7 +15,7 @@
  *   logic  - this vtable, compiled into the app module. Auth, catalog, search,
  *            link resolution, progress reporting. C, in-binary, trusted.
  *   look   - the provider's OWN .rml/.rcss bundle, fetched at runtime over
- *            HTTP and cached under /data/evoplayer/providers/<id>/. Markup and
+ *            HTTP and cached under /data/Emby5/providers/<id>/. Markup and
  *            styling only; see evo_provider_bundle.h.
  *
  * The logic half publishes a data model. The downloaded markup binds to it by
@@ -56,7 +56,7 @@ extern "C" {
  */
 #define EVO_PROVIDER_API_VERSION 1
 
-/* A provider id is a directory name under /data/evoplayer/providers/, so it is
+/* A provider id is a directory name under /data/Emby5/providers/, so it is
  * deliberately narrow: lowercase ASCII, digits, '-' and '_'. Validated by
  * evo_provider_id_valid() rather than trusted. */
 #define EVO_PROVIDER_MAX_ID       24
@@ -230,7 +230,7 @@ typedef struct evo_provider {
     /*
      * init/shutdown are called once each by the registry. init() loads
      * persisted credentials and must not touch the network - it runs during
-     * boot, before the self-unjail has necessarily opened /data, and a DNS
+     * boot, before the storage availability has necessarily opened /data, and a DNS
      * lookup there would stall the splash.
      */
     int  (*init)(void);
@@ -325,7 +325,7 @@ void evo_provider_mgr_shutdown(void);
  * Re-read every provider's persisted config.
  *
  * The app module boots with /data closed and only reaches its real data root
- * once evo_jailbreak_self() lands, which can be several seconds in. Everything
+ * once storage initialization lands, which can be several seconds in. Everything
  * loaded before that came from the transient /download0 fallback (#46), so the
  * providers have to be told to look again - the same reason recent_load() and
  * the settings service are re-run at that point.

@@ -57,7 +57,6 @@
 #include "evo_data_path.h"
 #include "evo_direct_mem.h"
 #include "evo_hw.h"
-#include "evo_jailbreak.h"
 #include "evo_vdec.h"
 
 #include <algorithm>
@@ -93,7 +92,6 @@ int sceUserServiceGetLoginUserIdList(int user_ids[4]);
 int scePadInit(void);
 int sceKernelSendNotificationRequest(int, void *, unsigned long, int);
 int sceSystemServiceHideSplashScreen(void);
-int sceSystemServiceLoadExec(const char *, const char *const *);
 void evo_log_alloc_state(const char *when);
 extern int g_ps5_user_id;
 }
@@ -377,7 +375,7 @@ long version_number(const std::string &v)
 void check_for_update()
 {
     static bool asked = false;
-    if (asked || !settings::get().local.check_updates)
+    if (asked)
         return;
     asked = true;
     std::thread([] {
@@ -947,7 +945,7 @@ void use_account(jf::Client &c, unsigned session, accounts::Account a)
             remote::start(&c, [session] { return session == s_session; });
             syncplay::attach(&c);
             load_extras(c, session);
-            if(settings::get().local.check_updates) update_service::check();
+            update_service::check();
             return;
         }
         const std::string err = c.last_error();
@@ -1968,9 +1966,13 @@ int main()
     init_services();
     present_splash(0.28f);
 
-    const int sandbox_open = evo_jailbreak_self();
-    if (sandbox_open)
-        evo_data_path_rebind();
+    /* /data/Emby5 is provided by ShadowMountPlus; do not request permissions. */
+    if (evo_mkdir("/data/Emby5") != 0 ||
+        evo_mkdir("/data/Emby5/config") != 0 ||
+        evo_mkdir("/data/Emby5/cache") != 0 ||
+        evo_mkdir("/data/Emby5/logs") != 0) {
+        evo_bt("emby5: /data/Emby5 unavailable (check ShadowMountPlus)");
+    }
     evo_boot_log_flush();
     present_splash(0.42f);
 
@@ -1992,7 +1994,7 @@ int main()
             : mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
     }
     accounts::set_ps5_user(s_user);   /* each PS5 user keeps their own Emby account */
-    i18n::set_choice(settings::get().local.language);
+    i18n::use_ps5_system_language();
     /* Restore the saved refresh rate in both directions. The video output may
      * have been left at 120 Hz by a previous process or by early initialization. */
     const bool requested_120hz = settings::get().local.refresh_120 && evo_agc_runtime_supports_120hz();
@@ -2022,10 +2024,6 @@ int main()
     [[maybe_unused]] bool waited = true;   /* the loop chose to wait since the last frame (nothing moved; read by
                                             * the development builds' frame timing) */
     for (;;) {
-        if (update_service::should_exit()) {
-            const int result=sceSystemServiceLoadExec("exit", nullptr);
-            if(result!=0)notify("Updater ready: close Emby5 from the PS5 menu to install");
-        }
         nuvio_input_state in;
         nuvio_input_poll(&in);
         ime::poll();

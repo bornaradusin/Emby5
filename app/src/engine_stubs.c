@@ -39,18 +39,3 @@ void recent_add_or_update(const char *path, const char *title, double last_pos, 
 void recent_save(void)
 {
 }
-
-/* Whether the process can see the real /data, which decides where the engine
- * keeps its few files (evo_data_path.c). The same probe EVO uses. */
-#include <fcntl.h>
-#include <unistd.h>
-
-int evo_jailbreak_is_open(void)
-{
-    int fd = open("/data", O_RDONLY | O_DIRECTORY);
-    if (fd >= 0) {
-        close(fd);
-        return 1;
-    }
-    return 0;
-}

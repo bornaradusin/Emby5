@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "app/settings.h"
-#include "app/i18n.h"
 
 #include <algorithm>
 
 #include "evo_boot_trace.h"
 #include "evo_data_path.h"
-#include "evo_jailbreak.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -90,7 +88,7 @@ All get()
 void load_local()
 {
     // Read from the exact shared root used by saved accounts and catalogues.
-    // Loading does not require creating the directory or re-jailbreaking.
+    // Loading does not modify process permissions or request storage access.
     std::string body;
     if (FILE *f = std::fopen(settings_file(), "rb")) {
         char buf[1024];
@@ -109,7 +107,7 @@ void load_local()
     if (s_all.local.max_mbps < 0)
         s_all.local.max_mbps = 0;
     s_all.local.auto_skip_intro = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "autoSkipIntro"));
-    s_all.local.language = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j, "language"));
+    /* Ignore legacy saved language: the PS5 language is authoritative. */
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "autoplayNextLocal")) {
         if (cJSON_IsBool(v)) {
             s_all.local.autoplay_next_override_valid = true;
@@ -126,10 +124,6 @@ void load_local()
         s_all.local.hdmi_bitstream = cJSON_IsTrue(v);
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "themeMusic"))
         s_all.local.theme_music = cJSON_IsTrue(v);
-    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "checkUpdates"))
-        s_all.local.check_updates = cJSON_IsTrue(v);
-    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "autoDownloadUpdates"))
-        s_all.local.auto_download_updates = cJSON_IsTrue(v);
     s_all.local.audio_delay_ms =
         std::max(-500, std::min(500, (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j, "audioDelayMs"))));
     if (const cJSON *hz = cJSON_GetObjectItemCaseSensitive(j, "refresh120"))
@@ -148,8 +142,6 @@ void load_local()
         if (cJSON_IsNumber(v = cJSON_GetObjectItemCaseSensitive(st, "color")))
             l.sub_color = std::max(0, std::min(0xffffff, (int)v->valuedouble));
     }
-    if (s_all.local.language < 0 || s_all.local.language >= i18n::ChoiceCount)
-        s_all.local.language = 0;
     cJSON_Delete(j);
 }
 
@@ -166,14 +158,12 @@ static bool save_local_snapshot(const Local &l)
         cJSON_AddBoolToObject(j, "autoplayNextLocal", l.autoplay_next_override);
     cJSON_AddNumberToObject(j, "stillWatching", l.still_watching);
     cJSON_AddNumberToObject(j, "theme", l.theme);
-    cJSON_AddNumberToObject(j, "language", l.language);
     cJSON_AddBoolToObject(j, "refresh120", l.refresh_120);
     cJSON_AddNumberToObject(j, "audioDelayMs", l.audio_delay_ms);
     cJSON_AddBoolToObject(j, "nightMode", l.night_mode);
     cJSON_AddBoolToObject(j, "hdmiBitstream", l.hdmi_bitstream);
     cJSON_AddBoolToObject(j, "themeMusic", l.theme_music);
-    cJSON_AddBoolToObject(j, "checkUpdates", l.check_updates);
-    cJSON_AddBoolToObject(j, "autoDownloadUpdates", l.auto_download_updates);
+
     cJSON *st = cJSON_CreateObject();
     cJSON_AddNumberToObject(st, "size", l.sub_size);
     cJSON_AddNumberToObject(st, "offset", l.sub_offset);

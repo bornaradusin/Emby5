@@ -226,10 +226,13 @@ std::string tmdb_language()
 {
     switch (i18n::lang()) {
     case i18n::Lang::Norwegian: return "nb";
-    case i18n::Lang::Spanish: return "es";
-    case i18n::Lang::French: return "fr";
+    case i18n::Lang::SpanishSpain:
+    case i18n::Lang::SpanishLatam: return "es";
+    case i18n::Lang::FrenchFrance:
+    case i18n::Lang::FrenchCanada: return "fr";
     case i18n::Lang::German: return "de";
-    case i18n::Lang::Portuguese: return "pt";
+    case i18n::Lang::PortuguesePortugal:
+    case i18n::Lang::PortugueseBrazil: return "pt";
     case i18n::Lang::Italian: return "it";
     default: return "en";
     }

@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 namespace i18n {
+const std::unordered_map<std::string, const char *> &extra_table(int language);
 
 const std::unordered_map<std::string, const char *> &spanish_table();
 const std::unordered_map<std::string, const char *> &french_table();

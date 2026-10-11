@@ -8,34 +8,20 @@
 #include "evo_boot_trace.h"
 
 #include <atomic>
+
+/* PS5 system language API, param 1 = console language. */
+extern "C" int sceSystemServiceParamGetInt(int param_id, int *value);
 #include <mutex>
 #include <set>
 #include <unordered_map>
 
-extern "C" int sceSystemServiceParamGetInt(int param_id, int *value);
+
 
 namespace i18n {
 namespace {
 
-std::atomic<int> s_lang{(int)Lang::Norwegian};
+std::atomic<int> s_lang{(int)Lang::English};
 std::atomic<unsigned> s_gen{0};
-
-constexpr int kParamLang = 1;           /* SCE_SYSTEM_SERVICE_PARAM_ID_LANG */
-constexpr int kSystemNorwegian = 15;    /* SCE_SYSTEM_PARAM_LANG_NORWEGIAN */
-
-/* SCE_SYSTEM_PARAM_LANG_* -> the language Emby5 has for it. */
-Lang from_system(int sys)
-{
-    switch (sys) {
-    case 15: return Lang::Norwegian;
-    case 3: case 20: return Lang::Spanish;          /* Spain, Latin America */
-    case 2: case 22: return Lang::French;           /* France, Canada */
-    case 4: return Lang::German;
-    case 7: case 17: return Lang::Portuguese;       /* Portugal, Brazil */
-    case 5: return Lang::Italian;
-    default: return Lang::English;
-    }
-}
 
 /* Norwegian -> English. Texts that read the same in both are not listed. */
 const std::unordered_map<std::string, const char *> &english_table()
@@ -226,27 +212,52 @@ const std::unordered_map<std::string, const char *> &english_table()
 
 } // namespace
 
-const char *choice_name(int choice)
+/* Language IDs returned by the PS5 system-language setting. */
+static Lang from_ps5_language(int id)
 {
-    static const char *const names[ChoiceCount] = {"",        "Norsk",   "English",   "Espa\xC3\xB1ol",
-                                                   "Fran\xC3\xA7" "ais", "Deutsch", "Portugu\xC3\xAAs", "Italiano"};
-    return choice > 0 && choice < ChoiceCount ? names[choice] : "";
+    switch (id) {
+    case 0: return Lang::Japanese;
+    case 1: case 18: return Lang::English; /* US and UK */
+    case 2: return Lang::FrenchFrance;
+    case 22: return Lang::FrenchCanada;
+    case 3: return Lang::SpanishSpain;
+    case 20: return Lang::SpanishLatam;
+    case 4: return Lang::German;
+    case 5: return Lang::Italian;
+    case 6: return Lang::Dutch;
+    case 7: return Lang::PortuguesePortugal;
+    case 17: return Lang::PortugueseBrazil;
+    case 8: return Lang::Russian;
+    case 9: return Lang::Korean;
+    case 10: return Lang::ChineseTraditional;
+    case 11: return Lang::ChineseSimplified;
+    case 12: return Lang::Finnish;
+    case 13: return Lang::Swedish;
+    case 14: return Lang::Danish;
+    case 15: return Lang::Norwegian;
+    case 16: return Lang::Polish;
+    case 19: return Lang::Turkish;
+    case 21: return Lang::Arabic;
+    case 23: return Lang::Czech;
+    case 24: return Lang::Hungarian;
+    case 25: return Lang::Greek;
+    case 26: return Lang::Romanian;
+    case 27: return Lang::Thai;
+    case 28: return Lang::Vietnamese;
+    case 29: return Lang::Indonesian;
+    case 30: return Lang::Ukrainian;
+    default: return Lang::English;
+    }
 }
 
-void set_choice(int choice)
+void use_ps5_system_language()
 {
-    Lang l;
-    if (choice > Auto && choice < ChoiceCount) {
-        l = (Lang)(choice - 1);
-    } else {
-        int sys = kSystemNorwegian;
-        if (sceSystemServiceParamGetInt(kParamLang, &sys) != 0)
-            sys = kSystemNorwegian;
-        l = from_system(sys);
-        evo_bt("i18n: system language %d", sys);
-    }
-    if ((int)l != s_lang.exchange((int)l))
-        s_gen++;
+    int id = -1;
+    /* Read only: no saved preference and no privilege/daemon interaction. */
+    const Lang chosen = sceSystemServiceParamGetInt(1, &id) == 0
+        ? from_ps5_language(id) : Lang::English;
+    const int new_lang = static_cast<int>(chosen);
+    if (s_lang.exchange(new_lang) != new_lang) ++s_gen;
 }
 
 Lang lang() { return (Lang)s_lang.load(); }
@@ -259,13 +270,18 @@ const char *T(const char *nb)
     const i18n::Lang l = i18n::lang();
     if (!nb || l == i18n::Lang::Norwegian)
         return nb;
-    const std::unordered_map<std::string, const char *> *own =
-        l == i18n::Lang::Spanish      ? &i18n::spanish_table()
-        : l == i18n::Lang::French     ? &i18n::french_table()
-        : l == i18n::Lang::German     ? &i18n::german_table()
-        : l == i18n::Lang::Portuguese ? &i18n::portuguese_table()
-        : l == i18n::Lang::Italian    ? &i18n::italian_table()
-                                      : nullptr;
+    const std::unordered_map<std::string, const char *> *own = nullptr;
+    switch (l) {
+    case i18n::Lang::FrenchFrance: own = &i18n::french_table(); break;
+    case i18n::Lang::FrenchCanada: own = &i18n::french_table(); break;
+    case i18n::Lang::SpanishSpain: own = &i18n::spanish_table(); break;
+    case i18n::Lang::SpanishLatam: own = &i18n::spanish_table(); break;
+    case i18n::Lang::German: own = &i18n::german_table(); break;
+    case i18n::Lang::Italian: own = &i18n::italian_table(); break;
+    case i18n::Lang::PortuguesePortugal: own = &i18n::portuguese_table(); break;
+    case i18n::Lang::PortugueseBrazil: own = &i18n::portuguese_table(); break;
+    default: own = &i18n::extra_table((int)l); break;
+    }
     if (own) {
         const auto it = own->find(nb);
         if (it != own->end())
