@@ -12,20 +12,7 @@ Emby5 is an unofficial native Emby client for homebrew-capable PlayStation 5 con
 
 **Contents:** [Features](#features) · [Live TV](#live-tv--emby-xtream-and-m3um3u8) · [VOD](#video-on-demand-vod) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
 
----
-
-## What's New in 1.2.2
-
-- **GPU video upscaling:** FSR 1 and Anime4K for compatible video sources, with **Auto** selected by default and in-player mode switching.
-- **Video display modes:** Fit Screen, Fill Screen, and Stretch, selectable in the player. Your selection is saved and restored between sessions.
-- **GPU memory handling:** Larger scratch allocations for higher-resolution playback and scratch-buffer cleanup when the player closes, designed to reduce allocation failures between videos.
-- **Faster IPTV category editing:** Accelerated channel scrolling while holding Up/Down and **L1/R1** jumps of 20 channels.
-- **Playback Information:** View the current upscaling mode alongside existing playback details.
-- **System settings:** A new **System** tile and a **What's New** window for viewing release highlights in the app.
-
-The experimental automatic installer and bundled Lapy elevation helper are not included. Updates remain manual; GitHub update notifications may still be available where supported.
-
----
+--- 
 
 ## Features
 
