@@ -1,4 +1,4 @@
-![Emby5 Home Screen](docs/emby5-home.jpg)
+![Emby5 Home Screen](docs/Home.jpg)
 
 # Emby5 for PS5
 
