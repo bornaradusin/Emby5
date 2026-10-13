@@ -16,6 +16,8 @@
 
 #include "ui/item_menu.h"
 #include "ui/screen.h"
+#include "ui/music_artwork.h"
+#include <unordered_map>
 
 #include <memory>
 #include <mutex>
@@ -42,7 +44,11 @@ public:
     void set_sources(std::vector<Source> sources);
     bool has_sources() const { return !m_sources.empty(); }
 
+    ~Library() override;
     void activate() override;
+    bool needs_redraw() const override;
+    void reconcile_user_data(const jf::Item &fresh) override;
+    void refresh_user_data() override;
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }
@@ -57,11 +63,17 @@ public:
     }
 
 private:
+    friend struct MusicRegressionAccess;
     struct Data {
         std::mutex lock;
         std::vector<jf::Item> items;
         int total = -1;
         bool loading = false;
+        bool alive = true;
+        uint64_t revision = 1;
+        bool artwork_loading = false;
+        uint64_t artwork_job = 0;
+        std::unordered_map<std::string, MusicArtwork> artwork;
         unsigned generation = 0;    /* bumped on reload: stale pages are dropped */
         std::vector<std::string> genres;   /* this source's, for the filter */
         bool genres_loaded = false;
@@ -85,6 +97,9 @@ private:
     double m_source_at = -1;            /* a source pill rested on: switch to it then */
     void load_more();
     void reload();
+    void request_visible_artwork(const std::vector<jf::Item> &visible);
+    uint64_t m_seen_revision = 0;
+    double m_art_retry_at = 0;
     const Source &source() const { return m_sources[std::min(m_source, (int)m_sources.size() - 1)]; }
     bool square() const;
     int pill_count() const;

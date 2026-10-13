@@ -58,4 +58,4 @@ void evo_boot_log(const char *fmt, ...) { (void)fmt; }
 
 /* The packager expects a .data.rel.ro section, which a program this small
  * would otherwise not have: one relocated constant pointer makes it. */
-__attribute__((used)) const char *const jelly5_probe_tag[] = {"jelly5-probe", "PPSA99506"};
+__attribute__((used)) const char *const emby5_probe_tag[] = {"emby5-probe", "PPSA99506"};

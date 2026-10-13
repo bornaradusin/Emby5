@@ -39,6 +39,7 @@ struct NuvioStatus {
     int view_mode = 0;            /* 0 fit, 1 fill, 2 stretch */
     std::string quality_line;     /* "2160p · HDR10 · HEVC · TrueHD 7.1" */
     std::string error;            /* non-empty: the stream failed */
+    bool seeking = false;
     bool switching = false;       /* reopening for an audio / source change */
     /* Emby5: the L3 playback info panel, refreshed once a second while it is up.
      * Rows of label and value; a label starting with '#' is a section heading. */
@@ -57,6 +58,8 @@ enum class OsdCmd {
     PlayEpisode,     /* season, episode */
     PlayNext,
     SetViewMode,     /* index = mode */
+    LiveGroup,       /* index = -1 previous / +1 next nonempty group */
+    LiveChannel,     /* index = -1 previous / +1 next channel in current group */
 };
 
 struct OsdCommand {
@@ -64,6 +67,7 @@ struct OsdCommand {
     double value = 0;
     int index = -1;
     int season = 0, episode = 0;
+    bool automatic = false; // never set for an explicit user/remote Next
 };
 
 /* "English" for "eng"/"en"/"en-US"; the code itself when unknown. */

@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "ui/library.h"
+#include "ui/library_layout.h"
+#include "app/user_data_update.h"
 #include "app/i18n.h"
+#include "app/spawn.h"
+#include "app/io_worker.h"
 
 #include "gfx/art.h"
 #include "nuvio_input.h"
@@ -16,8 +20,7 @@
 namespace ui {
 namespace {
 
-constexpr int kCols = 6;
-constexpr float kPosterW = 240, kPosterH = 360, kColGap = 48, kRowPitch = 450;
+
 constexpr float kGridTop = 300;
 constexpr int kPage = 60;
 
@@ -48,6 +51,73 @@ Library::Library(jf::Client &client, std::string title, std::string types, std::
     m_nav.snap(1.f);
 }
 
+Library::~Library()
+{
+    std::lock_guard<std::mutex> g(m_data->lock);
+    m_data->alive = false;
+    ++m_data->generation;
+}
+
+bool Library::needs_redraw() const
+{
+    std::lock_guard<std::mutex> g(m_data->lock);
+    return m_data->revision != m_seen_revision ||
+           (m_art_retry_at > 0 && music_art_now() >= m_art_retry_at);
+}
+
+void Library::request_visible_artwork(const std::vector<jf::Item> &visible)
+{
+    const auto d=m_data;
+    m_art_retry_at=0;
+    for(const auto &item:visible) {
+        if(item.type!="MusicAlbum") continue;
+        MusicArtwork cached;
+        unsigned generation;
+        uint64_t job;
+        bool primary_failed;
+        {
+            std::lock_guard<std::mutex> g(d->lock);
+            if(!d->alive || d->artwork_loading) return;
+            auto &stored=d->artwork[item.id];
+            if(!stored.accepts(item)) stored=MusicArtwork{};
+            cached=stored;
+            primary_failed=art::failed(music_image_url(m_client,cached.preferred(item)));
+            if(!cached.needs_fetch(item,primary_failed)) {
+                if(cached.attempts<3 && cached.retry_at>music_art_now() &&
+                   (!m_art_retry_at || cached.retry_at<m_art_retry_at)) m_art_retry_at=cached.retry_at;
+                continue;
+            }
+            d->artwork_loading=true;
+            job=++d->artwork_job;
+            generation=d->generation;
+        }
+        jf::Client *client=&m_client;
+        auto current=[d,generation] {
+            std::lock_guard<std::mutex> g(d->lock);
+            return d->alive && generation==d->generation;
+        };
+        auto failure=[d,generation,job,id=item.id] {
+            std::lock_guard<std::mutex> g(d->lock);
+            if(job!=d->artwork_job) return;
+            d->artwork_loading=false;
+            if(d->alive && generation==d->generation) {
+                auto &art=d->artwork[id]; ++art.attempts;
+                art.retry_at=music_art_now()+5.0*art.attempts;
+            }
+            ++d->revision;
+        };
+        if(!emby5::spawn_io([d,client,generation,job,item,cached,primary_failed,current] {
+            auto result=fetch_music_artwork(*client,item,cached,primary_failed,current);
+            std::lock_guard<std::mutex> g(d->lock);
+            if(job!=d->artwork_job) return;
+            d->artwork_loading=false;
+            if(d->alive && generation==d->generation) d->artwork[item.id]=std::move(result);
+            ++d->revision; // wake the idle grid; no tab switch or button is needed
+        },failure)) failure();
+        return; // one metadata worker; visible/focused albums have priority
+    }
+}
+
 void Library::set_sources(std::vector<Source> sources)
 {
     if (sources.empty())
@@ -55,7 +125,7 @@ void Library::set_sources(std::vector<Source> sources)
     bool same = sources.size() == m_sources.size();
     for (size_t i = 0; same && i < sources.size(); i++)
         same = sources[i].view == m_sources[i].view && sources[i].types == m_sources[i].types &&
-               sources[i].label == m_sources[i].label;
+               sources[i].label == m_sources[i].label && sources[i].filter == m_sources[i].filter;
     if (same)
         return;
     /* Stay on the chosen library where it is still there. */
@@ -127,6 +197,13 @@ std::string Library::types_for(const std::string &collection_type)
     return "Movie,Series,Video";   /* mixed */
 }
 
+void Library::reconcile_user_data(const jf::Item &fresh)
+{
+    std::lock_guard<std::mutex> g(m_data->lock);
+    for (auto &it : m_data->items) emby5::reconcile_user_data(it, fresh);
+    ++m_data->revision;
+}
+
 void Library::activate()
 {
     m_nav.to(1.f);
@@ -134,9 +211,49 @@ void Library::activate()
     {
         std::lock_guard<std::mutex> g(m_data->lock);
         need = m_data->total < 0 && !m_data->loading;
+        for(auto &entry:m_data->artwork) {
+            auto &art=entry.second;
+            if(art.retry_at>0 && art.retry_at<=music_art_now()) {art.attempts=0;art.retry_at=0;}
+        }
+        ++m_data->revision;
     }
     if (need)
         load_more();
+}
+
+void Library::refresh_user_data()
+{
+    auto d = m_data;
+    unsigned generation;
+    int limit;
+    {
+        std::lock_guard<std::mutex> g(d->lock);
+        if (d->total < 0 && !d->loading) return; // unopened tab stays lazy
+        generation = ++d->generation;
+        ++d->revision;
+        limit = std::max(kPage, (int)d->items.size());
+        d->loading = true;
+    }
+    jf::Client *c = &m_client;
+    const Source src = source();
+    const Sort sort = kSorts[m_sort];
+    const std::string filter = filter_query();
+    if (!emby5::spawn_io([d, c, src, sort, filter, generation, limit] {
+        const jf::Page p = src.types == "MusicArtist"
+            ? c->album_artists(src.view, sort.by, sort.desc, 0, limit)
+            : c->library(src.view, src.types, sort.by, sort.desc, 0, limit, src.filter + filter);
+        std::lock_guard<std::mutex> g(d->lock);
+        if (!d->alive || generation != d->generation) return;
+        if (p.ok) { d->items = p.items; d->total = std::max(p.total,(int)d->items.size()); }
+        d->loading = false;
+        ++d->revision;
+    }, [d, generation] {
+        std::lock_guard<std::mutex> g(d->lock);
+        if (generation == d->generation) { d->loading = false; ++d->revision; }
+    })) {
+        std::lock_guard<std::mutex> g(d->lock);
+        if (generation == d->generation) { d->loading = false; ++d->revision; }
+    }
 }
 
 void Library::reload()
@@ -147,6 +264,7 @@ void Library::reload()
         m_data->total = -1;
         m_data->loading = false;
         m_data->generation++;
+        ++m_data->revision;
     }
     m_index = 0;
     m_scroll.snap(0);
@@ -170,62 +288,22 @@ void Library::load_more()
     jf::Client *c = &m_client;
     const Source src = source();
     const std::string fq = filter_query();
-    std::thread([d, c, src, s, start, gen, fq] {
-        /* Artists are Emby's album artists, as its own music tab shows them. */
-        jf::Page page = src.types == "MusicArtist" ? c->album_artists(src.view, s.by, s.desc, start, kPage)
-                                                   : c->library(src.view, src.types, s.by, s.desc, start, kPage, src.filter + fq);
-        {
-            std::lock_guard<std::mutex> g(d->lock);
-            if (gen != d->generation)
-                return;   /* the sort changed meanwhile */
-            d->items.insert(d->items.end(), page.items.begin(), page.items.end());
-            d->total = page.items.empty() && start == 0 ? 0 : std::max(page.total, (int)d->items.size());
-            d->loading = false;
+    auto failed=[d,gen] {
+        std::lock_guard<std::mutex> g(d->lock);
+        if(d->alive && gen==d->generation) {d->loading=false; ++d->revision;}
+    };
+    if(!emby5::spawn_io([d, c, src, s, start, gen, fq] {
+        const auto page = src.types == "MusicArtist" ? c->album_artists(src.view, s.by, s.desc, start, kPage)
+            : c->library(src.view, src.types, s.by, s.desc, start, kPage, src.filter + fq);
+        std::lock_guard<std::mutex> g(d->lock);
+        if(!d->alive || gen!=d->generation) return;
+        if(page.ok) {
+            d->items.insert(d->items.end(),page.items.begin(),page.items.end());
+            d->total=page.items.empty() ? (int)d->items.size() : std::max(page.total,(int)d->items.size());
         }
-        /* The album-detail page can show cover art because it fetches its
-         * tracks as well as the album. Do the same on the worker thread for
-         * the grid: a listing's Primary tag can be absent OR point at a dead
-         * image even when a track has working album art. Never block draw(). */
-        if (src.types == "MusicAlbum") {
-            for (const auto &album : page.items) {
-                if (album.type != "MusicAlbum") continue;
-                {
-                    std::lock_guard<std::mutex> g(d->lock);
-                    if (gen != d->generation) return;
-                }
-                std::string owner, tag;
-                // Prefer the same album Primary image Album::draw first tries.
-                jf::Item detail;
-                if (c->item(album.id, &detail) && !detail.primary_tag.empty()) {
-                    owner = detail.primary_owner.empty() ? detail.id : detail.primary_owner;
-                    tag = detail.primary_tag;
-                }
-                // Album::draw can use an audio track when album art is absent.
-                // Resolve it for the grid too, even if the list provided a tag.
-                const auto tracks = c->children(album.id, "SortName", 8);
-                for (const auto &track : tracks) {
-                    if (!track.album_primary_tag.empty() && !track.album_id.empty()) {
-                        owner = track.album_id;
-                        tag = track.album_primary_tag;
-                        break;
-                    }
-                    if (!track.primary_tag.empty()) {
-                        owner = track.primary_owner.empty() ? track.id : track.primary_owner;
-                        tag = track.primary_tag;
-                        break;
-                    }
-                }
-                if (owner.empty()) continue;
-                std::lock_guard<std::mutex> g(d->lock);
-                if (gen != d->generation) return;
-                for (auto &item : d->items)
-                    if (item.id == album.id) {
-                        item.primary_owner = owner;
-                        item.primary_tag = tag;
-                    }
-            }
-        }
-    }).detach();
+        d->loading=false;
+        ++d->revision;
+    },failed)) failed();
 }
 
 Action Library::input(uint32_t p)
@@ -244,11 +322,6 @@ Action Library::input(uint32_t p)
     }
     if (m_menu.active()) {
         m_menu.input(p, &a);
-        if (a.kind == Action::Changed) {
-            std::lock_guard<std::mutex> g(m_data->lock);
-            for (jf::Item &it : m_data->items)
-                apply_change(it, a.change);
-        }
         return a;
     }
     if ((p & NUVIO_BTN_OPTIONS) && !m_in_pills) {
@@ -288,6 +361,8 @@ Action Library::input(uint32_t p)
         }
         return a;
     }
+    const LibraryGeometry layout(gfx::W,kPad);
+    const int kCols = layout.cols;
     const int row = m_index / kCols, col = m_index % kCols;
     if ((p & (NUVIO_BTN_L2 | NUVIO_BTN_R2)) && by_name()) {   /* A-Å: to the previous / next letter */
         jump_letter((p & NUVIO_BTN_R2) ? 1 : -1);
@@ -375,11 +450,19 @@ void Library::open_sheet()
     if (need) {
         jf::Client *c = &m_client;
         const Source src = source();
-        std::thread([d, c, src] {
+        unsigned generation;
+        {std::lock_guard<std::mutex> g(d->lock); generation=d->generation;}
+        auto failure=[d,generation] {
+            std::lock_guard<std::mutex> g(d->lock);
+            if(d->alive && generation==d->generation) {d->genres_loaded=false; ++d->revision;}
+        };
+        if(!emby5::spawn_io([d, c, src, generation] {
             std::vector<std::string> gs = c->genres_in(src.view, src.types);
             std::lock_guard<std::mutex> g(d->lock);
+            if(!d->alive || generation!=d->generation) return;
             d->genres = std::move(gs);
-        }).detach();
+            ++d->revision;
+        },failure)) failure();
     }
 }
 
@@ -531,7 +614,11 @@ void Library::jump_letter(int dir)
         gen = d->generation;
         d->loading = true;
     }
-    std::thread([d, c, src, s, fq, dir, cur, at, total, gen] {
+    auto failed=[d,gen] {
+        std::lock_guard<std::mutex> g(d->lock);
+        if(d->alive && gen==d->generation) {d->loading=false; ++d->revision;}
+    };
+    if(!emby5::spawn_io([d, c, src, s, fq, dir, cur, at, total, gen] {
         auto letter = [](int i) { return std::string(1, (char)('A' + i)); };
         int target = -1;
         std::string shown;
@@ -566,21 +653,22 @@ void Library::jump_letter(int dir)
         if (target >= 0 && have < target + kPage)
             page = c->library(src.view, src.types, s.by, s.desc, have, target + kPage - have, fq);
         std::lock_guard<std::mutex> g(d->lock);
+        if (!d->alive || gen != d->generation) return;
         d->loading = false;
-        if (gen != d->generation)
-            return;
-        d->items.insert(d->items.end(), page.items.begin(), page.items.end());
+        ++d->revision;
+        if(page.ok) d->items.insert(d->items.end(), page.items.begin(), page.items.end());
         if (target >= 0 && target < (int)d->items.size()) {
             d->jump_to = target;
             d->jump_letter = shown;
         }
-    }).detach();
+    },failed)) failed();
 }
 
 void Library::draw(double now, float dt)
 {
     m_animating = false;
     std::vector<jf::Item> items;
+    std::unordered_map<std::string,MusicArtwork> artwork;
     int total;
     bool loading;
     m_now = now;
@@ -599,6 +687,8 @@ void Library::draw(double now, float dt)
             m_data->jump_to = -1;
         }
         items = m_data->items;
+        artwork = m_data->artwork;
+        m_seen_revision = m_data->revision;
         total = m_data->total;
         loading = m_data->loading;
     }
@@ -613,9 +703,12 @@ void Library::draw(double now, float dt)
     m_ambient.draw(dt, 0.62f, &m_animating);
 
     /* Grid scroll. */
+    const LibraryGeometry layout(gfx::W,kPad);
+    const int kCols = layout.cols;
+    const float kPosterW=layout.width, kPosterH=layout.height, kColGap=layout.gap, kRowPitch=layout.pitch;
     const int row = m_in_pills ? 0 : m_index / kCols;
     const bool sq = square();
-    const float pitch = sq ? 360.f : kRowPitch, tile_h = sq ? kPosterW : kPosterH;
+    const float pitch = sq ? kPosterW+120.f : kRowPitch, tile_h = sq ? kPosterW : kPosterH;
     /* The focused row comes up near the top (whole, with the next row peeking below);
      * the first row stays under the header. */
     m_scroll.to(row > 0 ? (float)row * pitch - 60.f : 0.f);
@@ -683,6 +776,19 @@ void Library::draw(double now, float dt)
     /* The grid, clipped below the header. */
     const float top = kGridTop - m_scroll.value;
     gfx::push_scissor({0, (kGridTop - 60) * ha, gfx::W, gfx::H});
+    std::vector<jf::Item> visible_albums;
+    for(int i=0;i<(int)items.size();++i) {
+        const float y=top+(i/kCols)*pitch;
+        if(items[i].type!="MusicAlbum" || y>gfx::H+20 || y+tile_h+60<0) continue;
+        if(i==m_index) visible_albums.insert(visible_albums.begin(),items[i]);
+        else visible_albums.push_back(items[i]);
+        const auto found=artwork.find(items[i].id);
+        // Normalize even the first draw: an untagged album listing can contain
+        // ParentId for the music folder, which is not the album's cover owner.
+        items[i]=music_display_item(m_client,items[i],
+            found!=artwork.end()?found->second:MusicArtwork{},art::failed);
+    }
+    request_visible_artwork(visible_albums);
     int focus_i = -1;
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < (int)items.size(); i++) {
@@ -699,7 +805,7 @@ void Library::draw(double now, float dt)
             const gfx::Rect tile{kPad + c * (kPosterW + kColGap), y, kPosterW, tile_h};
             draw_poster(m_client, items[i], tile, lift, 1.f);
             if (f) {
-                const float k = 1.f + 0.1f * lift;
+                const float k = 1.f + 0.1f * theme_poster_lift(lift);
                 m_card = {{tile.x - tile.w * (k - 1) / 2, tile.y - tile.h * (k - 1) / 2, tile.w * k, tile.h * k},
                           poster_url(m_client, items[i], 480), items[i].primary_blurhash, 14 * k};
                 m_has_card = true;

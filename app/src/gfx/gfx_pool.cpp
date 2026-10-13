@@ -15,6 +15,7 @@
 extern "C" {
 int sceKernelAllocateDirectMemory(off_t searchStart, off_t searchEnd, size_t len, size_t alignment, int memoryType,
                                   off_t *physAddrOut);
+int sceKernelReleaseDirectMemory(off_t physAddr, size_t len);
 int sceKernelMapDirectMemory(void **addr, size_t len, int prot, int flags, off_t directMemoryStart,
                              size_t alignment);
 }
@@ -45,8 +46,12 @@ size_t pool_init(size_t want)
         if (sceKernelAllocateDirectMemory(0, (off_t)16 * 1024 * 1024 * 1024ULL, len, k2M, 3, &phys) != 0)
             continue;
         void *mapped = nullptr;
-        if (sceKernelMapDirectMemory(&mapped, len, 0x33 /* CPU RW | GPU RW */, 0, phys, k2M) != 0 || !mapped)
+        if (sceKernelMapDirectMemory(&mapped, len, 0x33 /* CPU RW | GPU RW */, 0, phys, k2M) != 0 || !mapped) {
+            const int rc=sceKernelReleaseDirectMemory(phys,len);
+            evo_bt("gfx: texture-pool map failed; release rc=%d bytes=%zu",rc,len);
+            if(rc!=0)break; // do not leak further physical blocks on repeated map failure
             continue;
+        }
         s_base = (uint8_t *)mapped;
         s_size = len;
         s_free[0] = len;

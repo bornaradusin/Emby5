@@ -74,7 +74,9 @@ uint32_t colour_of(const std::string &s, uint32_t fallback)
     if (h.size() < 6)
         return fallback;
     char *end = nullptr;
-    unsigned long v = std::strtoul(h.substr(0, 6).c_str(), &end, 16);
+    // end points into h; a temporary substr is destroyed before the next line.
+    h.resize(6);
+    unsigned long v = std::strtoul(h.c_str(), &end, 16);
     return (end && *end == 0) ? (uint32_t)v : fallback;
 }
 
@@ -165,6 +167,9 @@ bool nuvio_request_parse(const char *json, NuvioRequest &r)
     r.runtime = str_of(root, "runtime");
     r.rating = str_of(root, "rating");
     r.item_type = str_of(root, "itemType");
+    r.live_channel_id = str_of(root,"liveChannelId");
+    r.live_group_name = str_of(root,"liveGroupName");
+    r.live_navigation_token = str_of(root,"liveNavigationToken");
     r.logo = str_of(root, "logo");
     r.poster = str_of(root, "poster");
     r.artist = str_of(root, "artist");
@@ -330,6 +335,10 @@ std::string nuvio_result_json(const NuvioRequest &req, const NuvioResult &res)
     cJSON_AddNumberToObject(o, "position", res.position);
     cJSON_AddNumberToObject(o, "duration", res.duration);
     cJSON_AddItemToObject(o, "userInteracted", cJSON_CreateBool(res.user_interacted));
+    cJSON_AddBoolToObject(o, "automaticNext", res.automatic_next);
+    cJSON_AddBoolToObject(o, "playbackStarted", res.playback_started);
+    cJSON_AddNumberToObject(o, "completedEpisodes", res.completed_episodes);
+    cJSON_AddNumberToObject(o, "watchedSeconds", res.watched_seconds);
     if (!res.error.empty())
         cJSON_AddStringToObject(o, "error", res.error.c_str());
     if (!res.action.empty()) {

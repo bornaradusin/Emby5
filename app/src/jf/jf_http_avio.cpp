@@ -8,6 +8,9 @@
 #include "jf_http.h"
 
 #include <cstdio>
+#include <chrono>
+#include <algorithm>
+#include <cerrno>
 
 extern "C" {
 #include <libavformat/avio.h>
@@ -53,6 +56,15 @@ HttpResponse http_request(const std::string &method, const std::string &url,
                           int timeout_s)
 {
     HttpResponse res;
+    // rw_timeout bounds one stalled read, not a slow drip of bytes. Keep a
+    // deadline for the entire API request so UI actions always finish.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(1, timeout_s));
+    AVIOInterruptCB interrupt{};
+    interrupt.opaque = (void *)&deadline;
+    interrupt.callback = [](void *p) -> int {
+        return std::chrono::steady_clock::now() >=
+            *static_cast<const std::chrono::steady_clock::time_point *>(p);
+    };
     AVDictionary *opts = nullptr;
     av_dict_set_int(&opts, "timeout", (int64_t)timeout_s * 1000000, 0);
     av_dict_set_int(&opts, "rw_timeout", (int64_t)timeout_s * 1000000, 0);
@@ -69,7 +81,7 @@ HttpResponse http_request(const std::string &method, const std::string &url,
         av_dict_set(&opts, "headers", head.c_str(), 0);
 
     AVIOContext *io = nullptr;
-    const int rc = avio_open2(&io, url.c_str(), AVIO_FLAG_READ, nullptr, &opts);
+    const int rc = avio_open2(&io, url.c_str(), AVIO_FLAG_READ, &interrupt, &opts);
     av_dict_free(&opts);
     if (rc < 0) {
         res.status = status_of_error(rc);
@@ -78,6 +90,10 @@ HttpResponse http_request(const std::string &method, const std::string &url,
         res.error = err;
         return res;
     }
+    struct CloseIO { AVIOContext **p; ~CloseIO() { if (*p) avio_closep(p); } } close{&io};
+    // avio_size asks the HTTP protocol for its declared length. A negative
+    // result means close-delimited/chunked/otherwise unknown length.
+    const int64_t response_size = avio_size(io);
     /* The cookies the server set: FFmpeg's http protocol keeps them, one
      * Set-Cookie value per line, in its "cookies" option (as hls.c reads them). */
     uint8_t *cookies = nullptr;
@@ -93,14 +109,29 @@ HttpResponse http_request(const std::string &method, const std::string &url,
             from = to + 1;
         }
     }
+    // Always close the connection, including when a string allocation throws.
     unsigned char buf[16384];
-    int n;
+    int n = 0;
     /* At most 16 MB: a wrong address that serves something huge (or endless)
      * must not take the console's memory (an allocation failure aborts). */
     constexpr size_t kMaxBody = 16u << 20;
-    while (res.body.size() < kMaxBody && (n = avio_read(io, buf, sizeof buf)) > 0)
+    while (res.body.size() < kMaxBody) {
+        if (interrupt.callback(interrupt.opaque)) { n = AVERROR_EXIT; break; }
+        n = avio_read_partial(io, buf, sizeof buf);
+        if (n <= 0) break;
         res.body.append((const char *)buf, (size_t)n);
-    avio_closep(&io);
+    }
+    // FFmpeg 7.1 can report EIO ("Stream ends prematurely ... UINT64_MAX")
+    // on the NORMAL close of an HTTP response without Content-Length. Do not
+    // reject those responses. A declared-but-short body or an actual timeout
+    // remains an error. JSON validity is still checked by the API caller.
+    const bool close_delimited_eof = n == AVERROR(EIO) && response_size < 0;
+    if (n < 0 && n != AVERROR_EOF && !close_delimited_eof) {
+        char error[128]; av_strerror(n, error, sizeof error);
+        res.error = error;
+        res.body.clear(); // Never treat truncated JSON or a timed-out write as confirmed.
+        return res;
+    }
     if (res.body.size() >= kMaxBody) {   /* cut short: not an answer to read as one */
         res.body.clear();
         res.status = 0;

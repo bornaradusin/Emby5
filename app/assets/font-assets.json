@@ -1,0 +1,55 @@
+{
+  "source": "Emby5-PS5-source-1.2.3.zip",
+  "files": [
+    {
+      "path": "app/assets/fonts/Inter-Bold.ttf",
+      "size": 420428,
+      "sha256": "288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f"
+    },
+    {
+      "path": "app/assets/fonts/Inter-Medium.ttf",
+      "size": 417300,
+      "sha256": "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872"
+    },
+    {
+      "path": "app/assets/fonts/Inter-Regular.ttf",
+      "size": 411640,
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
+    },
+    {
+      "path": "app/assets/fonts/Inter-SemiBold.ttf",
+      "size": 419744,
+      "sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"
+    },
+    {
+      "path": "app/assets/fonts/NotoEmoji.ttf",
+      "size": 1982596,
+      "sha256": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551"
+    },
+    {
+      "path": "app/assets/fonts/NotoNaskhArabicUI-Bold.ttf",
+      "size": 119356,
+      "sha256": "1bdd62b362a2a26b19dbcbf34d8bdb95b58ed35522d516f50c601b5f60b2b642"
+    },
+    {
+      "path": "app/assets/fonts/NotoNaskhArabicUI-Regular.ttf",
+      "size": 120800,
+      "sha256": "61e022fdf23df726b4fdf2e5022c166c97ec4b3846c5dbb76fc0922798a2083a"
+    },
+    {
+      "path": "app/assets/fonts/NotoSansSymbols-Subset.ttf",
+      "size": 114656,
+      "sha256": "822fd7854db6f52b75d66d8636cc6586a925ac6aed1ed10d961c1d16c57d8c1b"
+    },
+    {
+      "path": "app/assets/fonts/Roboto-Bold.ttf",
+      "size": 306940,
+      "sha256": "36f3709dea3e3ce3c6aedc058079e55980825f898f1e901d091c73c40de8bab1"
+    },
+    {
+      "path": "app/assets/fonts/Roboto-Regular.ttf",
+      "size": 305608,
+      "sha256": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174"
+    }
+  ]
+}

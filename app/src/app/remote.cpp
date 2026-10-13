@@ -26,6 +26,7 @@ namespace {
 std::mutex s_lock;
 std::deque<Command> s_queue;
 std::atomic<unsigned> s_generation{0};
+bool s_user_data_dirty = false;
 
 std::string str(const cJSON *o, const char *k)
 {
@@ -39,15 +40,15 @@ int64_t num(const cJSON *o, const char *k)
     return cJSON_IsNumber(v) ? (int64_t)v->valuedouble : 0;
 }
 
-void push(const Command &c)
+void push(const Command &c, unsigned gen = 0)
 {
     std::lock_guard<std::mutex> g(s_lock);
-    if (s_queue.size() < 32)
+    if ((!gen || gen == s_generation) && s_queue.size() < 32)
         s_queue.push_back(c);
 }
 
 /* One message from the server: Play, Playstate or GeneralCommand. */
-void handle(const std::string &text)
+void handle(const std::string &text, const std::string &user_id, unsigned gen)
 {
     cJSON *j = cJSON_Parse(text.c_str());
     if (!j)
@@ -56,7 +57,13 @@ void handle(const std::string &text)
     const cJSON *d = cJSON_GetObjectItemCaseSensitive(j, "Data");
     Command c;
     bool have = false;
-    if (type == "Play") {
+    if (type == "UserDataChanged") {
+        const std::string who = str(d, "UserId");
+        if (who == user_id) {
+            std::lock_guard<std::mutex> g(s_lock);
+            if (gen == s_generation) s_user_data_dirty = true;
+        }
+    } else if (type == "Play") {
         c.kind = Command::Play;
         const cJSON *id;
         cJSON_ArrayForEach(id, cJSON_GetObjectItemCaseSensitive(d, "ItemIds"))
@@ -93,7 +100,7 @@ void handle(const std::string &text)
     }
     if (have) {
         evo_bt("remote: %s %s", type.c_str(), c.play_command.c_str());
-        push(c);
+        push(c, gen);
     }
     cJSON_Delete(j);
 }
@@ -105,7 +112,7 @@ void run(jf::Client *client, std::function<bool()> alive, unsigned gen)
     while (current()) {
         jf::WebSocket ws;
         std::string err;
-        const std::string url = client->server() + "/emby/socket?deviceId=" + client->device_id();
+        const std::string url = client->websocket_url();
         if (!ws.open(url, {client->auth_header()}, &err)) {
             evo_bt("remote: socket failed: %s", err.c_str());
             for (int i = 0; i < backoff * 10 && current(); i++)
@@ -114,6 +121,10 @@ void run(jf::Client *client, std::function<bool()> alive, unsigned gen)
             continue;
         }
         backoff = 2;
+        {
+            std::lock_guard<std::mutex> g(s_lock);
+            if (gen == s_generation) s_user_data_dirty = true; // reconcile after reconnect
+        }
         client->post_capabilities();
         evo_bt("remote: listening");
         int keepalive = 30;
@@ -121,7 +132,7 @@ void run(jf::Client *client, std::function<bool()> alive, unsigned gen)
         while (current()) {
             std::string msg;
             const int r = ws.recv(&msg, 1000);
-            if (r < 0)
+            if (r < 0 || !current())
                 break;
             if (r > 0) {
                 if (msg.find("\"ForceKeepAlive\"") != std::string::npos) {
@@ -131,7 +142,7 @@ void run(jf::Client *client, std::function<bool()> alive, unsigned gen)
                     if (secs > 2)
                         keepalive = secs / 2;
                 } else {
-                    handle(msg);
+                    handle(msg, client->user_id(), gen);
                 }
             }
             if (time(nullptr) - last_sent >= keepalive) {
@@ -148,15 +159,25 @@ void run(jf::Client *client, std::function<bool()> alive, unsigned gen)
 
 void start(jf::Client *client, std::function<bool()> alive)
 {
-    const unsigned gen = ++s_generation;
+    unsigned gen;
     {
         std::lock_guard<std::mutex> g(s_lock);
+        gen = ++s_generation;
         s_queue.clear();
+        s_user_data_dirty = false;
     }
     std::thread([client, alive, gen] { run(client, alive, gen); }).detach();
 }
 
 void send(const Command &c) { push(c); }
+
+bool take_user_data_changed()
+{
+    std::lock_guard<std::mutex> g(s_lock);
+    const bool dirty = s_user_data_dirty;
+    s_user_data_dirty = false;
+    return dirty;
+}
 
 bool take(Command *out)
 {

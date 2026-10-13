@@ -17,8 +17,12 @@
 
 #include "seerr/seerr_client.h"
 #include "ui/screen.h"
+#include "ui/description_reader.h"
+#include <set>
 #include "ui/item_menu.h"
 #include "ui/seerr_request.h"
+#include "ui/overview_scroll.h"
+#include "ui/trailer_qr.h"
 
 #include <memory>
 #include <mutex>
@@ -34,6 +38,11 @@ public:
         jf::Item item;
         jf::Detail detail;
         bool have_detail = false;
+        // A failed optional endpoint must not hide successfully fetched episodes.
+        bool seasons_ok = false, episodes_ok = false, upcoming_ok = false;
+        bool similar_ok = false, extras_ok = false, trailers_ok = false;
+        bool resume_ok = false, next_ok = false;
+        std::vector<jf::Item> available_episodes, upcoming_episodes, resume_items, next_items;
         jf::Item target;              /* what Play plays (a series: its next episode) */
         bool have_target = false;
         std::vector<jf::Item> seasons;
@@ -51,20 +60,27 @@ public:
     static void prefetch(jf::Client &client, const jf::Item &item);
 
     void activate() override;
+    void reconcile_user_data(const jf::Item &fresh) override;
+    void refresh_user_data() override { activate(); }
+    static void invalidate_user_data();
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }
     float nav_alpha() const override { return 0.f; }
     float enter() const override { return m_enter.value; }
-    bool modal() const override { return m_sheet.active() || m_menu.active(); }
+    bool modal() const override { return m_sheet.active() || m_menu.active() || m_trailer_qr.active() || m_read_more.active(); }
 
 private:
+    friend struct DetailRegressionAccess; // host regression access, no runtime hook
     enum Zone { Buttons, Seasons, Episodes, Extras, Cast, Similar, ZoneCount };
-    enum Button { PlayButton, RestartButton, TrailerButton, WatchedButton, FavouriteButton };
+    enum Button { PlayButton, RestartButton, TrailerButton, TrailerQrButton, WatchedButton, FavouriteButton };
 
     struct Data {
         std::mutex lock;
         Content c;
+        unsigned generation = 0;
+        unsigned revision = 1; // published content/Seerr revision, not a per-frame copy
+        bool loading = false, refresh_again = false;
         /* The series in Seerr: what of it can be requested. */
         seerr::Detail seerr;
         bool have_seerr = false, seerr_pending = false;
@@ -72,10 +88,11 @@ private:
     static void look_up_in_seerr(const std::shared_ptr<Data> &d, const jf::Item &series);
 
     /* The focused season's episodes, from all_episodes (no request: instant). */
-    void select_episodes();
-    void apply_local(const UserDataChange &ch, bool whole);
+    void select_episodes(bool preserve_selection = true);
     void season_moved();
     static Content fetch(jf::Client &client, const jf::Item &base);
+    static void merge_content(Content &current, Content fresh);
+    static void rebuild_content(Content &content);
     std::vector<Zone> zones() const;
     std::vector<Button> buttons() const;
     void sync_button();
@@ -87,7 +104,8 @@ private:
 
     jf::Client &m_client;
     std::shared_ptr<Data> m_data = std::make_shared<Data>();
-    Content m_view;                    /* this frame's copy (drawn without the lock) */
+    Content m_view;                    /* last published snapshot, drawn without the lock */
+    unsigned m_revision = 0;
 
     Zone m_zone = Buttons;
     int m_button = 0;
@@ -95,6 +113,7 @@ private:
      * comes and goes when Seerr answers). sync_button() maps it back each time. */
     int m_button_id = -1;
     int m_season = 0, m_episode = 0, m_extra = 0, m_cast = 0, m_similar = 0;
+    int m_episode_first = 0;          /* first whole episode card in the viewport */
     double m_now = 0;
     bool m_season_picked = false;      /* the viewer moved the picker (else follow the target) */
     std::vector<jf::Item> m_eps;       /* the focused season's episodes */
@@ -104,14 +123,22 @@ private:
     Anim m_enter;                      /* fade in over the screen below */
     Anim m_content;                    /* text and buttons, once the details are in */
     double m_opened = -1;
+    float m_overview_scale = 0;
+    std::string m_overview_text;
+    std::vector<std::string> m_overview_lines;
+    overview::Scroll m_overview_scroll;
     Anim m_scroll[ZoneCount];          /* per-row horizontal scroll */
     Lifts m_lifts;
-    Drop m_btn_drop, m_season_drop;     /* the focus on the buttons and on the seasons */
+    Drop m_btn_drop;                  /* action buttons; seasons use one matching outline */
     bool m_animating = false;
 
     seerr::Detail m_seerr;              /* this frame's copy */
     bool m_have_seerr = false;
     bool m_seerr_asked_late = false;    /* looked up again once Seerr came up after the page */
+    TrailerQr m_trailer_qr;
+    DescriptionReader m_read_more;
+    std::set<std::string> m_revealed_episodes; // this page only; never changes UserData
+    bool spoiler_hidden(const jf::Item &item) const;
     RequestSheet m_sheet;
     ItemMenu m_menu;                    /* Options: the focused season's or episode's menu (PS5's way) */
     int m_menu_zone = -1;               /* the zone it was opened in */

@@ -39,3 +39,4 @@ void recent_add_or_update(const char *path, const char *title, double last_pos, 
 void recent_save(void)
 {
 }
+

@@ -28,8 +28,8 @@
 #include "pp_playback.h"
 #include "evo_boot_log.h"
 #include "evo_speaker_cal.h"
-#include "jelly5_tempo.h"
-#include "jelly5_bitstream.h"
+#include "emby5_tempo.h"
+#include "emby5_bitstream.h"
 
 #ifndef SCREEN_PLAYER
 #define SCREEN_PLAYER 2
@@ -80,7 +80,7 @@ int audio_accum_pos = 0;
 
 static evo_pcm_t audio_queue[AUDIO_QUEUE_BLOCKS][AUDIO_BLOCK_SAMPLES * EVO_AUDIO_MAX_CH];
 /* Emby5: playback speed. The queue holds the sound at normal speed; the output
- * thread time-stretches it as it plays (jelly5_tempo), so a new speed is heard
+ * thread time-stretches it as it plays (emby5_tempo), so a new speed is heard
  * within a block, not after the queue's seconds. The media clock moves on by the
  * input each output block was made from; the picture's clock follows the speed
  * that is playing (evo_audio_play_speed). */
@@ -89,13 +89,13 @@ static volatile float s_play_speed = 1.0f;
 static volatile int s_tempo_flush;
 void evo_audio_set_speed(float speed)
 {
-    if (jelly5_bs_active()) {   /* an HDMI bitstream plays as it is: the receiver decodes it */
+    if (emby5_bs_active()) {   /* an HDMI bitstream plays as it is: the receiver decodes it */
         speed = 1.0f;
         s_play_speed = 1.0f;
     }
     s_speed = speed < 0.5f ? 0.5f : speed > 2.0f ? 2.0f : speed;
 }
-float evo_audio_speed(void) { return jelly5_bs_active() ? 1.0f : s_speed; }
+float evo_audio_speed(void) { return emby5_bs_active() ? 1.0f : s_speed; }
 float evo_audio_play_speed(void) { return s_play_speed; }
 void evo_audio_flush_speed(void) { s_tempo_flush = 1; }
 int evo_audio_port_float = 1;
@@ -182,7 +182,7 @@ static const evo_pcm_t *next_output_block(double *media)
         fifo_len = 0;
         fifo_media = 0.0;
         tempo_on = 0;
-        jelly5_tempo_reset();
+        emby5_tempo_reset();
     }
     const float sp = s_speed;
     if (sp == 1.0f && fifo_len == 0) {
@@ -201,11 +201,11 @@ static const evo_pcm_t *next_output_block(double *media)
         int n = AUDIO_BLOCK_SAMPLES;
         if (sp != 1.0f) {
             if (!tempo_on) {
-                jelly5_tempo_reset();
+                emby5_tempo_reset();
                 tempo_on = 1;
             }
             const float *st = NULL;
-            n = jelly5_tempo_process(src, AUDIO_BLOCK_SAMPLES, ch, sp, &st);
+            n = emby5_tempo_process(src, AUDIO_BLOCK_SAMPLES, ch, sp, &st);
             src = st;
         } else {
             tempo_on = 0;
@@ -268,8 +268,8 @@ void *audio_output_thread(void *arg) {
              * give back the moment the scrub commits. */
             video_rel_at_wait = -1.0;
             video_stuck_iters = 0;
-            if (jelly5_bs_active() && audio_handle >= 1)
-                sceAudioOutOutput(audio_handle, jelly5_bs_silence());   /* keeps the receiver locked */
+            if (emby5_bs_active() && audio_handle >= 1)
+                sceAudioOutOutput(audio_handle, emby5_bs_silence());   /* keeps the receiver locked */
             else
                 usleep(2000);
             continue;
@@ -294,8 +294,8 @@ void *audio_output_thread(void *arg) {
 
             if (video_stream_index >= 0 && first_video_pts_seconds < 0.0 &&
                 video_decode_ready && !video_decode_done) {
-                if (jelly5_bs_active())
-                    sceAudioOutOutput(audio_handle, jelly5_bs_silence());   /* the receiver stays locked */
+                if (emby5_bs_active())
+                    sceAudioOutOutput(audio_handle, emby5_bs_silence());   /* the receiver stays locked */
                 else
                     usleep(2000);
                 continue;
@@ -332,28 +332,28 @@ void *audio_output_thread(void *arg) {
             if (video_rel >= EVO_AV_SYNC_SETTLE_SEC &&
                 audio_clock_seconds > video_rel + 0.50 &&
                 video_stuck_iters < 125) {
-                if (jelly5_bs_active()) {   /* a ~5 ms grain of silence: the same ~250 ms escape */
+                if (emby5_bs_active()) {   /* a ~5 ms grain of silence: the same ~250 ms escape */
                     video_stuck_iters += 2;
-                    sceAudioOutOutput(audio_handle, jelly5_bs_silence());
+                    sceAudioOutOutput(audio_handle, emby5_bs_silence());
                 } else {
                     video_stuck_iters++;
                     usleep(2000);
                 }
                 continue;
             }
-            if (jelly5_bs_active()) {
-                /* Jelly5: HDMI bitstream. One port grain of IEC 61937 bursts at a
+            if (emby5_bs_active()) {
+                /* Emby5: HDMI bitstream. One port grain of IEC 61937 bursts at a
                  * time, untouched (no gain, speed or night mode can apply). The
                  * clock moves on by the 48 kHz media samples a grain carries;
                  * an empty buffer plays silence and leaves the clock alone. */
                 s_play_speed = 1.0f;
-                const int16_t *grain = pb_prebuffer_hold ? NULL : jelly5_bs_pop();   /* rebuffering: hold */
+                const int16_t *grain = pb_prebuffer_hold ? NULL : emby5_bs_pop();   /* rebuffering: hold */
                 if (grain) {
                     sceAudioOutOutput(audio_handle, grain);
-                    audio_samples_played += jelly5_bs_media_samples();
+                    audio_samples_played += emby5_bs_media_samples();
                     audio_clock_seconds = (double)audio_samples_played / 48000.0;
                 } else {
-                    sceAudioOutOutput(audio_handle, jelly5_bs_silence());
+                    sceAudioOutOutput(audio_handle, emby5_bs_silence());
                 }
                 continue;
             }
@@ -389,8 +389,8 @@ void *audio_output_thread(void *arg) {
                  */
                 sceAudioOutOutput(audio_handle, silence);
             }
-        } else if (jelly5_bs_active() && audio_handle >= 1 && screen == 2) {
-            sceAudioOutOutput(audio_handle, jelly5_bs_silence());   /* paused: the port and the receiver stay locked */
+        } else if (emby5_bs_active() && audio_handle >= 1 && screen == 2) {
+            sceAudioOutOutput(audio_handle, emby5_bs_silence());   /* paused: the port and the receiver stay locked */
         } else {
             usleep(200);
         }
@@ -461,7 +461,7 @@ static float soft_limit(float x)
     return x < 0.f ? -y : y;
 }
 
-static void jelly5_dsp(float *s, int frames, int ch)
+static void emby5_dsp(float *s, int frames, int ch)
 {
     const int night = s_night;
     const float target = s_gain_target;
@@ -581,7 +581,7 @@ static void mix_audio_frame_to_queue(
         );
 
     if (converted > 0) {
-        jelly5_dsp((float *)output_buffer, converted, evo_audio_channels);
+        emby5_dsp((float *)output_buffer, converted, evo_audio_channels);
         const evo_pcm_t *samples = (const evo_pcm_t *)output_buffer;
         const int ch = evo_audio_channels;
         int index = 0;
@@ -664,8 +664,8 @@ void *audio_decode_thread_func(void *arg) {
         while (audio_decode_thread_running && !audio_decode_hold && audio_queue_count > 10) {
             usleep(1000);
         }
-        /* Jelly5: an HDMI bitstream keeps about as little ahead as the PCM queue does. */
-        while (audio_decode_thread_running && !audio_decode_hold && jelly5_bs_active() && jelly5_bs_buffered_ms() > 400 &&
+        /* Emby5: an HDMI bitstream keeps about as little ahead as the PCM queue does. */
+        while (audio_decode_thread_running && !audio_decode_hold && emby5_bs_active() && emby5_bs_buffered_ms() > 400 &&
                !pb_prebuffer_hold && !pb_scrub_hold) {
             usleep(1000);
         }
@@ -740,8 +740,8 @@ void *audio_decode_thread_func(void *arg) {
             continue;
         }
 
-        if (jelly5_bs_active()) {
-            /* Jelly5: HDMI bitstream - the packet goes to the receiver as it is. A gap
+        if (emby5_bs_active()) {
+            /* Emby5: HDMI bitstream - the packet goes to the receiver as it is. A gap
              * in the packets' timestamps is played as silence, so the clock (which
              * counts what is played) stays on the media's timeline. */
             static double s_next = -1.0;
@@ -755,10 +755,10 @@ void *audio_decode_thread_func(void *arg) {
                 }
                 const double gap = s_next >= 0.0 ? audio_pts_seconds - s_next : 0.0;
                 if (gap > 0.02 && gap < 5.0)
-                    jelly5_bs_gap(gap, &audio_decode_thread_running);
+                    emby5_bs_gap(gap, &audio_decode_thread_running);
                 s_next = pkt->duration > 0 ? audio_pts_seconds + pkt->duration * av_q2d(tb) : -1.0;
             }
-            jelly5_bs_feed(pkt->data, pkt->size, &audio_decode_thread_running);
+            emby5_bs_feed(pkt->data, pkt->size, &audio_decode_thread_running);
             av_packet_free(&pkt);
             continue;
         }

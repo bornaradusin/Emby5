@@ -1,4 +1,4 @@
-# Jelly5 (based on Nuvio PS5, Copyright (C) 2026 Husam Osman)
+# Emby5 (based on Nuvio PS5, Copyright (C) 2026 Husam Osman)
 # SPDX-License-Identifier: GPL-3.0-or-later
 # app: object build only. scripts/build.sh drives this with the PS5 SDK
 # and does the link, PS5 conversion and signing.
@@ -18,7 +18,7 @@ OBJDIR := build/obj
 # sceVideodec2 incl. 10-bit). NUVIO_APP marks the places this app changed.
 DEFS := -DNUVIO_APP=1 -DEVO_APP_MODULE=1 -DEVO_AGC_DEVICE=1 -DEVO_AGC_HAVE_VIDEO_PIPES=1 -DEVO_TARGET_PS5=1 \
         -DEVO_VDEC_NATIVE_10BIT=1 -DEVO_NUVIO_EDITION=1 -DPP_4K_PRODUCT_STAGE=4 \
-        -DEVO_PLAYER_VERSION=\"jelly5\" $(EMBY5_DEFS)
+        -DEVO_PLAYER_VERSION=\"emby5\" $(EMBY5_DEFS)
 
 INCS := -Isrc -Isrc/shim -Ithird_party \
         -Iengine/core/include -Iengine/include -Iengine/pp/include \
@@ -32,9 +32,9 @@ CXXFLAGS := -O2 -g -Wall -Wno-unused-parameter -std=c++17 $(TFLAGS) $(DEFS) $(IN
 ENGINE_C := $(wildcard engine/media/src/*.c) $(wildcard engine/pp/src/*.c) \
             $(wildcard engine/src/*.c) engine/addons/src/cJSON.c
 ENGINE_CXX := engine/core/src/services/PlaybackController.cpp
-# Nuvio's system-browser host is not part of Jelly5 (no WebBrowserDialog import).
+# Nuvio's system-browser host is not part of Emby5 (no WebBrowserDialog import).
 # Nuvio's payload link (browser host, bridge, control) is replaced by
-# src/jelly5_bridge.cpp, which reports to Jellyfin instead.
+# src/emby5_bridge.cpp, which reports playback to Emby.
 APP_C   := $(wildcard src/*.c)
 APP_CXX := $(wildcard src/*.cpp) $(wildcard src/jf/*.cpp) $(wildcard src/seerr/*.cpp) $(wildcard src/gfx/*.cpp) $(wildcard src/ui/*.cpp) $(wildcard src/app/*.cpp) $(wildcard src/platform/*.cpp)
 

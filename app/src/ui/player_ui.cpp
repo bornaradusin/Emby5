@@ -7,14 +7,15 @@
 #include "ui/player_ui.h"
 #include "evo_audio_out.h"
 #include "evo_agc_runtime.h"
-#include "jelly5_bitstream.h"
+#include "emby5_bitstream.h"
 
 #include "app/remote.h"
 #include "app/iptv_live.h"
+#include "app/iptv_navigation.h"
 #include "app/settings.h"
 #include "app/syncplay.h"
 #include "app/i18n.h"
-#include "jelly5_playback.h"
+#include "emby5_playback.h"
 #include "gfx/art.h"
 #include "gfx/gfx.h"
 #include "nuvio_subs.h"
@@ -105,15 +106,17 @@ void PlayerUi::begin(const NuvioRequest *req, double now)
 {
     *this = PlayerUi();
     m_req = req;
+    m_watch.begin(req ? req->autoplay_count : 0, req ? req->prefs.unattended_seconds : 0);
     m_music = req && req->item_type == "audio";
     // Only the channel that opened this player can display Live TV EPG.
     const std::string playing_id=iptv_live::playing_channel();
     if (req && !playing_id.empty()) {
-        const auto channels=iptv_live::snapshot().channels;
-        for (const auto &ch:channels) if (ch.id==playing_id && ch.name==req->title) {
-            m_live_channel_id=playing_id; break;
-        }
+        iptv_xtream::Channel channel;
+        if(iptv_live::channel_by_id(playing_id,&channel) && channel.name==req->title)
+            m_live_channel_id=playing_id;
     }
+    if(req && iptv_navigation::matches(req->live_navigation_token,req->live_channel_id))
+        m_live_channel_id=req->live_channel_id;
     m_controls = m_music;   /* the music screen is all controls, always up */
     m_now = m_last = m_load_since = now;
     /* Video opens on the dark loading veil; music never does: its screen (the
@@ -136,18 +139,20 @@ void PlayerUi::end()
 void PlayerUi::draw_live_epg(float opacity)
 {
     if (m_live_channel_id.empty() || opacity<=0.01f) return;
-    const auto channels=iptv_live::snapshot().channels;
-    for (const auto &ch:channels) {
-        if (ch.id!=m_live_channel_id) continue;
+    if(m_req && !m_req->live_navigation_token.empty())
+        gfx::text(94.f,308.f,"Hide controls: Circle. Up/Down: groups. Left/Right: channels.",
+                  {gfx::Medium,20,1150},alpha(0xfff5fff6u,opacity));
+    iptv_xtream::Channel ch;
+    if (iptv_live::channel_by_id(m_live_channel_id,&ch)) {
         const float x=70.f, y=75.f, w=830.f, h=ch.now.empty() && ch.next.empty()?115.f:196.f;
         gfx::fill({x,y,w,h},alpha(0xc9000000u,opacity),20);
-        gfx::text(x+24,y+38,ch.name,{gfx::Bold,27,w-48},alpha(kText,opacity));
+        gfx::text(x+24,y+38,ch.name,{gfx::Bold,27,w-48},alpha(0xfff5fff6u,opacity));
         if (ch.now.empty() && ch.next.empty()) {
-            gfx::text(x+24,y+85,"Programme guide unavailable",{gfx::Medium,21,w-48},alpha(kText3,opacity));
-            break;
+            gfx::text(x+24,y+85,"Programme guide unavailable",{gfx::Medium,21,w-48},alpha(0xffbacdc2u,opacity));
+            return;
         }
         gfx::text(x+24,y+82,"NOW  " + (ch.now.empty()?"No information":ch.now),
-                  {gfx::Medium,22,w-48},alpha(kText,opacity));
+                  {gfx::Medium,22,w-48},alpha(0xfff5fff6u,opacity));
         if (ch.now_end>ch.now_start) {
             const auto epoch=(int64_t)std::time(nullptr);
             const float progress=(float)std::clamp(double(epoch-ch.now_start)/double(ch.now_end-ch.now_start),0.0,1.0);
@@ -155,8 +160,8 @@ void PlayerUi::draw_live_epg(float opacity)
             gfx::fill({x+24,y+104,(w-48)*progress,5},alpha(0xffffffffu,opacity),2.5f);
         }
         gfx::text(x+24,y+154,"NEXT  " + (ch.next.empty()?"No information":ch.next),
-                  {gfx::Medium,22,w-48},alpha(kText2,opacity));
-        break;
+                  {gfx::Medium,22,w-48},alpha(0xffd4e2d8u,opacity));
+
     }
 }
 
@@ -308,25 +313,31 @@ void PlayerUi::seek_step(int dir, const NuvioStatus &st, double now)
 
 bool PlayerUi::check_still_watching(const NuvioStatus &st) const
 {
-    if (!m_req || m_music || !m_req->has_next || !m_req->prefs.autoplay_next || m_had_input || m_still_approved)
-        return false;
-    const int mode = m_req->prefs.still_watching_mode;
-    return (mode == 1 && m_req->autoplay_count >= 3) ||
-           (mode == 2 && m_req->prefs.unattended_seconds + st.duration >= 7200.0);
+    (void)st;
+    return m_req && !m_music && m_req->has_next && m_req->prefs.autoplay_next &&
+           m_watch.due(m_req->prefs.still_watching_mode, true);
+}
+
+bool PlayerUi::block_autoplay(const NuvioStatus &st)
+{
+    if (!m_still_prompt && !check_still_watching(st)) return false;
+    m_still_prompt = true;
+    m_still_next = true;
+    m_card_since = -1;
+    m_dirty = true;
+    return true;
 }
 
 void PlayerUi::playback_ended(const NuvioStatus &st, std::vector<OsdCommand> &out)
 {
-    if (check_still_watching(st)) {
-        m_still_prompt = true;
-        m_dirty = true;
-        return;   /* do not autoplay another episode without confirmation */
-    }
-    /* An album always plays on; episodes follow the autoplay setting. */
-    if (m_req && m_req->has_next && (m_req->prefs.autoplay_next || m_music))
-        out.push_back({OsdCmd::PlayNext});
-    else
+    if (block_autoplay(st)) return;
+    if (m_req && m_req->has_next && (m_req->prefs.autoplay_next || m_music)) {
+        OsdCommand next{OsdCmd::PlayNext};
+        next.automatic = true;
+        out.push_back(next);
+    } else {
         out.push_back({OsdCmd::Stop});
+    }
 }
 
 void PlayerUi::tick(const NuvioStatus &st, std::vector<OsdCommand> &out, bool poll_remote)
@@ -334,21 +345,52 @@ void PlayerUi::tick(const NuvioStatus &st, std::vector<OsdCommand> &out, bool po
     m_now = st.now;
     if (!m_req)
         return;
+    m_watch.sample(st.now, st.started && !st.paused && !st.buffering &&
+                   !st.switching && !st.seeking && !m_seeking &&
+                   st.error.empty() && !m_still_prompt);
+    if (!m_music && !m_still_prompt && m_req->prefs.still_watching_mode == 2 &&
+        st.started && m_watch.due(2, false)) {
+        m_still_prompt = true;
+        m_still_next = false;
+        m_still_resume = !st.paused;
+        m_dirty = true;
+        if (m_still_resume) out.push_back({OsdCmd::TogglePause});
+    }
+    if (m_still_prompt) {
+        // Do not leave queued skips/unpause to execute after local confirmation.
+        // Explicit remote Stop or Play may end this playback, but cannot approve it.
+        m_scheduled.clear();
+        if (poll_remote) {
+            remote::Command pending;
+            while (remote::take(&pending)) {
+                if (pending.kind == remote::Command::Stop ||
+                    (pending.kind == remote::Command::Play && !pending.syncplay)) {
+                    remote_do(pending, st, out);
+                    break;
+                }
+            }
+        }
+        return;
+    }
     if (poll_remote)
         remote_poll(st, out);
     int track = -1;
-    switch (jelly5_subs::download_state(&track)) {
-    case jelly5_subs::Done:
+    switch (emby5_subs::download_state(&track)) {
+    case emby5_subs::Done:
         out.push_back({OsdCmd::SelectSubtitle, 0, track});
         toast(T("Undertekst lagt til"), st.now);
         break;
-    case jelly5_subs::Failed: toast(T("Kunne ikke hente underteksten"), st.now); break;
+    case emby5_subs::Failed: toast(T("Kunne ikke hente underteksten"), st.now); break;
     default: break;
     }
     if (st.started && !m_shown_once) {
         m_shown_once = true;
-        show_controls(st.now, Zone::Buttons);   /* a moment as the picture appears */
-        m_hide_at = st.now + 3.0;
+        if(!m_req->live_navigation_token.empty()) {
+            toast(m_req->live_group_name+" - "+m_req->title,st.now);
+        } else {
+            show_controls(st.now, Zone::Buttons);   /* a moment as the picture appears */
+            m_hide_at = st.now + 3.0;
+        }
     }
     /* Automatic intro skipping (Innstillinger). */
     if (m_req->prefs.auto_skip && !m_seeking) {
@@ -374,7 +416,9 @@ void PlayerUi::tick(const NuvioStatus &st, std::vector<OsdCommand> &out, bool po
         if (m_req->prefs.autoplay_next && st.now - m_card_since >= 10.0 && !st.paused &&
             !check_still_watching(st) && !m_still_prompt) {
             m_card_dismissed = true;
-            out.push_back({OsdCmd::PlayNext});
+            OsdCommand next{OsdCmd::PlayNext};
+            next.automatic = true;
+            out.push_back(next);
         }
     } else {
         m_card_since = -1;
@@ -386,7 +430,7 @@ void PlayerUi::tracks_input(uint32_t p, const NuvioStatus &st, std::vector<OsdCo
 {
     const int na = (int)st.audio.size(), ns = nuvio_subs_count();
     const int nv = m_req->sources.size() > 1 ? (int)m_req->sources.size() : 0;   /* versions, under the audio */
-    const bool find = jelly5_subs::available();
+    const bool find = emby5_subs::available();
     const int rows[3] = {na + nv, ns + 2 + (find ? 1 : 0), 7};   /* subtitles: Av, tracks, Tilpass, Søk */
     int &r = m_rows[m_col];
     if (m_col == 2 && m_find_open && !(p & (NUVIO_BTN_CIRCLE | NUVIO_BTN_LEFT)) ) {
@@ -496,7 +540,7 @@ void PlayerUi::tracks_input(uint32_t p, const NuvioStatus &st, std::vector<OsdCo
                 if (m_find_langs[0] != "eng")
                     m_find_langs.push_back("eng");
                 m_find_lang = 0;
-                jelly5_subs::search(m_find_langs[0]);
+                emby5_subs::search(m_find_langs[0]);
             } else {
                 out.push_back({OsdCmd::SelectSubtitle, 0, r - 1});   /* row 0 = Av */
             }
@@ -509,7 +553,7 @@ void PlayerUi::find_input(uint32_t p)
 {
     std::vector<jf::RemoteSubtitle> found;
     std::string lang;
-    jelly5_subs::results(&found, &lang);
+    emby5_subs::results(&found, &lang);
     int &r = m_rows[2];
     if (p & NUVIO_BTN_UP) {
         r = std::max(0, r - 1);
@@ -518,9 +562,9 @@ void PlayerUi::find_input(uint32_t p)
     } else if ((p & (NUVIO_BTN_LEFT | NUVIO_BTN_RIGHT)) && r == 0 && m_find_langs.size() > 1) {
         m_find_lang = (m_find_lang + ((p & NUVIO_BTN_RIGHT) ? 1 : -1) + (int)m_find_langs.size()) %
                       (int)m_find_langs.size();
-        jelly5_subs::search(m_find_langs[m_find_lang]);
+        emby5_subs::search(m_find_langs[m_find_lang]);
     } else if ((p & NUVIO_BTN_CROSS) && r >= 1 && r <= (int)found.size()) {
-        jelly5_subs::download(found[r - 1]);
+        emby5_subs::download(found[r - 1]);
         toast(T("Henter undertekst \xE2\x80\xA6"), m_now);
     }
 }
@@ -567,17 +611,30 @@ void PlayerUi::episodes_input(uint32_t p, std::vector<OsdCommand> &out)
 
 void PlayerUi::input(const nuvio_input_state &in, const NuvioStatus &st, std::vector<OsdCommand> &out)
 {
-    if (in.pressed) {
-        if (m_still_prompt) {
+    const uint32_t directions=NUVIO_BTN_UP|NUVIO_BTN_DOWN|NUVIO_BTN_LEFT|NUVIO_BTN_RIGHT;
+    m_live_input_ready=m_req && iptv_navigation::input_ready(m_req->live_navigation_token,
+        ((in.held|in.pressed)&directions)!=0);
+    if (m_still_prompt) {
+        const uint32_t pressed = in.pressed & ~in.repeats;
+        if (pressed & NUVIO_BTN_CIRCLE) {
             m_still_prompt = false;
-            m_still_approved = true;
-            m_had_input = true;  /* acknowledgement resets the unattended run */
+            out.push_back({OsdCmd::Stop});
+        } else if (pressed & NUVIO_BTN_CROSS) {
+            m_still_prompt = false;
+            m_watch.approve();
+            m_had_input = true;
+            if (m_still_next) {
+                OsdCommand next{OsdCmd::PlayNext};
+                next.automatic = true;
+                out.push_back(next);
+            } else if (m_still_resume) {
+                out.push_back({OsdCmd::TogglePause});
+            }
             m_dirty = true;
-            out.push_back({OsdCmd::PlayNext});
-            return;  /* any button confirms, without triggering another control */
         }
-        m_had_input = true;
+        return; // only a new X press continues; held/repeated buttons do not
     }
+    if (in.pressed & ~in.repeats) m_had_input = true;
     const size_t first = out.size();
     input_local(in, st, out);
     if (!syncplay::active())
@@ -640,6 +697,10 @@ void PlayerUi::input_local(const nuvio_input_state &in, const NuvioStatus &st, s
             out.push_back({OsdCmd::Stop});
         return;
     }
+    if (!st.started && (p & NUVIO_BTN_CIRCLE)) {
+        out.push_back({OsdCmd::Stop});
+        return;
+    }
     if ((p & NUVIO_BTN_L3) && !m_music) {   /* the playback info panel, on and off */
         m_stats = !m_stats;
         a_stats.to(m_stats ? 1.f : 0.f);
@@ -669,6 +730,21 @@ void PlayerUi::input_local(const nuvio_input_state &in, const NuvioStatus &st, s
         } else if (p & NUVIO_BTN_CIRCLE)
             m_overlay = Overlay::None;
         return;
+    }
+    // Full-screen Live TV only. Menus/tracks/controls keep normal D-pad use.
+    // A held press cannot skip a newly opened channel; only a fresh edge counts.
+    if(!m_req->live_navigation_token.empty() &&
+       !m_controls && !m_seeking && !m_stats && !syncplay::active() &&
+       iptv_navigation::matches(m_req->live_navigation_token,m_req->live_channel_id)) {
+        const uint32_t dirs=NUVIO_BTN_UP|NUVIO_BTN_DOWN|NUVIO_BTN_LEFT|NUVIO_BTN_RIGHT;
+        if(p&dirs) {
+            const uint32_t fresh=p & ~in.repeats & dirs;
+            if(st.started && !st.switching && m_live_input_ready && fresh && !(fresh&(fresh-1)) && !(p&~dirs)) {
+                OsdCommand c{(fresh&(NUVIO_BTN_UP|NUVIO_BTN_DOWN))?OsdCmd::LiveGroup:OsdCmd::LiveChannel};
+                c.index=(fresh&(NUVIO_BTN_DOWN|NUVIO_BTN_RIGHT))?1:-1;out.push_back(c);
+            }
+            return;
+        }
     }
     if (p & (NUVIO_BTN_L1 | NUVIO_BTN_R1)) {
         const double from = m_seeking ? m_seek_target : st.position;
@@ -753,7 +829,7 @@ void PlayerUi::input_local(const nuvio_input_state &in, const NuvioStatus &st, s
             }
             case Button::Tracks: open_overlay(Overlay::Tracks); break;
             case Button::Speed: {   /* 1x, 1.25x, 1.5x, 2x, 0.75x, round again */
-                if (jelly5_bs_active()) {   /* the receiver decodes it: it plays as it is */
+                if (emby5_bs_active()) {   /* the receiver decodes it: it plays as it is */
                     toast(T("Hastighet virker ikke med HDMI-bitstr\xC3\xB8m"), now);
                     break;
                 }
@@ -1161,6 +1237,11 @@ void PlayerUi::draw_loading(const NuvioStatus &st)
             const float pulse = 0.3f + 0.7f * (0.5f + 0.5f * std::sin(t * 5.f - i * 0.9f));
             gfx::fill({W / 2 - 40 + i * 32, H - 160, 14, 14}, alpha(kText, da * pulse), 7);
         }
+        if (!st.started) {
+            gfx::text(W/2,H-205,(st.open_stage && *st.open_stage)?st.open_stage:"Opening stream...",
+                      {gfx::Medium,24,1200},alpha(kText2,da),1);
+            draw_pad_hint(W/2-95,H-92,PadButton::Circle,"Cancel",26,da);
+        }
         m_dirty = true;
     }
     gfx::pop_opacity();
@@ -1290,7 +1371,7 @@ void PlayerUi::draw_tracks(const NuvioStatus &st, float a)
 
     /* Subtitles: Av, the tracks, then "Tilpass undertekster". */
     const int ns = nuvio_subs_count(), cur = nuvio_subs_selected();
-    const bool find = jelly5_subs::available();
+    const bool find = emby5_subs::available();
     column(1, ns + 2 + (find ? 1 : 0), [&](int i, std::string &label, std::string &right, bool &sel, bool &dim) {
         if (i == 0) {
             label = T("Av");
@@ -1354,7 +1435,7 @@ void PlayerUi::draw_tracks(const NuvioStatus &st, float a)
     if (m_find_open) {
         std::vector<jf::RemoteSubtitle> found;
         std::string lang;
-        const jelly5_subs::State state = jelly5_subs::results(&found, &lang);
+        const emby5_subs::State state = emby5_subs::results(&found, &lang);
         column(2, 1 + (int)found.size(), [&](int i, std::string &label, std::string &right, bool &, bool &) {
             if (i == 0) {
                 label = T("Spr\xC3\xA5k");
@@ -1370,9 +1451,9 @@ void PlayerUi::draw_tracks(const NuvioStatus &st, float a)
             if (right.empty() && x.downloads > 0) right = std::to_string(x.downloads) + T(" nedl.");
         });
         const float sy = top + 30 + (row_h + 4) + 40;   /* where the first result goes */
-        if (state == jelly5_subs::Busy)
+        if (state == emby5_subs::Busy)
             gfx::text(cols[2] + 18, sy, T("S\xC3\xB8ker \xE2\x80\xA6"), {gfx::Medium, 22}, alpha(kText3, a));
-        else if (state == jelly5_subs::Done && found.empty())
+        else if (state == emby5_subs::Done && found.empty())
             gfx::text(cols[2] + 18, sy, T("Fant ingen"), {gfx::Medium, 22}, alpha(kText3, a));
     }
     draw_pad_hints(r.x + 56, r.y + r.h - 48, {{PadButton::Circle, T("Lukk")}}, 0, 26, a);
@@ -1879,7 +1960,7 @@ void PlayerUi::draw(const NuvioStatus &st)
         const gfx::Rect r{W / 2 - 400, H / 2 - 110, 800, 220};
         glass_panel(r, 20, 1.f, true, 1.f);
         gfx::text(W / 2, H / 2 - 15, "Are you still watching?", {gfx::Bold, 38}, kText, 1);
-        gfx::text(W / 2, H / 2 + 48, "Press any button to continue", {gfx::Medium, 25}, kText2, 1);
+        gfx::text(W / 2, H / 2 + 48, "Press X to continue or Circle to stop", {gfx::Medium, 25}, kText2, 1);
     }
 
     if (a_flash.value > 0.01f) {   /* play / pause, flashed in the centre */

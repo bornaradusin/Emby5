@@ -27,6 +27,7 @@ public:
     explicit Search(jf::Client &client);
 
     void activate() override;
+    void refresh_user_data() override { if (m_suggested) start_search(); }
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return true; }   /* the caret blinks */

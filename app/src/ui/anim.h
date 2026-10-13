@@ -10,6 +10,8 @@
 #include <cmath>
 
 namespace ui {
+// Updated on the render thread from the current appearance once per frame.
+inline thread_local bool reduced_motion_active = false;
 
 struct Anim {
     float value = 0, target = 0;
@@ -21,6 +23,7 @@ struct Anim {
      * Returns true while still moving. */
     bool step(float dt, float rate = 12.f)
     {
+        if (reduced_motion_active) { value=target; return false; }
         const float d = target - value;
         if (std::fabs(d) < 0.0005f * (1.f + std::fabs(target))) {
             value = target;

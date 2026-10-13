@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "ui/album.h"
+#include "app/io_worker.h"
+#include "ui/music_artwork.h"
 #include "app/i18n.h"
 
 #include "gfx/art.h"
@@ -29,7 +31,7 @@ std::string duration(int64_t ticks)
 
 std::string cover_url(jf::Client &c, const jf::Item &it)
 {
-    return c.image_url(it.primary_owner.empty() ? it.id : it.primary_owner, "Primary", it.primary_tag, 800, true);
+    return music_image_url(c, music_primary(it));
 }
 
 } // namespace
@@ -79,35 +81,56 @@ Action Album::play_from(size_t i, bool shuffled) const
     return a;
 }
 
+Album::~Album()
+{
+    std::lock_guard<std::mutex> g(m_data->lock);
+    m_data->alive=false;
+    ++m_data->generation;
+}
+
+bool Album::needs_redraw() const
+{
+    std::lock_guard<std::mutex> g(m_data->lock);
+    return m_seen_revision!=m_data->revision;
+}
+
 void Album::activate()
 {
     m_enter.to(1.f);
-    std::shared_ptr<Data> d = m_data;
-    jf::Client *c = &m_client;
-    const std::string id = m_album.id;
-    const bool playlist = m_playlist;
-    std::thread([d, c, id, playlist] {
-        jf::Item album;
-        bool got = false;
-        std::vector<jf::Item> tracks;
-        std::thread a([&] { got = c->item(id, &album); });
-        if (playlist) {
-            for (jf::Item &t : c->playlist_items(id))
-                if (t.type == "Audio" || t.type == "Movie" || t.type == "Episode" || t.type == "Video" ||
-                    t.type == "MusicVideo")
-                    tracks.push_back(std::move(t));
-        } else {
-            for (jf::Item &t : c->children(id, "ParentIndexNumber,IndexNumber,SortName", 1000))
-                if (t.type == "Audio")
-                    tracks.push_back(std::move(t));
-        }
-        a.join();
+    const auto d=m_data;
+    jf::Client *c=&m_client;
+    const std::string id=m_album.id;
+    const bool playlist=m_playlist;
+    unsigned generation;
+    {std::lock_guard<std::mutex> g(d->lock);generation=++d->generation;}
+    auto current=[d,generation] {
         std::lock_guard<std::mutex> g(d->lock);
-        if (got)
-            d->album = album;
-        d->tracks = std::move(tracks);
-        d->loaded = true;
-    }).detach();
+        return d->alive && generation==d->generation;
+    };
+    auto failed=[d,generation] {
+        std::lock_guard<std::mutex> g(d->lock);
+        if(d->alive && generation==d->generation) {d->loaded=true;++d->revision;}
+    };
+    if(!emby5::spawn_io([d,c,id,playlist,generation,current] {
+        jf::Item album;
+        if(!current()) return;
+        const bool got=c->item(id,&album) && album.id==id;
+        {std::lock_guard<std::mutex> g(d->lock);
+         if(!d->alive || generation!=d->generation)return;
+         if(got){d->album=album;++d->revision;}}
+        if(!current()) return;
+        std::vector<jf::Item> tracks;
+        bool tracks_ok=true;
+        auto fetched=playlist?c->playlist_items(id):c->children(id,"ParentIndexNumber,IndexNumber,SortName",1000,&tracks_ok);
+        for(auto &track:fetched)
+            if(track.type=="Audio" || (playlist && (track.type=="Movie" || track.type=="Episode" ||
+                track.type=="Video" || track.type=="MusicVideo"))) tracks.push_back(std::move(track));
+        std::lock_guard<std::mutex> g(d->lock);
+        if(!d->alive || generation!=d->generation)return;
+        if(tracks_ok)d->tracks=std::move(tracks);
+        d->loaded=true;
+        ++d->revision;
+    },failed)) failed();
 }
 
 Action Album::input(uint32_t p)
@@ -161,10 +184,11 @@ void Album::draw(double now, float dt)
     {
         std::lock_guard<std::mutex> g(m_data->lock);
         m_album = m_data->album;
-        if (m_data->loaded && !m_loaded) {
+        if (m_data->loaded && m_seen_revision!=m_data->revision) {
             m_tracks = m_data->tracks;
             m_loaded = true;
         }
+        m_seen_revision=m_data->revision;
     }
     if (m_enter.step(dt, 9.f))
         m_animating = true;
@@ -175,16 +199,16 @@ void Album::draw(double now, float dt)
     // An album entry can have no usable image even when its audio tracks have
     // embedded art. Prefer the track's tagged album art, then its own artwork.
     std::string cover = cover_url(m_client, m_album);
-    if (!m_tracks.empty() && (m_album.primary_tag.empty() || art::failed(cover))) {
+    if (!m_tracks.empty() && art::failed(cover)) {
         for (const jf::Item &track : m_tracks) {
             if (!track.album_id.empty() && !track.album_primary_tag.empty()) {
-                cover = m_client.image_url(track.album_id, "Primary", track.album_primary_tag, 800);
-                break;
+                const auto candidate=m_client.image_url(track.album_id,"Primary",track.album_primary_tag,800);
+                if(candidate!=cover && !art::failed(candidate)) {cover=candidate;break;}
             }
             if (!track.primary_tag.empty()) {
-                cover = m_client.image_url(track.primary_owner.empty() ? track.id : track.primary_owner,
-                                           "Primary", track.primary_tag, 800);
-                break;
+                const auto candidate=m_client.image_url(track.primary_owner.empty()?track.id:track.primary_owner,
+                                                       "Primary",track.primary_tag,800);
+                if(candidate!=cover && !art::failed(candidate)) {cover=candidate;break;}
             }
         }
     }

@@ -123,7 +123,13 @@ void Login::back_to_known()
 }
 
 /* The keyboard's callbacks point at this screen: close it with the screen. */
-Login::~Login() { ime::cancel(); }
+Login::~Login()
+{
+    ime::cancel();
+    std::lock_guard<std::mutex> g(m_shared->lock);
+    ++m_shared->gen;
+    m_shared->qc_alive = false;
+}
 
 bool Login::take_result(accounts::Account *out)
 {
@@ -147,7 +153,7 @@ void Login::scan(double now)
     }
     m_scanned_at = now;
     const bool offer_moved = m_offer_moved;
-    const bool started = jelly5::spawn([sh, offer_moved] {
+    const bool started = emby5::spawn([sh, offer_moved] {
         std::vector<jf::FoundServer> f = jf::discover(1500);
         /* Servers already saved are on "Hvem ser på?": signing in to one at another
          * address would move its accounts there. Only when it did not answer at its
@@ -186,22 +192,28 @@ void Login::check_server()
         sh->busy = true;
         sh->error.clear();
         sh->qc_alive = false;
+        sh->checked = false;
+        sh->quick_connect_allowed = false;
+        sh->users.clear();
     }
-    const bool started = jelly5::spawn([sh, c, gen] {
+    const bool started = emby5::spawn([sh, c, gen] {
         std::string name, version, id;
         const bool ok = c->public_info(&name, &version, &id);
         std::vector<jf::PublicUser> users = ok ? c->public_users() : std::vector<jf::PublicUser>();
+        const bool quick = ok && c->quick_connect_enabled();
         std::lock_guard<std::mutex> g(sh->lock);
         if (sh->gen != gen)
             return;   /* another server since */
         sh->busy = false;
         if (!ok) {
-            sh->error = T("Fant ingen Emby-server på ") + c->server();
+            sh->error = T("No Emby or Jellyfin server found at ") + c->server();
             return;
         }
         sh->server_name = name;
         sh->server_version = version;
         sh->server_id = id;
+        sh->server_product = c->server_product();
+        sh->quick_connect_allowed = quick;
         sh->users = std::move(users);
         sh->checked = true;
     });
@@ -214,6 +226,8 @@ void Login::check_server()
 
 void Login::sign_in()
 {
+    const jf::ServerKind kind = client().server_kind();
+    m_own = std::make_shared<jf::Client>(client().server(), client().device_id(), client().device_name(), kind);
     std::shared_ptr<Shared> sh = m_shared;
     std::shared_ptr<jf::Client> c = m_own;
     const std::string user = m_user, pass = m_password;
@@ -222,9 +236,10 @@ void Login::sign_in()
         std::lock_guard<std::mutex> g(sh->lock);
         sh->busy = true;
         sh->error.clear();
-        gen = sh->gen;
+        gen = ++sh->gen;
+        sh->qc_alive = false;
     }
-    const bool started = jelly5::spawn([sh, c, user, pass, gen] {
+    const bool started = emby5::spawn([sh, c, user, pass, gen] {
         c->set_session("", "", "");
         const bool ok = c->authenticate(user, pass);
         std::lock_guard<std::mutex> g(sh->lock);
@@ -237,7 +252,7 @@ void Login::sign_in()
             return;
         }
         sh->result = {c->server(), sh->server_name, c->user_id(), c->user_name(), c->user_image_tag(), c->token(),
-                      sh->server_id};
+                      sh->server_id, c->server_type()};
         sh->signed_in = true;
     });
     if (!started) {
@@ -261,7 +276,7 @@ void Login::start_quick_connect()
     }
     m_step = QuickConnectStep;
     m_focus = 0;
-    const bool started = jelly5::spawn([sh, c, gen] {
+    const bool started = emby5::spawn([sh, c, gen] {
         c->set_session("", "", "");
         jf::QuickConnect qc;
         if (!c->quick_connect_start(&qc)) {
@@ -293,10 +308,16 @@ void Login::start_quick_connect()
                 if (!sh->qc_alive || sh->gen != gen)
                     return;   /* left meanwhile: not this sign-in any more */
                 sh->result = {c->server(), sh->server_name, c->user_id(), c->user_name(), c->user_image_tag(),
-                              c->token(), sh->server_id};
+                              c->token(), sh->server_id, c->server_type()};
                 sh->signed_in = true;
                 return;
             }
+        }
+        std::lock_guard<std::mutex> g(sh->lock);
+        if (sh->gen == gen && sh->qc_alive) {
+            sh->qc_alive = false;
+            sh->qc_code.clear();
+            sh->error = T("Quick Connect expired. Sign in with your username and password.");
         }
     });
     if (!started) {
@@ -442,13 +463,15 @@ void Login::draw(double now, float dt)
 {
     ime::poll();
     bool anim = false;
-    std::string error, server_name, version, code;
-    bool busy, checked;
+    std::string error, server_name, version, code, product;
+    bool busy, checked, quick;
     std::vector<jf::PublicUser> users;
     {
         std::lock_guard<std::mutex> g(m_shared->lock);
         error = m_shared->error;
         server_name = m_shared->server_name;
+        product = m_shared->server_product;
+        quick = m_shared->quick_connect_allowed;
         version = m_shared->server_version;
         code = m_shared->qc_code;
         busy = m_shared->busy;
@@ -459,9 +482,16 @@ void Login::draw(double now, float dt)
     }
     if (checked) {
         m_checking = false;
-        m_no_quick_connect = true;
-        m_step = UserStep;
-        m_focus = 0;
+        m_no_quick_connect = !quick;
+        if (quick) {
+            start_quick_connect();
+            busy = true;
+            code.clear();
+            error.clear();
+        } else {
+            m_step = UserStep;
+            m_focus = 0;
+        }
     }
     if (m_checking && !busy && !error.empty()) {   /* a known server did not answer: its address, and why */
         m_checking = false;
@@ -488,8 +518,8 @@ void Login::draw(double now, float dt)
 
     auto lift = [&](const std::string &k, bool f) { return m_lifts.step(k, f, dt, &anim); };
     if (m_step == ServerStep) {
-        gfx::text(kX, 230, T("Koble til Emby"), {gfx::Bold, 64}, kText);
-        gfx::text(kX, 290, T("Skriv inn adressen til Emby-serveren din, for eksempel 192.168.0.10:8096."),
+        gfx::text(kX, 230, T("Connect to Emby or Jellyfin"), {gfx::Bold, 64}, kText);
+        gfx::text(kX, 290, T("Enter your Emby or Jellyfin address, including any base path. Example: 192.168.0.10:8096"),
                   {gfx::Medium, 28, 1200}, kText2);
         field({kX, 390, kW, 84}, "SERVER", m_server, "http://", m_focus == 0, lift("srv", m_focus == 0));
         button({kX, 530, 260, 76}, busy ? T("Kobler til \xE2\x80\xA6") : T("Fortsett"), m_focus == 1, lift("go", m_focus == 1));
@@ -516,7 +546,7 @@ void Login::draw(double now, float dt)
         std::vector<float> w(nf), at(nf);
         float row_w = 0;
         for (int i = 0; i < nf; i++) {
-            labels[i] = (found[i].name.empty() ? std::string("Emby") : found[i].name) + "  \xC2\xB7  " +
+            labels[i] = (found[i].name.empty() ? std::string("Server") : found[i].name) + "  \xC2\xB7  " +
                         host_of(found[i].address);
             w[i] = std::min(560.f, gfx::text_width(labels[i], {gfx::Bold, 26}) + 64);
             at[i] = row_w;
@@ -529,7 +559,7 @@ void Login::draw(double now, float dt)
             button({fx + at[i], 712, w[i], 76}, labels[i], m_focus == 2 && m_found_col == i, 0, 1000 + i, fx - kX);
     } else if (m_step == UserStep) {
         gfx::text(kX, 230, T("Logg inn"), {gfx::Bold, 64}, kText);
-        gfx::text(kX, 286, server_name + "  \xC2\xB7  Emby " + version + "  \xC2\xB7  " + m_server,
+        gfx::text(kX, 286, server_name + "  \xC2\xB7  " + product + " " + version + "  \xC2\xB7  " + m_server,
                   {gfx::Medium, 24, 1500}, kText3);
         float y = 340;
         const int base = users.empty() ? 0 : 1;
@@ -547,8 +577,7 @@ void Login::draw(double now, float dt)
                     glass_panel({r.x - 8, r.y - 8, d + 16, d + 16}, d / 2 + 8, 1.f, false, 1.f);
                 const std::string url = users[i].image_tag.empty()
                                             ? std::string()
-                                            : client().server() + "/emby/Users/" + users[i].id + "/Images/Primary?tag=" +
-                                                  users[i].image_tag + "&fillWidth=240";
+                                            : client().user_image_url(users[i].id, users[i].image_tag, 240);
                 if (url.empty()) {
                     gfx::fill(r, 0xff6e7fd6u, d / 2);
                     gfx::text(r.x + d / 2, r.y + d / 2 + 16, users[i].name.substr(0, 1), {gfx::Bold, 48}, kText, 1);
@@ -571,7 +600,7 @@ void Login::draw(double now, float dt)
     } else {
         gfx::text(kX, 230, "Quick Connect", {gfx::Bold, 64}, kText);
         gfx::text(kX, 300,
-                  T("Åpne Emby på telefonen eller PC-en, gå til Innstillinger → Quick Connect og skriv inn koden:"),
+                  T("Open Jellyfin on your phone or computer, choose Settings > Quick Connect, and enter this code:"),
                   {gfx::Medium, 30, 1100, 2, 44}, kText2);
         const gfx::Rect box{kX, 430, 760, 220};
         glass_panel(box, 32, 1.f, false);   /* the code on glass */
@@ -582,15 +611,15 @@ void Login::draw(double now, float dt)
             gfx::text(box.x + box.w / 2, box.y + 130, "\xE2\x80\xA6", {gfx::Bold, 80}, kText3, 1);
         else
             gfx::text(box.x + box.w / 2, box.y + 158, spaced, {gfx::Bold, 120}, kText, 1);
-        /* A QR code for the phone: Emby's own Quick Connect page with this code
+        /* A QR code for the phone: Jellyfin's Quick Connect page with this code
          * filled in (jellyfin-web reads ?code=); one tap on Godkjenn there signs in. */
         if (!code.empty()) {
             static std::string qr_for;
             static std::vector<uint8_t> qr(qrcodegen_BUFFER_LEN_MAX);
             static bool qr_ok = false;
-            if (qr_for != code) {
-                qr_for = code;
-                const std::string url = client().server() + "/web/#/quickconnect?code=" + code;
+            const std::string url = client().server() + "/web/#/quickconnect?code=" + code;
+            if (qr_for != url) {
+                qr_for = url;
                 std::vector<uint8_t> tmp(qrcodegen_BUFFER_LEN_MAX);
                 qr_ok = qrcodegen_encodeText(url.c_str(), tmp.data(), qr.data(), qrcodegen_Ecc_MEDIUM,
                                              qrcodegen_VERSION_MIN, qrcodegen_VERSION_MAX, qrcodegen_Mask_AUTO, true);
@@ -607,7 +636,7 @@ void Login::draw(double now, float dt)
                             gfx::fill({panel.x + (x + 4) * m, panel.y + (y + 4) * m, m + 0.4f, m + 0.4f}, 0xff0b0b0fu);
                 gfx::text(panel.x + side / 2, panel.y + side + 52, T("Skann med telefonen"), {gfx::SemiBold, 24},
                           kText2, 1);
-                gfx::text(panel.x + side / 2, panel.y + side + 86, T("og trykk Godkjenn i Emby"),
+                gfx::text(panel.x + side / 2, panel.y + side + 86, T("and approve in Jellyfin"),
                           {gfx::Medium, 20}, kText3, 1);
             }
         }

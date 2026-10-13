@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "jf_discovery.h"
+#include "server_kind.h"
 
 #include "cJSON.h"
 
@@ -45,11 +46,12 @@ std::vector<FoundServer> discover(int timeout_ms)
     to.sin_family = AF_INET;
     to.sin_port = htons(7359);
     to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-    static const char kAsk[] = "who is EmbyServer?";
-    if (sendto(fd, kAsk, sizeof kAsk - 1, 0, (const struct sockaddr *)&to, sizeof to) < 0) {
-        close(fd);
-        return out;
-    }
+    // Both protocols use port 7359, but their discovery request strings differ.
+    const char *questions[] = {"who is EmbyServer?", "who is JellyfinServer?"};
+    bool sent = false;
+    for (const char *ask : questions)
+        sent = (sendto(fd, ask, std::strlen(ask), 0, (const struct sockaddr *)&to, sizeof to) >= 0) || sent;
+    if (!sent) { close(fd); return out; }
     const double end = now_ms() + timeout_ms;
     for (;;) {
         const int left = (int)(end - now_ms());
@@ -68,11 +70,12 @@ std::vector<FoundServer> discover(int timeout_ms)
             continue;
         FoundServer s{str(j, "Id"), str(j, "Name"), str(j, "Address")};
         cJSON_Delete(j);
+        s.address = server_url::normalize(s.address);
         if (s.address.empty())
             continue;
         bool seen = false;
         for (const FoundServer &o : out)
-            seen = seen || (!s.id.empty() ? o.id == s.id : o.address == s.address);
+            seen = seen || o.address == s.address;
         if (!seen)
             out.push_back(s);
     }

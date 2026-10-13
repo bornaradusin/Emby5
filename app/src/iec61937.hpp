@@ -1,5 +1,5 @@
 /*
- * Jelly5 — Jellyfin for PS5
+ * Emby5 — Jellyfin for PS5
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * IEC 61937 packing for HDMI bitstream audio, adapted from SlopFin
@@ -28,7 +28,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace jelly5::iec61937
+namespace emby5::iec61937
 {
 
 /* Bytes in one AC-3 syncframe at 48 kHz (bsid <= 8), 0 when not one. From SlopFin src/ac3.hpp. */
@@ -137,13 +137,13 @@ class Packer
     {
         format_ = format;
         used_ = 0;
-        expected_ = 0;   /* Jelly5: a frame half assembled at a seek is not finished from the new position */
+        expected_ = 0;   /* Emby5: a frame half assembled at a seek is not finished from the new position */
         pending_ = 0;
         pending_frames_ = 0;
         pending_repeat_ = 1;
         pending_pts_ = -1;
         frame_pts_ = -1;
-        skip_ = 0;   /* (dropped_ keeps counting across seeks: Jelly5 logs it per stream) */
+        skip_ = 0;   /* (dropped_ keeps counting across seeks: Emby5 logs it per stream) */
     }
 
     [[nodiscard]] std::uint64_t dropped() const noexcept
@@ -345,5 +345,5 @@ class Packer
     std::uint64_t dropped_ = 0;
 };
 
-} // namespace jelly5::iec61937
+} // namespace emby5::iec61937
 

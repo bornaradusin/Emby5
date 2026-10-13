@@ -110,7 +110,7 @@ void persist(std::function<void(cJSON *)> patch)
     if (s_writing)
         return;
     s_writing = true;
-    const bool started = jelly5::spawn([] {
+    const bool started = emby5::spawn([] {
         for (;;) {
             std::lock_guard<std::mutex> disk(s_disk_lock);
             std::vector<std::function<void(cJSON *)>> todo;
@@ -393,7 +393,7 @@ void restart_locked()
     s_snap.state = State::Connecting;
     s_gen++;
     const unsigned epoch = s_epoch;
-    if (!jelly5::spawn([epoch] { connect_worker(epoch); })) {
+    if (!emby5::spawn([epoch] { connect_worker(epoch); })) {
         s_snap.state = State::Unreachable;   /* no thread to connect on: say so, a later change retries */
         s_snap.error = "no thread";
     }
@@ -731,7 +731,7 @@ void sign_in(const std::string &user, const std::string &password)
     s_snap.state = State::Connecting;
     s_gen++;
     const unsigned epoch = s_epoch;
-    const bool started = jelly5::spawn([epoch, st, name, password] {
+    const bool started = emby5::spawn([epoch, st, name, password] {
         auto cl = make_client(st.config, std::string());
         std::string version;
         seerr::PublicSettings ps;
@@ -788,7 +788,7 @@ void sign_out()
     s_gen++;
     evo_bt("seerr: signed out");
     if (cl)   /* ends the session on the server too */
-        jelly5::spawn([cl] { cl->sign_out(); });   /* best effort: the session is dropped here anyway */
+        emby5::spawn([cl] { cl->sign_out(); });   /* best effort: the session is dropped here anyway */
 }
 
 void test()
@@ -804,7 +804,7 @@ void test()
         s_snap.testing = true;
         s_gen++;
     }
-    const bool started = jelly5::spawn([epoch, st] {
+    const bool started = emby5::spawn([epoch, st] {
         auto cl = make_client(st.config, st.cookies);
         std::string line, version;
         char buf[512];

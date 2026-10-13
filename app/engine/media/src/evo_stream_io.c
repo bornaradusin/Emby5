@@ -6,6 +6,7 @@
  */
 #include "evo_stream_io.h"
 #include "evo_direct_mem.h"
+#include <libavutil/error.h>
 
 #ifdef EVO_APP_MODULE
 extern void pp_stage_bc(const char *stage_id, const char *detail);
@@ -53,8 +54,44 @@ struct evo_stream_io_ctx {
      * See evo_stream_io_set_deadline() in the header for why this exists. */
     double  deadline_at;
     int     deadline_hit;
-    volatile int aborted;      /* evo_stream_io_abort: fail every blocking call */
+    volatile int aborted;      /* accessed atomically, including UI-triggered abort */
+    int (*external_interrupt)(void *);
+    void *external_opaque;
 };
+
+static _Thread_local int (*s_open_interrupt)(void *);
+static _Thread_local void *s_open_opaque;
+void evo_stream_io_set_open_interrupt(int (*callback)(void *), void *opaque)
+{
+    s_open_interrupt = callback;
+    s_open_opaque = opaque;
+}
+
+int evo_stream_io_open_cancelled(void)
+{
+    return s_open_interrupt && s_open_interrupt(s_open_opaque);
+}
+
+int evo_stream_io_is_aborted(evo_stream_io_ctx_t *ctx)
+{
+    if (!ctx) return evo_stream_io_open_cancelled();
+    if (__atomic_load_n(&ctx->aborted, __ATOMIC_RELAXED)) return 1;
+    if (ctx->external_interrupt && ctx->external_interrupt(ctx->external_opaque)) {
+        __atomic_store_n(&ctx->aborted, 1, __ATOMIC_RELAXED);
+        return 1; /* latch stop even when the opening job later changes state */
+    }
+    return 0;
+}
+
+int evo_stream_io_probe(evo_stream_io_ctx_t *ctx, AVFormatContext *fmt, double seconds)
+{
+    if (!fmt || evo_stream_io_is_aborted(ctx)) return AVERROR_EXIT;
+    evo_stream_io_set_deadline(ctx, seconds);
+    const int rc = avformat_find_stream_info(fmt, NULL);
+    evo_stream_io_set_deadline(ctx, 0.0);
+    /* find_stream_info may return success after an interrupted read. */
+    return evo_stream_io_is_aborted(ctx) ? AVERROR_EXIT : rc;
+}
 
 static double sio_now_seconds(void)
 {
@@ -72,8 +109,7 @@ static double sio_now_seconds(void)
 static int sio_interrupt_cb(void *opaque)
 {
     evo_stream_io_ctx_t *ctx = (evo_stream_io_ctx_t *)opaque;
-    if (ctx && ctx->aborted)
-        return 1;
+    if (evo_stream_io_is_aborted(ctx)) return 1;
     if (!ctx || ctx->deadline_at <= 0.0)
         return 0;
     if (ctx->deadline_hit)
@@ -90,7 +126,7 @@ static int sio_interrupt_cb(void *opaque)
 void evo_stream_io_abort(evo_stream_io_ctx_t *ctx)
 {
     if (ctx)
-        ctx->aborted = 1;
+        __atomic_store_n(&ctx->aborted, 1, __ATOMIC_RELAXED);
 }
 
 void evo_stream_io_set_deadline(evo_stream_io_ctx_t *ctx, double seconds)
@@ -206,6 +242,28 @@ int evo_stream_io_url_is_playlist(const char *url)
            sio_contains_ci(url, ".ism/");
 }
 
+/* EOF of a finite VOD file is not a broken live connection. Examine the URL
+ * path, not a hostname/query that happens to contain a video extension. */
+static int sio_url_is_finite_file(const char *url)
+{
+    if (!url) return 0;
+    const char *authority = strstr(url, "://");
+    const char *path = authority ? strchr(authority + 3, '/') : url;
+    if (!path) return 0;
+    if (sio_contains_ci(path, "?static=true") || sio_contains_ci(path, "&static=true")) return 1;
+    const size_t len = strcspn(path, "?#");
+    for (size_t i = 0; i < len; ++i) {
+        if ((len-i >= 7 && strncasecmp(path+i, "/movie/", 7)==0) ||
+            (len-i >= 8 && strncasecmp(path+i, "/series/", 8)==0)) return 1;
+    }
+    static const char *extensions[] = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".flac", ".mp3", ".m4a", ".wav"};
+    for (size_t i=0; i<sizeof extensions/sizeof extensions[0]; ++i) {
+        const size_t n=strlen(extensions[i]);
+        if (len>=n && strncasecmp(path+len-n,extensions[i],n)==0) return 1;
+    }
+    return 0;
+}
+
 #ifdef NUVIO_APP
 /* Nuvio app: request headers the page sent with the stream (an addon's
  * Referer / User-Agent / Authorization), "Name: value\r\n" each. Set by the
@@ -260,8 +318,8 @@ void evo_stream_io_apply_network_options(AVDictionary **opts, const char *url)
     /* Emby5: nor for Emby's direct play (static=true): a file with a known
      * length, whose end is the end. Seeking in a FLAC reads at it, and the reconnect
      * looped there until the seek failed (7 s, "Decoder seek failed"). */
-    if (!evo_stream_io_url_is_playlist(url) && !(url && strstr(url, "static=true")))
-        av_dict_set(opts, "reconnect_at_eof", "1", 0);
+    av_dict_set(opts, "reconnect_at_eof",
+        !evo_stream_io_url_is_playlist(url) && !sio_url_is_finite_file(url) ? "1" : "0", 0);
 
     /*
      * HLS: accept every segment URL the playlist names.
@@ -308,12 +366,17 @@ int evo_stream_io_open(const char *path,
                        evo_stream_io_ctx_t **out_io_ctx)
 {
     if (!path || !out_fmt_ctx) return -1;
+    *out_fmt_ctx = NULL;
+    if (out_io_ctx) *out_io_ctx = NULL;
+    if (evo_stream_io_open_cancelled()) return AVERROR_EXIT;
 
     SIO_BC("P8_01a_SIO_ENTER", path);
     evo_stream_io_ctx_t *ctx = (evo_stream_io_ctx_t *)evo_direct_mem_calloc(1, sizeof(evo_stream_io_ctx_t));
     if (!ctx) ctx = (evo_stream_io_ctx_t *)calloc(1, sizeof(evo_stream_io_ctx_t));
     if (!ctx) return -1;
     SIO_BC("P8_01b_SIO_CTX", "ctx alloc ok");
+    ctx->external_interrupt = s_open_interrupt;
+    ctx->external_opaque = s_open_opaque;
 
     ctx->is_network = (strncmp(path, "http://", 7) == 0 ||
                        strncmp(path, "https://", 8) == 0 ||

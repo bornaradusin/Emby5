@@ -46,6 +46,8 @@ private:
         bool busy = false;
         std::string error;
         std::string server_name, server_version, server_id;
+        std::string server_product = "Server";
+        bool quick_connect_allowed = false;
         std::vector<jf::PublicUser> users;
         bool checked = false;           /* the server answered: go on to the user */
         bool signed_in = false;

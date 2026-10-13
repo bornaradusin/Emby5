@@ -2,8 +2,8 @@
 # Emby5 (based on Nuvio PS5, Copyright (C) 2026 Husam Osman)
 # SPDX-License-Identifier: GPL-3.0-or-later
 # =============================================================================
-# app/scripts/build.sh - build the Nuvio app (PPSA99176): the web UI
-# host plus the Nuvio Player (EVO Player's playback engine, vendored in
+# app/scripts/build.sh - build Emby5 (PPSA99515): the native UI
+# plus the Nuvio Player (EVO Player's playback engine, vendored in
 # engine/).
 #
 # Runs with the PS5 payload SDK and the pacbrew sysroot (FFmpeg, dav1d,
@@ -12,11 +12,11 @@
 #
 #   ./scripts/build.sh            # development build (in the container when
 #                                 # NUVIO_BUILD_IMAGE is set)
-#   ./scripts/build.sh --ffpfsc   # also pack PPSA99505.ffpfsc
+#   ./scripts/build.sh --ffpfsc   # also pack PPSA99515.ffpfsc
 #   ./scripts/build.sh --release  # for sharing: no .env.local server, no log
 #                                 # target, packed as a distributable folder ZIP
 #
-# Output: build/app/PPSA99505/{eboot.bin, sce_sys/, sce_module/libc.prx}
+# Output: build/app/PPSA99515/{eboot.bin, sce_sys/, sce_module/libc.prx}
 # The packaging steps follow the toolkit's app packaging (player mode);
 # the loader constants and PRX stub rules there are hardware-validated.
 # =============================================================================
@@ -87,12 +87,12 @@ j = json.load(open(sys.argv[1]))
 import os
 if os.environ.get("EMBY5_PROBE") == "media":   # Media category, no extra attribute
     j["titleId"] = "PPSA99507"; j["conceptId"] = "99507"
-    j["contentId"] = "UP9000-PPSA99507_00-JELLY5MPROBE0000"
+    j["contentId"] = "UP9000-PPSA99507_00-EMBY5MPROBE00000"
     j["applicationCategoryType"] = 65536; j["attribute"] = 0
     j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Media Probe"}}
 else:
     j["titleId"] = "PPSA99506"; j["conceptId"] = "99506"
-    j["contentId"] = "UP9000-PPSA99506_00-JELLY5PROBE00000"
+    j["contentId"] = "UP9000-PPSA99506_00-EMBY5PROBE000000"
     j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Probe"}}
 json.dump(j, open(sys.argv[2], "w"), indent=2)
 PY
@@ -102,9 +102,15 @@ TITLE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tit
 APPDIR="${BUILD}/app/${TITLE_ID}"
 mkdir -p "${BUILD}/obj" "${BUILD}/host" "${BUILD}/stubs"
 
+# Reuse fonts from the original archive; fail before compiling if assets are missing.
+python3 "${NUVIO_ROOT}/scripts/restore-font-assets.py"
+
 # --- Host converter + runtime shim ---------------------------------------------
 log "native-app tools"
-eval "$(bash "${EVO_ROOT}/scripts/setup-native-app-deps.sh")"
+DEPS_ENV="$(bash "${EVO_ROOT}/scripts/setup-native-app-deps.sh")" || die "native dependency setup failed"
+eval "${DEPS_ENV}"
+: "${ZLIB_INCLUDE:?dependency setup did not provide ZLIB_INCLUDE}"
+: "${ZLIB_ARCHIVE:?dependency setup did not provide ZLIB_ARCHIVE}"
 TOOL="${BUILD}/host/ps5-native-tool"
 if [[ ! -x "${TOOL}" ]]; then
     clang++ -std=c++20 -O2 -I "${ZLIB_INCLUDE}" \
@@ -213,7 +219,7 @@ done
 CXX_RUNTIME=("${PS5_SYSROOT}/lib/libc++.a" "${PS5_SYSROOT}/lib/libc++abi.a" "${PS5_SYSROOT}/lib/libunwind.a")
 STUBDIR="${PS5_SYSROOT}/lib"
 # SDK link stubs, minus the WebKit-process and system-process kernel variants
-# (apps on 11.60 import libkernel only; see src/jelly5_libc_stubs.c).
+# (apps on 11.60 import libkernel only; see src/emby5_libc_stubs.c).
 SDK_STUBS=()
 for so in "${STUBDIR}"/*.so; do
     case "$(basename "${so}")" in

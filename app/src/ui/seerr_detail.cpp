@@ -48,7 +48,7 @@ void SeerrDetail::activate()
         d->failed = !d->loaded;
         return;
     }
-    const bool started = jelly5::spawn([d, c, id, tv] {
+    const bool started = emby5::spawn([d, c, id, tv] {
         seerr::Detail det;
         const bool ok = tv ? c->tv(id, &det) : c->movie(id, &det);
         const int status = c->last_status();
@@ -139,6 +139,11 @@ void SeerrDetail::sync_button()
 
 Action SeerrDetail::input(uint32_t p)
 {
+    if(m_reader.active()){m_reader.input(p);return {};}
+    if((p&NUVIO_BTN_SQUARE) && !m_sheet.active() && !m_qr_open) {
+        m_reader.open(m_loaded?m_detail.title.name:m_item.name,m_loaded?m_detail.title.overview:m_item.overview);
+        return {};
+    }
     Action a;
     if (m_sheet.active()) {
         m_sheet.input(p);
@@ -229,7 +234,7 @@ Action SeerrDetail::input(uint32_t p)
             m_note = T("Trekker tilbake \xE2\x80\xA6");
             m_note_dot = kText3;
             m_note_at = m_now;
-            const bool started = jelly5::spawn([c, ids, d] {   /* d, not this: the page may close meanwhile */
+            const bool started = emby5::spawn([c, ids, d] {   /* d, not this: the page may close meanwhile */
                 bool ok = true;
                 for (int id : ids)
                     ok = c->cancel_request(id) && ok;
@@ -365,7 +370,8 @@ void SeerrDetail::draw(double now, float dt)
     if (m_loaded && (art::failed(backdrop) || !art::get(backdrop, 1920, 1080)) && !m_item.ext.backdrop.empty() &&
         art::get(m_item.ext.backdrop, 1920, 1080))
         backdrop = m_item.ext.backdrop;   /* the full one still on its way: keep showing the row's */
-    if (backdrop.empty() || art::failed(backdrop))
+    if(!theme_artwork_enabled())gfx::fill(full,kBg);
+    else if (backdrop.empty() || art::failed(backdrop))
         draw_title_card(full, "", m_item.ext.tmdb_id, 0, 0.6f);   /* its colours, at least */
     else
         art::draw(full, backdrop, "", 1920, 1080, 0, 1.f, 0);
@@ -374,6 +380,8 @@ void SeerrDetail::draw(double now, float dt)
     gfx::fill_hgradient({1114, 0, 326, gfx::H}, alpha(kBg, 0.2f), alpha(kBg, 0.f));
     gfx::fill_vgradient({0, 486, gfx::W, 356}, alpha(kBg, 0.f), alpha(kBg, 0.85f));
     gfx::fill_vgradient({0, 842, gfx::W, 238}, alpha(kBg, 0.85f), kBg);
+
+    if(theme_artwork_enabled())gfx::fill(full,alpha(kBg,theme_backdrop_dim(0.f)));
 
     /* The text waits for the details (0.6 s at most), then fades in as one. */
     if (m_loaded || m_failed || now - m_opened > 0.6)
@@ -441,10 +449,11 @@ void SeerrDetail::draw(double now, float dt)
 
     float y = my + 52;
     if (m_loaded && !m_detail.tagline.empty()) {
-        gfx::text(kPad, y, m_detail.tagline, {gfx::Medium, 26, 900}, 0xe6f5f5f7u);
+        gfx::text(kPad, y, m_detail.tagline, {gfx::Medium, 26, 900}, alpha(kText,.9f));
         y += 44;
     }
-    gfx::text(kPad, y, m_loaded ? t.overview : m_item.overview, {gfx::Regular, 26, 860, 3, 37.7f}, kText2);
+    m_synopsis.draw(m_loaded?t.overview:m_item.overview,kPad,y,860,dt,m_row<0&&!modal(),&m_animating);
+    gfx::text(kPad,648-off,"Square: Read more",{gfx::Medium,19,860},kText2);
 
     /* Buttons: glass panes, the focus drop over them, then the labels. */
     const float by = 668 - off;
@@ -563,7 +572,7 @@ void SeerrDetail::draw(double now, float dt)
             if (m_row == r)   /* the focused row's posters under the top third of the screen */
                 m_page.to(std::max(0.f, rows_top + shown * rowh - 300));
             shown++;
-            gfx::text(kPad, ry, r == 0 ? T("Anbefalt") : T("Mer som dette"), {gfx::Bold, 30}, alpha(0xebffffffu, 1.f));
+            gfx::text(kPad, ry, r == 0 ? T("Anbefalt") : T("Mer som dette"), {gfx::Bold, 30}, alpha(kText, .92f));
             const int col = std::min(m_cols[r], (int)m_rows[r].size() - 1);
             const float max_scroll = std::max(0.f, m_rows[r].size() * (pw + gap) - gap - (gfx::W - 2 * kPad));
             m_rscroll[r].to(std::min(max_scroll, std::max(0.f, (col - 1) * (pw + gap))));
@@ -598,6 +607,7 @@ void SeerrDetail::draw(double now, float dt)
     draw_note(m_note, m_note_a.value, m_note_dot);
 
     m_sheet.draw(dt, &m_animating);
+    m_reader.draw();
     draw_qr(dt);
     if (art::animating())
         m_animating = true;

@@ -3,6 +3,7 @@
 #include "app/iptv_xtream.h"
 #include "app/iptv_categories.h"
 #include "app/iptv_live.h"
+#include "app/iptv_navigation.h"
 #include "jf/jf_client.h"
 #include <memory>
 #include <mutex>
@@ -15,6 +16,7 @@ public:
     Action input(uint32_t p) override;
     void draw(double now, float dt) override;
     void update_hold(uint32_t held, double now);
+    void focus_channel(const std::string &group_id,const std::string &channel_id);
     bool accelerating(double now) const { return m_hold_dir && m_hold_since>0 && now-m_hold_since>=1.0; }
     bool animating() const override { return true; }
     float nav_alpha() const override { return 1.f; }
@@ -27,8 +29,8 @@ private:
     iptv_categories::Store m_store;
     bool m_connected=false;
     bool m_category_focus=false;
-    struct Group { std::string title; std::vector<iptv_xtream::Channel> channels; };
-    std::vector<Group> m_groups;
+    using Group = iptv_navigation::Group;
+    iptv_navigation::Playlist m_groups=std::make_shared<const iptv_navigation::Groups>();
     int m_row=0;
     std::vector<int> m_columns;
     int m_filter=0, m_index=0, m_category=0, m_scroll=0;

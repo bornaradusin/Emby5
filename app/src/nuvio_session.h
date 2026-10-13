@@ -90,6 +90,7 @@ struct NuvioPrefs {
 
 struct NuvioRequest {
     std::string id, url, headers, user_agent;
+    std::string live_channel_id, live_group_name, live_navigation_token;
     std::string title, episode_title, year, description, genres, runtime, rating, item_type;
     std::string logo, poster, backdrop, thumbnail;
     std::string artist, album, cover, cover_blurhash;   /* Emby5: music */
@@ -139,6 +140,10 @@ struct NuvioResult {
     bool subtitles_on = false;
     int subtitle_delay_ms = 0;
     bool user_interacted = false;
+    bool automatic_next = false;
+    bool playback_started = false;
+    int completed_episodes = 0;
+    double watched_seconds = 0;
 };
 
 std::string nuvio_result_json(const NuvioRequest &req, const NuvioResult &res);

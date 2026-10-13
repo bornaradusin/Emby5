@@ -13,6 +13,7 @@
 
 #include "seerr/seerr_client.h"
 #include "ui/screen.h"
+#include "ui/description_reader.h"
 #include "ui/seerr_request.h"
 
 #include <memory>
@@ -34,7 +35,7 @@ public:
     bool animating() const override { return m_animating; }
     float nav_alpha() const override { return 0.f; }
     float enter() const override { return m_enter.value; }
-    bool modal() const override { return m_sheet.active() || m_qr_open; }
+    bool modal() const override { return m_sheet.active() || m_qr_open || m_reader.active(); }
 
 private:
     enum Button { RequestButton, LibraryButton, TrailerButton, CancelButton, RetryButton };
@@ -60,6 +61,8 @@ private:
     int m_button_id = -1;                  /* the focused Button (its index moves as buttons come and go) */
     void sync_button();
     RequestSheet m_sheet;
+    DescriptionReader m_reader;
+    SynopsisView m_synopsis;
     bool m_qr_open = false;
     std::string m_qr_url;
     std::vector<uint8_t> m_qr;              /* the encoded QR code */

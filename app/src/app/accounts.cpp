@@ -54,6 +54,7 @@ Account account_of(const cJSON *o)
     a.image_tag = str(o, "imageTag");
     a.token = str(o, "token");
     a.server_id = str(o, "serverId");
+    a.server_type = str(o, "serverType") == "jellyfin" ? "jellyfin" : "emby";
     return a;
 }
 
@@ -111,6 +112,7 @@ void write_store(const Store &s)
         cJSON_AddStringToObject(o, "imageTag", a.image_tag.c_str());
         cJSON_AddStringToObject(o, "token", a.token.c_str());
         cJSON_AddStringToObject(o, "serverId", a.server_id.c_str());
+        cJSON_AddStringToObject(o, "serverType", a.server_type.c_str());
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_AddItemToObject(j, "accounts", arr);
@@ -144,9 +146,10 @@ std::vector<Account> load() { return read_store().list; }
 
 bool same_server(const Account &a, const Account &b)
 {
+    if (a.server_type != b.server_type) return false;
     if (!a.server_id.empty() && !b.server_id.empty())
         return a.server_id == b.server_id;
-    return a.server == b.server || (!a.user_id.empty() && a.user_id == b.user_id);
+    return a.server == b.server;
 }
 
 bool saved_at(const std::string &address)
@@ -191,9 +194,10 @@ std::vector<std::string> remember(const Account &a)
     std::vector<Account> keep;
     bool placed = false;
     for (Account x : s.list) {
+        if (x.server == a.server && !same_server(x, a)) continue;
         /* Its accounts, and ones saved at an old address of it before the Id was kept
          * (never another server's: one with its own Id stays where it is). */
-        if (!same_server(x, a) && !(x.server_id.empty() && moved_from(x.server))) {
+        if (!same_server(x, a) && !(x.server_type == a.server_type && x.server_id.empty() && moved_from(x.server))) {
             keep.push_back(x);
             continue;
         }

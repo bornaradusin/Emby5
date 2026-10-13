@@ -37,11 +37,11 @@ HttpResponse tracked_request(const std::string &method, const std::string &url,
 }
 
 constexpr int kTimeout = 15;
-constexpr const char *kVersion = "0.1.1";
+constexpr const char *kVersion = "1.2.4";
 constexpr const char *kFields = "Overview,Genres";            /* rows: what the UI shows */
 constexpr const char *kItemFields =
     "Overview,Genres,MediaStreams,Taglines,People,Studios,ChildCount,ProductionLocations,SpecialFeatureCount,"
-    "ProviderIds";   /* a series' TMDB/TVDB ids: Seerr finds it by them */
+    "ProviderIds,RemoteTrailers";   /* a series' TMDB/TVDB ids: Seerr finds it by them */
 
 std::string str_of(const cJSON *o, const char *key)
 {
@@ -107,6 +107,48 @@ std::string header_safe(const std::string &s)
     return out;
 }
 
+// Emby/Jellyfin return a UserItemDataDto from played/favourite mutations.
+// An empty 2xx response is still an acknowledgement; it is not a failed read.
+bool user_data_of(const cJSON *ud, Item &it)
+{
+    if (cJSON_IsArray(ud) && cJSON_GetArraySize(ud) == 1) ud = cJSON_GetArrayItem(ud, 0);
+    if (!cJSON_IsObject(ud)) return false;
+    const auto *wrapped = cJSON_GetObjectItemCaseSensitive(ud, "UserData");
+    if (wrapped) ud = wrapped;
+    if (cJSON_IsArray(ud) && cJSON_GetArraySize(ud) == 1) ud = cJSON_GetArrayItem(ud, 0);
+    if (!cJSON_IsObject(ud)) return false;
+    const std::string id = str_of(ud, "ItemId");
+    if (!id.empty() && id != it.id) return false;
+    it.user_data_fields = 0;
+    auto flag = [&](const char *key, bool &value, unsigned bit) {
+        const auto *v = cJSON_GetObjectItemCaseSensitive(ud, key);
+        if (cJSON_IsBool(v)) { value = cJSON_IsTrue(v); it.user_data_fields |= bit; }
+    };
+    flag("Played", it.played, Item::PlayedField);
+    flag("IsFavorite", it.favorite, Item::FavoriteField);
+    const auto *pos = cJSON_GetObjectItemCaseSensitive(ud, "PlaybackPositionTicks");
+    if (cJSON_IsNumber(pos) && pos->valuedouble >= 0 && pos->valuedouble < 9.22e18) {
+        it.position_ticks = (int64_t)pos->valuedouble; it.user_data_fields |= Item::PositionField;
+    }
+    const auto *pct = cJSON_GetObjectItemCaseSensitive(ud, "PlayedPercentage");
+    if (cJSON_IsNumber(pct)) { it.played_percent = pct->valuedouble; it.user_data_fields |= Item::PercentField; }
+    const auto *count = cJSON_GetObjectItemCaseSensitive(ud, "UnplayedItemCount");
+    if (cJSON_IsNumber(count) && count->valuedouble >= 0 && count->valuedouble <= 2147483647) {
+        it.unplayed = (int)count->valuedouble; it.user_data_fields |= Item::UnplayedField;
+    }
+    it.user_data_present = it.user_data_fields != 0;
+    return it.user_data_present;
+}
+void mutation_data(const HttpResponse &response, const std::string &id, Item *out)
+{
+    if (!out) return;
+    *out = Item(); out->id = id; out->user_data_fields = 0;
+    if (!response.ok() || response.body.empty()) return;
+    cJSON *j = cJSON_Parse(response.body.c_str());
+    user_data_of(j, *out);
+    cJSON_Delete(j);
+}
+
 Item item_of(const cJSON *o)
 {
     Item it;
@@ -126,12 +168,15 @@ Item item_of(const cJSON *o)
     it.community_rating = num_of(o, "CommunityRating", 0);
     it.runtime_ticks = (int64_t)num_of(o, "RunTimeTicks", 0);
     const cJSON *ud = cJSON_GetObjectItemCaseSensitive(o, "UserData");
-    it.position_ticks = (int64_t)num_of(ud, "PlaybackPositionTicks", 0);
-    it.played_percent = num_of(ud, "PlayedPercentage", 0);
-    it.played = bool_of(ud, "Played");
-    it.favorite = bool_of(ud, "IsFavorite");
-    it.unplayed = (int)num_of(ud, "UnplayedItemCount", 0);
+    user_data_of(ud, it);
     it.local_trailers = (int)num_of(o, "LocalTrailerCount", 0);
+    const cJSON *trailers = cJSON_GetObjectItemCaseSensitive(o, "RemoteTrailers");
+    const cJSON *trailer;
+    cJSON_ArrayForEach(trailer, trailers) {
+        const std::string url = str_of(trailer, "Url");
+        if (!url.empty() && url.size() <= 2048 && it.remote_trailers.size() < 16)
+            it.remote_trailers.push_back(url);
+    }
     it.special_features = (int)num_of(o, "SpecialFeatureCount", 0);
     const cJSON *g;
     cJSON_ArrayForEach(g, cJSON_GetObjectItemCaseSensitive(o, "Genres"))
@@ -191,7 +236,7 @@ Item item_of(const cJSON *o)
     return it;
 }
 
-MediaStream stream_of(const cJSON *s, const std::string &server)
+MediaStream stream_of(const cJSON *s, const Client &client)
 {
     MediaStream m;
     m.index = (int)num_of(s, "Index", -1);
@@ -213,35 +258,28 @@ MediaStream stream_of(const cJSON *s, const std::string &server)
     m.is_text = bool_of(s, "IsTextSubtitleStream");
     const std::string d = str_of(s, "DeliveryUrl");
     if (!d.empty())
-        m.delivery_url = d.rfind("http", 0) == 0 ? d
-                          : server + (d.rfind("/emby/", 0) == 0 ? d : "/emby" + d);
+        m.delivery_url = client.resource_url(d);
     return m;
 }
 
 } // namespace
 
-Client::Client(std::string server, std::string device_id, std::string device_name)
-    : server_(std::move(server)), device_id_(std::move(device_id)), device_name_(std::move(device_name))
+Client::Client(std::string server, std::string device_id, std::string device_name, ServerKind kind)
+    : server_(server_url::normalize(std::move(server))), device_id_(std::move(device_id)),
+      device_name_(std::move(device_name)), kind_(kind)
 {
-    while (!server_.empty() && server_.back() == '/')
-        server_.pop_back();
-    if (server_.size() >= 5 && server_.compare(server_.size() - 5, 5, "/emby") == 0)
-        server_.resize(server_.size() - 5);
 }
 
 void Client::set_server(std::string server)
 {
-    server_ = std::move(server);
-    while (!server_.empty() && server_.back() == '/')
-        server_.pop_back();
-    if (server_.size() >= 5 && server_.compare(server_.size() - 5, 5, "/emby") == 0)
-        server_.resize(server_.size() - 5);
-    if (server_.empty() || server_.find("://") != std::string::npos)
-        return;
-    /* Typed without a scheme: plain http, and a bare host gets Emby's port. */
-    server_ = "http://" + server_;
-    if (server_.find(':', 7) == std::string::npos && server_.find('/', 7) == std::string::npos)
-        server_ += ":8096";
+    const std::string next = server_url::normalize(std::move(server));
+    if (next == server_) return;
+    server_ = next;
+    kind_ = ServerKind::Emby; // public_info detects a newly entered server before authentication
+    server_id_.clear();
+    token_.clear(); user_id_.clear(); user_name_.clear(); user_image_tag_.clear();
+    latest_excludes_.clear();
+    is_admin_ = manages_subtitles_ = subtitle_search_ = false;
 }
 
 void Client::set_session(std::string token, std::string user_id, std::string user_name)
@@ -253,35 +291,55 @@ void Client::set_session(std::string token, std::string user_id, std::string use
 
 std::string Client::auth_header() const
 {
-    std::string h = "X-Emby-Authorization: Emby Client=\"Emby5\", Device=\"" + header_safe(device_name_) +
-                    "\", DeviceId=\"" + header_safe(device_id_) + "\", Version=\"" + kVersion + "\"";
-    if (!user_id_.empty())
-        h += ", UserId=\"" + header_safe(user_id_) + "\"";
+    const bool jellyfin = is_jellyfin();
+    auto safe = [jellyfin](const std::string &v) { return jellyfin ? url_escape(v) : header_safe(v); };
+    std::string h = jellyfin ? "Authorization: MediaBrowser Client=\"Emby5\", Device=\""
+                             : "X-Emby-Authorization: Emby Client=\"Emby5\", Device=\"";
+    h += safe(device_name_) + "\", DeviceId=\"" + safe(device_id_) + "\", Version=\"" + kVersion + "\"";
+    if (!user_id_.empty() && !jellyfin)
+        h += ", UserId=\"" + safe(user_id_) + "\"";
     if (!token_.empty())
-        h += ", Token=\"" + header_safe(token_) + "\"";
+        h += ", Token=\"" + safe(token_) + "\"";
     return h;
 }
 
 std::vector<std::string> Client::request_headers() const
 {
     std::vector<std::string> h{auth_header(), "Accept: application/json"};
-    if (!token_.empty())
-        h.push_back("X-Emby-Token: " + token_);
+    if (!token_.empty() && !is_jellyfin())
+        h.push_back("X-Emby-Token: " + header_safe(token_));
     return h;
 }
 
 std::string Client::api_url(const std::string &path) const
 {
-    if (path.rfind("/emby/", 0) == 0 || path == "/emby")
-        return server_ + path;
-    return server_ + "/emby" + (path.empty() || path[0] == '/' ? path : "/" + path);
+    return server_url::join(server_, server_kind(), is_jellyfin() ? server_url::jellyfin_route(path) : path);
+}
+
+std::string Client::resource_url(const std::string &path) const
+{
+    // Server-supplied URLs bypass API route remapping, but not the origin/base check.
+    return server_url::join(server_, server_kind(), path);
+}
+
+std::string Client::websocket_url() const
+{
+    return api_url("/socket?deviceId=" + url_escape(device_id_));
+}
+
+std::string Client::user_image_url(const std::string &user, const std::string &tag, int width) const
+{
+    if (user.empty() || tag.empty()) return "";
+    const std::string path = is_jellyfin() ? "/UserImage?userId=" + url_escape(user) + "&"
+        : "/Users/" + url_escape(user) + "/Images/Primary?";
+    return api_url(path + "tag=" + url_escape(tag) + "&fillWidth=" + std::to_string(width));
 }
 
 bool Client::get_json(const std::string &path, std::string *body)
 {
     HttpResponse r = tracked_request("GET", api_url(path), request_headers(), "", kTimeout);
     if (!r.ok()) {
-        set_error("GET " + path + " -> " + std::to_string(r.status) + " " + r.error);
+        set_error("GET " + path.substr(0, path.find('?')) + " -> " + std::to_string(r.status) + " " + r.error);
         return false;
     }
     *body = std::move(r.body);
@@ -293,7 +351,7 @@ bool Client::post_json(const std::string &path, const std::string &json, std::st
     HttpResponse r = tracked_request("POST", api_url(path), request_headers(),
                                   json.empty() ? "{}" : json, kTimeout);
     if (!r.ok()) {
-        set_error("POST " + path + " -> " + std::to_string(r.status) + " " + r.error);
+        set_error("POST " + path.substr(0, path.find('?')) + " -> " + std::to_string(r.status) + " " + r.error);
         return false;
     }
     if (body)
@@ -303,27 +361,42 @@ bool Client::post_json(const std::string &path, const std::string &json, std::st
 
 bool Client::public_info(std::string *name, std::string *version, std::string *id)
 {
-    std::string body;
-    if (!get_json("/System/Info/Public", &body))
-        return false;
-    cJSON *j = cJSON_Parse(body.c_str());
-    if (!j)
-        return false;
-    if (name)
-        *name = str_of(j, "ServerName");
-    if (version)
-        *version = str_of(j, "Version");
-    if (id)
-        *id = str_of(j, "Id");
-    cJSON_Delete(j);
-    return true;
+    if (server_.empty()) { set_error("Enter an HTTP(S) server address without URL credentials"); return false; }
+    // Probe only the user-supplied origin/base. Never follow the advertised LocalAddress,
+    // and never send a saved token in a pre-authentication product probe.
+    std::vector<std::string> candidates{api_url("/System/Info/Public"), server_ + "/System/Info/Public"};
+    if (candidates[0] == candidates[1]) candidates.pop_back();
+    for (const std::string &url : candidates) {
+        const HttpResponse r = tracked_request("GET", url, {"Accept: application/json"}, "", kTimeout);
+        if (!r.ok()) { set_error("Server discovery failed: HTTP " + std::to_string(r.status)); continue; }
+        cJSON *j = cJSON_Parse(r.body.c_str());
+        const std::string sid = str_of(j, "Id"), ver = str_of(j, "Version");
+        const std::string product = server_url::lower(str_of(j, "ProductName"));
+        if (!cJSON_IsObject(j) || sid.empty() || ver.empty()) {
+            cJSON_Delete(j); set_error("Invalid media-server information"); continue;
+        }
+        ServerKind detected = server_kind();
+        if (product.find("jellyfin") != std::string::npos) detected = ServerKind::Jellyfin;
+        else if (product.empty() || product.find("emby") != std::string::npos) detected = ServerKind::Emby;
+        else { cJSON_Delete(j); set_error("This is not an Emby or Jellyfin server"); return false; }
+        // The client becomes immutable once its session is published to playback/UI workers.
+        kind_ = detected;
+        server_id_ = sid;
+        if (name) *name = str_of(j, "ServerName");
+        if (version) *version = ver;
+        if (id) *id = sid;
+        cJSON_Delete(j);
+        set_error("");
+        return true;
+    }
+    return false;
 }
 
 static bool take_auth(cJSON *j, Client *c)
 {
     const std::string token = str_of(j, "AccessToken");
     const cJSON *u = cJSON_GetObjectItemCaseSensitive(j, "User");
-    if (token.empty() || !u)
+    if (token.empty() || !cJSON_IsObject(u) || str_of(u, "Id").empty())
         return false;
     c->set_session(token, str_of(u, "Id"), str_of(u, "Name"));
     c->note_image_tag(str_of(u, "PrimaryImageTag"));
@@ -348,6 +421,17 @@ bool Client::authenticate(const std::string &user, const std::string &password)
     return got;
 }
 
+bool Client::quick_connect_enabled()
+{
+    if (!is_jellyfin()) return false; // Emby keeps its existing username/password flow.
+    std::string body;
+    if (!get_json("/QuickConnect/Enabled", &body)) return false;
+    cJSON *j = cJSON_Parse(body.c_str());
+    const bool enabled = cJSON_IsTrue(j);
+    cJSON_Delete(j);
+    return enabled;
+}
+
 bool Client::quick_connect_start(QuickConnect *out)
 {
     std::string body;
@@ -359,7 +443,7 @@ bool Client::quick_connect_start(QuickConnect *out)
     out->code = str_of(j, "Code");
     out->secret = str_of(j, "Secret");
     cJSON_Delete(j);
-    return !out->secret.empty();
+    return !out->secret.empty() && !out->code.empty();
 }
 
 bool Client::quick_connect_poll(const QuickConnect &qc, bool *approved)
@@ -373,7 +457,11 @@ bool Client::quick_connect_poll(const QuickConnect &qc, bool *approved)
     cJSON_Delete(j);
     if (!authed)
         return true;
-    std::string req = "{\"Secret\":\"" + qc.secret + "\"}";
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "Secret", qc.secret.c_str());
+    char *text = cJSON_PrintUnformatted(o);
+    const std::string req = text ? text : "{}";
+    std::free(text); cJSON_Delete(o);
     if (!post_json("/Users/AuthenticateWithQuickConnect", req, &body))
         return false;
     j = cJSON_Parse(body.c_str());
@@ -387,7 +475,10 @@ bool Client::quick_connect_authorize(const std::string &code)
     std::string body;
     if (!post_json("/QuickConnect/Authorize?code=" + url_escape(code), "", &body))
         return false;
-    if (body.find("true") == std::string::npos) {
+    cJSON *answer = cJSON_Parse(body.c_str());
+    const bool accepted = cJSON_IsTrue(answer);
+    cJSON_Delete(answer);
+    if (!accepted) {
         set_error("Quick Connect: the server did not approve the code");
         return false;
     }
@@ -400,6 +491,9 @@ bool Client::validate()
     if (!get_json("/Users/" + user_id_, &body))
         return false;
     if (cJSON *j = cJSON_Parse(body.c_str())) {
+        if (!cJSON_IsObject(j) || str_of(j, "Id") != user_id_) {
+            cJSON_Delete(j); set_error("Invalid user response"); return false;
+        }
         user_image_tag_ = str_of(j, "PrimaryImageTag");
         user_name_ = str_of(j, "Name");
         latest_excludes_.clear();
@@ -412,8 +506,10 @@ bool Client::validate()
         is_admin_ = bool_of(policy, "IsAdministrator");
         manages_subtitles_ = is_admin_ || bool_of(policy, "EnableSubtitleManagement");
         cJSON_Delete(j);
+        return true;
     }
-    return true;
+    set_error("Invalid user response");
+    return false;
 }
 
 std::vector<PublicUser> Client::public_users()
@@ -447,7 +543,8 @@ bool Client::get_prefs(UserPrefs *out)
         out->audio_language = str_of(cfg, "AudioLanguagePreference");
         out->subtitle_language = str_of(cfg, "SubtitleLanguagePreference");
         out->subtitle_mode = str_of(cfg, "SubtitleMode");
-        out->autoplay_next = bool_of(cfg, "EnableNextEpisodeAutoPlay");
+        const cJSON *autoplay = cJSON_GetObjectItemCaseSensitive(cfg, "EnableNextEpisodeAutoPlay");
+        out->autoplay_next = !cJSON_IsFalse(autoplay);
     }
     cJSON_Delete(j);
     return cfg != nullptr;
@@ -481,13 +578,16 @@ bool Client::set_prefs(const UserPrefs &p)
     return ok;
 }
 
-std::vector<Item> Client::items_of(const std::string &body)
+std::vector<Item> Client::items_of(const std::string &body, bool *ok)
 {
+    if (ok) *ok = false;
     std::vector<Item> out;
     cJSON *j = cJSON_Parse(body.c_str());
     if (!j)
         return out;
     const cJSON *arr = cJSON_IsArray(j) ? j : cJSON_GetObjectItemCaseSensitive(j, "Items");
+    if (!cJSON_IsArray(arr)) { cJSON_Delete(j); return out; }
+    if (ok) *ok = true;
     const cJSON *it;
     cJSON_ArrayForEach(it, arr)
         out.push_back(item_of(it));
@@ -495,18 +595,20 @@ std::vector<Item> Client::items_of(const std::string &body)
     return out;
 }
 
-std::vector<Item> Client::resume(int limit, const std::string &parent_id)
+std::vector<Item> Client::resume(int limit, const std::string &parent_id, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Users/" + user_id_ + "/Items/Resume?limit=" + std::to_string(limit) +
                       "&mediaTypes=Video&enableTotalRecordCount=false&fields=" + kFields +
                       (parent_id.empty() ? std::string() : "&parentId=" + parent_id), &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
-std::vector<Item> Client::next_up(int limit, const std::string &series_id)
+std::vector<Item> Client::next_up(int limit, const std::string &series_id, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     std::string path = "/Shows/NextUp?userId=" + user_id_ + "&limit=" + std::to_string(limit) +
                        "&enableResumable=false&fields=" + kFields;
@@ -514,15 +616,16 @@ std::vector<Item> Client::next_up(int limit, const std::string &series_id)
         path += "&seriesId=" + series_id;
     if (!get_json(path, &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
-std::vector<Item> Client::views()
+std::vector<Item> Client::views(bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Users/" + user_id_ + "/Views?IncludeExternalContent=false", &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
 /* No total count: the server's count of a random recursive query doubles its time. */
@@ -548,32 +651,35 @@ std::vector<Item> Client::featured_from(const std::string &body, int limit)
     return out;
 }
 
-std::vector<Item> Client::latest(const std::string &parent_id, int limit)
+std::vector<Item> Client::latest(const std::string &parent_id, int limit, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Users/" + user_id_ + "/Items/Latest?parentId=" + parent_id + "&limit=" +
                       std::to_string(limit) + "&fields=" + kFields, &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
-std::vector<Item> Client::episodes(const std::string &series_id, const std::string &season_id)
+std::vector<Item> Client::episodes(const std::string &series_id, const std::string &season_id, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     std::string path = "/Shows/" + series_id + "/Episodes?userId=" + user_id_ + "&fields=Overview";
     if (!season_id.empty())
         path += "&seasonId=" + season_id;
     if (!get_json(path, &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
 /* Emby supplies unaired virtual episodes in its upcoming TV schedule.
  * Query this independently because /Shows/{id}/Episodes need not include them.
  * Limit the response to the requested series in code as well as via ParentId.
  */
-std::vector<Item> Client::upcoming_episodes(const std::string &series_id)
+std::vector<Item> Client::upcoming_episodes(const std::string &series_id, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     const std::string path = "/Shows/Upcoming?userId=" + user_id_ +
         "&ParentId=" + url_escape(series_id) +
@@ -581,15 +687,14 @@ std::vector<Item> Client::upcoming_episodes(const std::string &series_id)
     if (!get_json(path, &body))
         return {};
     std::vector<Item> upcoming;
-    for (Item &e : items_of(body)) {
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+    char today[11] = {};
+    if (!gmtime_r(&now, &utc) || !std::strftime(today, sizeof today, "%Y-%m-%d", &utc)) return upcoming;
+    for (Item &e : items_of(body, ok)) {
         if (e.type != "Episode" || e.series_id != series_id || e.premiere_date.size() < 10)
             continue;
         // Compare ISO calendar dates (YYYY-MM-DD); episodes from today can be included.
-        std::time_t now = std::time(nullptr);
-        std::tm *utc = std::gmtime(&now);
-        char today[11] = {};
-        if (!utc || !std::strftime(today, sizeof today, "%Y-%m-%d", utc))
-            continue;
         if (e.premiere_date.compare(0, 10, today, 10) < 0)
             continue;
         e.upcoming = true; // Upcoming endpoint defines availability, even if LocationType was omitted.
@@ -609,7 +714,7 @@ Page Client::library(const std::string &parent_id, const std::string &types, con
                       "&StartIndex=" + std::to_string(start) + "&Limit=" + std::to_string(limit) +
                       "&fields=" + kFields + "&EnableTotalRecordCount=true" + filter, &body))
         return page;
-    page.items = items_of(body);
+    page.items = items_of(body, &page.ok);
     if (cJSON *j = cJSON_Parse(body.c_str())) {
         page.total = (int)num_of(j, "TotalRecordCount", (double)page.items.size());
         cJSON_Delete(j);
@@ -617,14 +722,15 @@ Page Client::library(const std::string &parent_id, const std::string &types, con
     return page;
 }
 
-std::vector<Item> Client::search(const std::string &term, const std::string &types, int limit)
+std::vector<Item> Client::search(const std::string &term, const std::string &types, int limit, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Items?userId=" + user_id_ + "&searchTerm=" + url_escape(term) + "&IncludeItemTypes=" + types +
                       "&Recursive=true&EnableTotalRecordCount=false&Limit=" + std::to_string(limit) +
                       "&fields=" + kFields + ",ProviderIds", &body))   /* TMDB ids: Seerr's results match them */
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
 std::vector<Client::Recommendation> Client::recommendations(int categories, int items)
@@ -728,12 +834,13 @@ std::vector<Item> Client::genre_items(const std::string &genre, int limit)
     return items_of(body);
 }
 
-std::vector<Item> Client::special_features(const std::string &id)
+std::vector<Item> Client::special_features(const std::string &id, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
-    if (!get_json("/Items/" + id + "/SpecialFeatures?userId=" + user_id_, &body))
+    if (!get_json("/Users/" + user_id_ + "/Items/" + url_escape(id) + "/SpecialFeatures", &body))
         return {};
-    return items_of(body);   /* a bare array */
+    return items_of(body, ok);   /* a bare array */
 }
 
 std::vector<Item> Client::theme_songs(const std::string &id)
@@ -747,11 +854,16 @@ std::vector<Item> Client::theme_songs(const std::string &id)
 bool Client::item(const std::string &id, Item *out, Detail *detail)
 {
     std::string body;
-    if (!get_json("/Items/" + id + "?userId=" + user_id_ + "&fields=" + kItemFields, &body))
+    if (!get_json("/Users/" + user_id_ + "/Items/" + url_escape(id) + "?fields=" + kItemFields, &body))
         return false;
     cJSON *j = cJSON_Parse(body.c_str());
     if (!j)
         return false;
+    if (!cJSON_IsObject(j) || str_of(j, "Id") != id) {
+        cJSON_Delete(j);
+        set_error("Invalid item response");
+        return false;
+    }
     *out = item_of(j);
     if (detail) {
         *detail = Detail();
@@ -773,27 +885,29 @@ bool Client::item(const std::string &id, Item *out, Detail *detail)
             detail->studios.push_back(str_of(st, "Name"));
         detail->tagline = first_of(j, "Taglines");
         cJSON_ArrayForEach(st, cJSON_GetObjectItemCaseSensitive(j, "MediaStreams"))
-            detail->streams.push_back(stream_of(st, server_));
+            detail->streams.push_back(stream_of(st, *this));
     }
     cJSON_Delete(j);
     return true;
 }
 
-std::vector<Item> Client::seasons(const std::string &series_id)
+std::vector<Item> Client::seasons(const std::string &series_id, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Shows/" + series_id + "/Seasons?userId=" + user_id_, &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
-std::vector<Item> Client::similar(const std::string &id, int limit)
+std::vector<Item> Client::similar(const std::string &id, int limit, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Items/" + id + "/Similar?userId=" + user_id_ + "&limit=" + std::to_string(limit) +
                       "&fields=" + kFields, &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
 std::vector<Item> Client::person_items(const std::string &person_id, const std::string &types, int limit)
@@ -807,28 +921,23 @@ std::vector<Item> Client::person_items(const std::string &person_id, const std::
     return items_of(body);
 }
 
-bool Client::set_favorite(const std::string &id, bool favorite)
+bool Client::set_favorite(const std::string &id, bool favorite, Item *confirmed)
 {
     HttpResponse r = tracked_request(favorite ? "POST" : "DELETE",
                                   api_url("/Users/" + user_id_ + "/FavoriteItems/" + id),
                                   request_headers(), "", kTimeout);
+    mutation_data(r, id, confirmed);
+    if (!r.ok()) set_error("User-data update failed: HTTP " + std::to_string(r.status));
     return r.ok();
 }
 
-std::vector<Item> Client::local_trailers(const std::string &id)
+std::vector<Item> Client::local_trailers(const std::string &id, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
-    if (!get_json("/Items/" + id + "/LocalTrailers?userId=" + user_id_, &body))
+    if (!get_json("/Users/" + user_id_ + "/Items/" + url_escape(id) + "/LocalTrailers", &body))
         return {};
-    /* A bare array, not {"Items": [...]}. */
-    std::vector<Item> out;
-    if (cJSON *j = cJSON_Parse(body.c_str())) {
-        const cJSON *t;
-        cJSON_ArrayForEach(t, j)
-            out.push_back(item_of(t));
-        cJSON_Delete(j);
-    }
-    return out;
+    return items_of(body, ok);
 }
 
 void Client::check_subtitle_search()
@@ -904,7 +1013,7 @@ Page Client::album_artists(const std::string &parent_id, const std::string &sort
                       std::to_string(start) + "&Limit=" + std::to_string(limit) + "&fields=" + kFields +
                       "&EnableTotalRecordCount=true", &body))
         return page;
-    page.items = items_of(body);
+    page.items = items_of(body, &page.ok);
     if (cJSON *j = cJSON_Parse(body.c_str())) {
         page.total = (int)num_of(j, "TotalRecordCount", (double)page.items.size());
         cJSON_Delete(j);
@@ -984,11 +1093,13 @@ std::vector<Item> Client::instant_mix(const std::string &id, int limit)
     return items_of(body);
 }
 
-bool Client::set_played(const std::string &id, bool played)
+bool Client::set_played(const std::string &id, bool played, Item *confirmed)
 {
     HttpResponse r = tracked_request(played ? "POST" : "DELETE",
                                   api_url("/Users/" + user_id_ + "/PlayedItems/" + id),
                                   request_headers(), "", kTimeout);
+    mutation_data(r, id, confirmed);
+    if (!r.ok()) set_error("User-data update failed: HTTP " + std::to_string(r.status));
     return r.ok();
 }
 
@@ -996,26 +1107,45 @@ bool Client::set_played(const std::string &id, bool played)
  * (as "Remove from Continue Watching" does in Emby's own clients). */
 bool Client::clear_position(const std::string &id)
 {
-    return post_json("/Users/" + user_id_ + "/Items/" + id + "/UserData", "{\"PlaybackPositionTicks\":0}", nullptr);
+    const std::string path = "/Users/" + user_id_ + "/Items/" + url_escape(id) + "/UserData";
+    if (!is_jellyfin()) return post_json(path, "{\"PlaybackPositionTicks\":0}", nullptr);
+    // Older Jellyfin versions accept a whole UserItemDataDto rather than a
+    // nullable patch. Preserve its played/favourite/play-count/date fields.
+    std::string body;
+    if (!get_json(path, &body)) return false;
+    cJSON *data = cJSON_Parse(body.c_str());
+    if (!cJSON_IsObject(data) || !cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(data, "Played")) ||
+        !cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(data, "IsFavorite")) ||
+        !cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(data, "PlayCount"))) {
+        cJSON_Delete(data); set_error("Cannot safely clear resume: missing user data"); return false;
+    }
+    cJSON_DeleteItemFromObjectCaseSensitive(data, "PlaybackPositionTicks");
+    cJSON_AddNumberToObject(data, "PlaybackPositionTicks", 0);
+    char *text = cJSON_PrintUnformatted(data);
+    const bool ok = text && post_json(path, text, nullptr);
+    std::free(text); cJSON_Delete(data);
+    return ok;
 }
 
-std::vector<Item> Client::favorites(int limit)
+std::vector<Item> Client::favorites(int limit, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Items?userId=" + user_id_ + "&Filters=IsFavorite&IncludeItemTypes=Movie,Series,BoxSet"
                   "&Recursive=true&SortBy=DateCreated,SortName&SortOrder=Descending&EnableTotalRecordCount=false"
                   "&Limit=" + std::to_string(limit) + "&fields=" + kFields, &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
-std::vector<Item> Client::children(const std::string &parent_id, const std::string &sort_by, int limit)
+std::vector<Item> Client::children(const std::string &parent_id, const std::string &sort_by, int limit, bool *ok)
 {
+    if (ok) *ok = false;
     std::string body;
     if (!get_json("/Items?userId=" + user_id_ + "&parentId=" + parent_id + "&SortBy=" + sort_by +
                       "&EnableTotalRecordCount=false&Limit=" + std::to_string(limit) + "&fields=" + kFields, &body))
         return {};
-    return items_of(body);
+    return items_of(body, ok);
 }
 
 bool Client::media_extras(const std::string &item_id, const std::string &media_source_id,
@@ -1062,10 +1192,10 @@ bool Client::media_extras(const std::string &item_id, const std::string &media_s
         tp->tile_h = (int)num_of(best, "TileHeight");
         tp->count = (int)num_of(best, "ThumbnailCount");
         tp->interval = num_of(best, "Interval") / 1000.0;
-        /* The sheets need the session: ApiKey (the legacy api_key is refused). */
+        /* Provider-specific artwork token naming. */
         tp->url_base = api_url("/Videos/" + item_id + "/Trickplay/" + std::to_string(best_w) + "/");
         tp->url_query = "?MediaSourceId=" + (src && src->string ? std::string(src->string) : media_source_id) +
-                        "&ApiKey=" + token_;
+                        (is_jellyfin() ? "&api_key=" : "&ApiKey=") + url_escape(token_);
     }
     cJSON_Delete(j);
     return true;
@@ -1206,31 +1336,39 @@ bool Client::playback_info(const std::string &item_id, int64_t start_ticks, int 
         c.v.name = str_of(ms, "Name");
         c.v.bitrate = (int64_t)num_of(ms, "Bitrate", 0);
         std::string codec, range;
+        bool video = false, audio = false;
         const cJSON *s;
-        cJSON_ArrayForEach(s, cJSON_GetObjectItemCaseSensitive(ms, "MediaStreams"))
+        cJSON_ArrayForEach(s, cJSON_GetObjectItemCaseSensitive(ms, "MediaStreams")) {
+            video = video || str_of(s, "Type") == "Video";
+            audio = audio || str_of(s, "Type") == "Audio";
             if (str_of(s, "Type") == "Video" && c.v.height == 0) {
                 c.v.height = (int)num_of(s, "Height", 0);
                 codec = str_of(s, "Codec");
                 range = str_of(s, "VideoRange");
             }
+        }
         const std::string direct_stream = str_of(ms, "DirectStreamUrl");
         const std::string transcoding = str_of(ms, "TranscodingUrl");
         if (bool_of(ms, "SupportsDirectPlay")) {
             c.v.play_method = "DirectPlay";
-            c.v.url = api_url("/Videos/" + item_id + "/stream?static=true&mediaSourceId=" + c.v.id +
-                      "&playSessionId=" + session + "&api_key=" + token_);
+            c.v.url = api_url(std::string(audio && !video ? "/Audio/" : "/Videos/") + url_escape(item_id) +
+                "/stream?static=true&mediaSourceId=" + url_escape(c.v.id) + "&playSessionId=" + url_escape(session) +
+                "&deviceId=" + url_escape(device_id_) + "&api_key=" + url_escape(token_));
+            if (!str_of(ms, "LiveStreamId").empty())
+                c.v.url += "&liveStreamId=" + url_escape(str_of(ms, "LiveStreamId"));
             c.rank = 3;
         } else if (bool_of(ms, "SupportsDirectStream") && !direct_stream.empty()) {
             c.v.play_method = "DirectStream";
-            c.v.url = api_url(direct_stream);
+            c.v.url = resource_url(direct_stream);
             c.rank = 2;
         } else if (!transcoding.empty()) {
             c.v.play_method = "Transcode";
-            c.v.url = api_url(transcoding);
+            c.v.url = resource_url(transcoding);
             c.rank = 1;
         } else {
             continue;
         }
+        if (c.v.url.empty()) continue; // rejected external/unsafe URL
         for (char &ch : codec)
             ch = (char)std::toupper((unsigned char)ch);
         c.v.label = (c.v.height ? std::to_string(c.v.height) + "p" : std::string()) +
@@ -1252,12 +1390,14 @@ bool Client::playback_info(const std::string &item_id, int64_t start_ticks, int 
     pb.item_id = item_id;
     pb.media_source_id = str_of(ms, "Id");
     pb.play_session_id = session;
+    pb.live_stream_id = str_of(ms, "LiveStreamId");
+    pb.close_live_stream = bool_of(ms, "RequiresClosing");
     pb.container = str_of(ms, "Container");
     pb.default_audio = (int)num_of(ms, "DefaultAudioStreamIndex", -1);
     pb.default_subtitle = (int)num_of(ms, "DefaultSubtitleStreamIndex", -1);
     const cJSON *s;
     cJSON_ArrayForEach(s, cJSON_GetObjectItemCaseSensitive(ms, "MediaStreams"))
-        pb.streams.push_back(stream_of(s, server_));
+        pb.streams.push_back(stream_of(s, *this));
     pb.play_method = found.front().v.play_method;
     pb.url = found.front().v.url;
     const std::string transcoding = str_of(ms, "TranscodingUrl");
@@ -1271,39 +1411,60 @@ bool Client::playback_info(const std::string &item_id, int64_t start_ticks, int 
     return true;
 }
 
-static std::string report_body(const Playback &pb, int64_t position_ticks, bool paused, bool with_method)
+static std::string report_body(const Playback &pb, int64_t position_ticks, bool paused, const char *event)
 {
-    std::string b = "{\"ItemId\":\"" + pb.item_id + "\",\"MediaSourceId\":\"" + pb.media_source_id +
-                    "\",\"PlaySessionId\":\"" + pb.play_session_id +
-                    "\",\"PositionTicks\":" + std::to_string(position_ticks) +
-                    ",\"IsPaused\":" + (paused ? "true" : "false") + ",\"CanSeek\":true";
-    if (with_method)
-        b += ",\"PlayMethod\":\"" + pb.play_method + "\"";
-    return b + "}";
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "ItemId", pb.item_id.c_str());
+    cJSON_AddStringToObject(o, "MediaSourceId", pb.media_source_id.c_str());
+    cJSON_AddStringToObject(o, "PlaySessionId", pb.play_session_id.c_str());
+    if (!pb.live_stream_id.empty()) cJSON_AddStringToObject(o, "LiveStreamId", pb.live_stream_id.c_str());
+    cJSON_AddNumberToObject(o, "PositionTicks", (double)std::max<int64_t>(0, position_ticks));
+    cJSON_AddBoolToObject(o, "IsPaused", paused);
+    cJSON_AddBoolToObject(o, "CanSeek", true);
+    cJSON_AddStringToObject(o, "PlayMethod", pb.play_method.c_str());
+    if (event) cJSON_AddStringToObject(o, "EventName", event);
+    char *text = cJSON_PrintUnformatted(o);
+    std::string body = text ? text : "{}";
+    std::free(text);
+    cJSON_Delete(o);
+    return body;
 }
 
-void Client::report_start(const Playback &pb, int64_t position_ticks)
+bool Client::send_playback(const char *path, const std::string &body)
 {
-    post_json("/Sessions/Playing", report_body(pb, position_ticks, false, true), nullptr);
+    // Bounded waits: a disconnected server must not hold the app indefinitely.
+    const HttpResponse r = tracked_request("POST", api_url(path), request_headers(), body, 5);
+    if (!r.ok()) set_error("Playback report failed: HTTP " + std::to_string(r.status));
+    return r.ok();
 }
 
-void Client::report_progress(const Playback &pb, int64_t position_ticks, bool paused)
+bool Client::report_start(const Playback &pb, int64_t position_ticks)
 {
-    post_json("/Sessions/Playing/Progress", report_body(pb, position_ticks, paused, true), nullptr);
+    return send_playback("/Sessions/Playing", report_body(pb, position_ticks, false, nullptr));
 }
 
-void Client::report_stopped(const Playback &pb, int64_t position_ticks)
+bool Client::report_progress(const Playback &pb, int64_t position_ticks, bool paused, const char *event)
 {
-    post_json("/Sessions/Playing/Stopped", report_body(pb, position_ticks, false, false), nullptr);
+    return send_playback("/Sessions/Playing/Progress", report_body(pb, position_ticks, paused, event));
+}
+
+bool Client::report_stopped(const Playback &pb, int64_t position_ticks)
+{
+    return send_playback("/Sessions/Playing/Stopped", report_body(pb, position_ticks, false, nullptr));
 }
 
 void Client::stop_encoding(const Playback &pb)
 {
+    if (pb.close_live_stream && !pb.live_stream_id.empty()) {
+        const HttpResponse r = tracked_request("POST", api_url("/LiveStreams/Close?liveStreamId=" +
+            url_escape(pb.live_stream_id)), request_headers(), "{}", 5);
+        if (!r.ok()) set_error("Could not close live stream: HTTP " + std::to_string(r.status));
+    }
     if (pb.play_method == "DirectPlay")
         return;
     tracked_request("DELETE",
                  api_url("/Videos/ActiveEncodings?deviceId=" + url_escape(device_id_) +
-                     "&playSessionId=" + pb.play_session_id),
+                     "&playSessionId=" + url_escape(pb.play_session_id)),
                  request_headers(), "", kTimeout);
 }
 

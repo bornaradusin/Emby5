@@ -340,6 +340,19 @@ typedef struct evo_agc_device {
          * Block 2 contains the Anime4K UL extension surfaces. */
         int          alloc_state[3];
         int          active_base;
+        unsigned     reclaim_mask;    /* serviced only before recording a frame */
+        uint32_t     block_fence[3][EVO_AGC_FRAME_SLOTS]; /* last submit USING each block */
+        unsigned     frame_blocks;      /* scratch referenced by the current DCB */
+        unsigned     session_number;
+        int          allocation_failure; /* 1 dimensions, 2 busy, 3 alloc, 4 map, 5 release */
+        int          allocation_rc;
+        size_t       allocation_bytes;
+        size_t       failed_bytes[3];  /* a smaller fallback may retry without defeating backoff */
+        uint64_t     memory_retry_frame;
+        int          memory_mode, memory_net;
+        char         memory_status[160];
+        uint64_t     frame_serial;
+        uint64_t     retry_after[3];   /* bounded allocation retry, not every frame */
         int64_t      mem_offset[3];
         uint8_t     *mem_base[3];
         size_t       mem_bytes[3];
@@ -370,6 +383,9 @@ static evo_agc_device_t g_agc_dev = {0};
 
 /* #103 upscaler, defined beside evo_agc_blit_yuv. */
 static void agc_upscale_release(void);
+static void agc_upscale_maintenance(void);
+static void agc_upscale_observe_fence(unsigned slot, uint32_t value);
+static void agc_upscale_note_submit(unsigned slot, uint32_t marker);
 static void agc_upscale_note_gpu_time(uint64_t us);
 
 /*
@@ -1575,15 +1591,15 @@ cleanup_fail:
  *
  * Bounded, and deliberately so: if the GPU is already wedged then no amount of
  * waiting will retire the fence, and hanging here would turn a panic on exit
- * into a hang on exit. Past the deadline we give up and release anyway, which
- * is no worse than the behaviour this replaces.
+ * into a hang on exit. Past the deadline ownership remains outstanding: do
+ * not clear its marker or free referenced memory merely because time elapsed.
  */
-static void agc_wait_gpu_idle(unsigned timeout_ms)
+static int agc_wait_gpu_idle(unsigned timeout_ms)
 {
     if (!g_agc_dev.initialized)
-        return;
+        return 1;
 
-    int waited_any = 0;
+    int waited_any = 0, all_idle=1;
     for (int slot = 0; slot < EVO_AGC_FRAME_SLOTS; ++slot) {
         if (!g_agc_dev.fence_expect[slot] || !g_agc_dev.fences[slot])
             continue;
@@ -1598,16 +1614,20 @@ static void agc_wait_gpu_idle(unsigned timeout_ms)
         }
 
         evo_boot_log("agc shutdown: slot=%d %s after %ums (fence=%u expect=%u)",
-                     slot, waited >= timeout_ms ? "STILL BUSY - releasing anyway"
+                     slot, waited >= timeout_ms ? "STILL BUSY - retaining GPU ownership"
                                                 : "idle",
                      waited,
                      (unsigned)*g_agc_dev.fences[slot],
                      (unsigned)g_agc_dev.fence_expect[slot]);
-        g_agc_dev.fence_expect[slot] = 0;
+        if(waited<timeout_ms) {
+            agc_upscale_observe_fence((unsigned)slot,g_agc_dev.fence_expect[slot]);
+            g_agc_dev.fence_expect[slot]=0;
+        } else all_idle=0;
     }
     if (!waited_any)
         evo_boot_log("agc drain: no submits outstanding");
     evo_boot_log_flush();
+    return all_idle;
 }
 
 void evo_agc_runtime_wait_idle(unsigned timeout_ms)
@@ -1619,7 +1639,11 @@ void evo_agc_runtime_shutdown(void)
 {
     /* Order matters: drain first, then drop the scanout registration, then
      * unmap, then hand the physical pages back. */
-    agc_wait_gpu_idle(500);
+    if(!agc_wait_gpu_idle(500)) {
+        evo_boot_log("agc shutdown deferred: GPU still owns submitted buffers; no unmap/release");
+        evo_boot_log_flush();
+        return;
+    }
 
     evo_boot_log("agc shutdown: drained, video_handle=%d base=%p",
                  g_agc_dev.video_handle, (void *)g_agc_dev.direct_mem_base);
@@ -1668,6 +1692,9 @@ void evo_agc_runtime_frame_begin(void)
     if (!g_agc_dev.initialized || g_agc_dev.frame_active)
         return;
 
+    /* Scratch recycling must happen before this frame records any GPU address. */
+    agc_upscale_maintenance();
+    g_agc_dev.up.frame_blocks=0;
     const uint32_t slot = g_agc_dev.current_slot;
 
     /* Diagnostic trace for the first dozen frames only - enough to cross every
@@ -1705,8 +1732,10 @@ void evo_agc_runtime_frame_begin(void)
                              slot, (unsigned)*g_agc_dev.fences[slot],
                              (unsigned)g_agc_dev.fence_expect[slot]);
             }
-        } else if (tracing) {
-            evo_boot_log("agc frame_begin slot=%u retired after %u waits", slot, waits);
+            return; /* This DCB/ring slot still belongs to the GPU. */
+        } else {
+            agc_upscale_observe_fence(slot,g_agc_dev.fence_expect[slot]);
+            if(tracing)evo_boot_log("agc frame_begin slot=%u retired after %u waits", slot, waits);
         }
     }
 
@@ -2220,6 +2249,8 @@ void evo_agc_runtime_frame_end(void)
     if (tracing)
         evo_boot_log("agc frame_end slot=%u dwords=%u submitting", slot, dwords);
     int32_t submit_rc = sceAgcDriverSubmitDcb(&submit);
+    if (submit_rc == 0)
+        agc_upscale_note_submit(slot, marker);
     if (tracing)
         evo_boot_log("agc frame_end slot=%u submit_rc=%d", slot, submit_rc);
     if (submit_rc != 0) {
@@ -2269,7 +2300,10 @@ void evo_agc_runtime_frame_end(void)
                                                    g_agc_dev.active_backbuffer,
                                                    1 /* VSYNC */,
                                                    (int64_t)g_agc_dev.flip_arg);
-            g_agc_dev.fence_expect[slot] = 0; /* already waited; don't re-wait */
+            if(waits < 500000u / step_us) {
+                agc_upscale_observe_fence(slot,marker);
+                g_agc_dev.fence_expect[slot] = 0;
+            } // On timeout preserve ownership; frame_begin must not reuse the slot.
 
             /*
              * Wait for the flip to actually retire before this frame ends.
@@ -2667,7 +2701,7 @@ int evo_agc_runtime_set_hdr_output(int enable)
     evo_boot_log_flush();
 
     /* No GPU write in the old format may land after the retype. */
-    agc_wait_gpu_idle(200);
+    if(!agc_wait_gpu_idle(200))return -1;
 
     /*
      * Retype the registered set in place, applied by VideoOut at the next
@@ -2741,7 +2775,7 @@ int evo_agc_runtime_set_120hz(int enable)
     evo_boot_log("agc: switching output mode to %#llx (120hz=%d)",
                  (unsigned long long)mode, enable);
 
-    agc_wait_gpu_idle(200);
+    if(!agc_wait_gpu_idle(200))return -1;
 
     int32_t rc = sceVideoOutConfigureOutput(g_agc_dev.video_handle, mode, NULL, NULL, 0);
     evo_boot_log("agc: sceVideoOutConfigureOutput rc=%d (0x%08x)", rc, (unsigned)rc);
@@ -3316,6 +3350,7 @@ static agc_up_surface_t up_surface(int slot, uint32_t w, uint32_t h, int fp16)
     const int blk = slot >= EVO_AGC_UP_SURFACES ? 2 : g_agc_dev.up.active_base;
     const int offset_slot = slot >= EVO_AGC_UP_SURFACES ? slot + EVO_AGC_UP_SURFACES
                                                            : slot + blk * EVO_AGC_UP_SURFACES;
+    g_agc_dev.up.frame_blocks |= 1u << blk;
     t.addr = (uint64_t)(uintptr_t)g_agc_dev.up.mem_base[blk] +
              (uint64_t)g_agc_dev.up.slot_offset[offset_slot];
     t.width = w;
@@ -3340,7 +3375,7 @@ static agc_up_tex_t up_tex(const agc_up_surface_t *s, int bilinear)
 
 /* Tiled 64-KB surface footprint with 2-MB alignment for each suballocation.
  * Allocate for the actual video frame, not five worst-case 4K buffers.
- * Keep buffers until GPU shutdown; never remap live GPU targets. */
+ * Reuse across playback; recycle unsuitable tiers only after their GPU fences. */
 static size_t up_surface_bytes(uint32_t w, uint32_t h, uint32_t bpp)
 {
     const uint32_t bh = bpp == 8u ? 64u : 128u;
@@ -3350,9 +3385,11 @@ static size_t up_surface_bytes(uint32_t w, uint32_t h, uint32_t bpp)
                     ~(EVO_AGC_DIRECT_MEM_ALIGN - 1u));
 }
 
-static int agc_upscale_alloc(int blk, uint32_t sw, uint32_t sh,
-                            uint32_t dw, uint32_t dh)
+static int agc_upscale_alloc_for_network(int blk, uint32_t sw, uint32_t sh,
+                            uint32_t dw, uint32_t dh, int mode, int network)
 {
+    g_agc_dev.up.allocation_failure=0;
+    const int ai=mode==EVO_AGC_UPSCALE_AI;
     size_t capacity[8] = {0};
     const int count = blk ? EVO_AGC_UP_EXT_SURFACES : EVO_AGC_UP_SURFACES;
     const size_t rgba_src = up_surface_bytes(sw, sh, 4u);
@@ -3360,34 +3397,43 @@ static int agc_upscale_alloc(int blk, uint32_t sw, uint32_t sh,
     const size_t rgba_dst = up_surface_bytes(dw, dh, 4u);
     if (!sw || !sh || !dw || !dh || !rgba_src || !fp16_src || !rgba_dst ||
         !up_fits(sw, sh, 8u) || !up_fits(dw, dh, 4u))
-        return -1;
+        {g_agc_dev.up.allocation_failure=1;return -1;}
     for (int i = 0; i < count; ++i) {
         if (blk)
             capacity[i] = fp16_src;
         else if (i == 0)
             capacity[i] = rgba_src;
         else if (i == 1)
-            capacity[i] = rgba_dst > fp16_src ? rgba_dst : fp16_src;
+            capacity[i] = ai ? fp16_src : rgba_dst;
         else
-            capacity[i] = fp16_src;
+            capacity[i] = ai && (network>0 || i==2) ? fp16_src : 0; // S uses two feature maps; M/UL four.
     }
-    /* Reserve 1080p scratch capacity for SDR-to-4K playback. */
-    if (!blk && sw <= 1920u && sh <= 1080u &&
-        dw <= 3840u && dh <= 2160u) {
-        const size_t rgba = up_surface_bytes(1920u, 1080u, 4u);
-        const size_t fp16 = up_surface_bytes(1920u, 1080u, 8u);
-        if (capacity[0] < rgba) capacity[0] = rgba;
-        if (capacity[1] < fp16) capacity[1] = fp16;
-        for (int i = 2; i < count; ++i)
-            if (capacity[i] < fp16) capacity[i] = fp16;
+    // Reserve ONLY the requested tiled footprints. The former 1080p/4K floor
+    // charged small IPTV streams for unused output and feature-map surfaces.
+    // AI's final pass renders straight to scanout: it needs no 4K EASU target.
+    size_t requested_bytes=0;
+    for(int i=0;i<count;++i)requested_bytes+=capacity[i];
+    for(int i=0;i<3;++i) {
+        if(g_agc_dev.up.alloc_state[i]<0 && !g_agc_dev.up.mem_bytes[i] &&
+           g_agc_dev.up.failed_bytes[i] && requested_bytes<g_agc_dev.up.failed_bytes[i]) {
+            g_agc_dev.up.alloc_state[i]=0;g_agc_dev.up.retry_after[i]=0;
+        }
     }
+    /* A real allocation failure is retried at a bounded rate. It is not a
+     * permanent 'Off' flag until the application is relaunched. */
+    for (int i = 0; i < 3; ++i)
+        if (g_agc_dev.up.alloc_state[i] < 0 && !g_agc_dev.up.mem_base[i] && !g_agc_dev.up.mem_bytes[i] &&
+            g_agc_dev.up.frame_serial >= g_agc_dev.up.retry_after[i])
+            g_agc_dev.up.alloc_state[i] = 0;
+
     /* Existing blocks may be reused for any smaller stream. For a larger
      * source choose the spare base tier; never remap an in-flight surface.
      * The first small IPTV stream must not lock out a later 1080p movie. */
     int selected = blk ? 2 : 0;
     if (!blk) {
         for (int candidate = 0; candidate < 2; ++candidate) {
-            if (g_agc_dev.up.alloc_state[candidate] != 1)
+            if (g_agc_dev.up.alloc_state[candidate] != 1 || !g_agc_dev.up.mem_base[candidate] ||
+                (g_agc_dev.up.reclaim_mask & (1u << candidate)))
                 continue;
             int fits = 1;
             for (int i = 0; i < count; ++i)
@@ -3400,14 +3446,33 @@ static int agc_upscale_alloc(int blk, uint32_t sw, uint32_t sh,
         }
         if (g_agc_dev.up.alloc_state[0] != 0)
             selected = 1;
-        if (g_agc_dev.up.alloc_state[selected] != 0)
-            return -1; /* Both tiers used, or allocation previously failed. */
-    } else if (g_agc_dev.up.alloc_state[2]) {
-        if (g_agc_dev.up.alloc_state[2] < 0)
+        if (g_agc_dev.up.alloc_state[selected] != 0) {
+            /* Both tiers can contain perfectly valid, but too-small targets.
+             * Queue recycling of one tier; never unmap while a frame uses it.
+             * Also free an unsuitable survivor after the spare allocation fails
+             * so an unused old target does not itself keep the device out of memory. */
+            const int live0 = g_agc_dev.up.alloc_state[0] == 1;
+            const int live1 = g_agc_dev.up.alloc_state[1] == 1;
+            if (live0 || live1) {
+                const int victim = live0 && live1 ?
+                    (g_agc_dev.up.mem_bytes[0] <= g_agc_dev.up.mem_bytes[1] ? 0 : 1) :
+                    (live0 ? 0 : 1);
+                g_agc_dev.up.reclaim_mask |= 1u << victim;
+                g_agc_dev.up.allocation_failure=2;
+            } else g_agc_dev.up.allocation_failure=3;
             return -1;
+        }
+    } else if (g_agc_dev.up.reclaim_mask & (1u << 2)) {
+        g_agc_dev.up.allocation_failure=2;
+        return -1;
+    } else if (g_agc_dev.up.alloc_state[2]) {
+        if (g_agc_dev.up.alloc_state[2] < 0) {g_agc_dev.up.allocation_failure=3;return -1;}
         for (int i = 0; i < count; ++i)
-            if (capacity[i] > g_agc_dev.up.slot_capacity[10 + i])
+            if (capacity[i] > g_agc_dev.up.slot_capacity[10 + i]) {
+                g_agc_dev.up.reclaim_mask |= 1u << 2;
+                g_agc_dev.up.allocation_failure=2;
                 return -1;
+            }
         return 0;
     }
     const int base = selected == 2 ? 10 : selected * EVO_AGC_UP_SURFACES;
@@ -3419,47 +3484,150 @@ static int agc_upscale_alloc(int blk, uint32_t sw, uint32_t sh,
     }
     int64_t off = -1;
     void *va = NULL;
+    int stage=3;
     int rc = sceKernelAllocateDirectMemory(0, (off_t)16 * 1024 * 1024 * 1024ULL, bytes,
                                            EVO_AGC_DIRECT_MEM_ALIGN,
                                            EVO_AGC_DIRECT_MEM_TYPE, &off);
     if (rc == 0 && off >= 0) {
+        stage=4;
         rc = sceKernelMapDirectMemory(&va, bytes, EVO_AGC_MAP_PROTECTION, 0, off,
                                       EVO_AGC_DIRECT_MEM_ALIGN);
         if (rc != 0 || !va) {
-            sceKernelReleaseDirectMemory(off, bytes);
-            va = NULL;
+            // Retain the physical allocation record if release fails, so a later
+            // retry cleans it up rather than leaking one block per failed map.
+            const int released=sceKernelReleaseDirectMemory(off,bytes);
+            if(released!=0) {
+                g_agc_dev.up.mem_offset[selected]=off;g_agc_dev.up.mem_bytes[selected]=bytes;
+                g_agc_dev.up.reclaim_mask|=1u<<selected;stage=5;rc=released;
+            }
+            va=NULL;
         }
     }
     if (!va) {
         g_agc_dev.up.alloc_state[selected] = -1;
-        evo_boot_log("agc upscale: scratch block %d alloc of %zu MB FAILED rc=%#x",
-                     blk, bytes >> 20, (unsigned)rc);
+        g_agc_dev.up.retry_after[selected] = g_agc_dev.up.frame_serial + 120u;
+        g_agc_dev.up.allocation_failure=stage;g_agc_dev.up.allocation_rc=rc;
+        g_agc_dev.up.allocation_bytes=bytes;g_agc_dev.up.failed_bytes[selected]=bytes;
+        evo_boot_log("agc upscale: session=%u block=%d %s failed rc=%#x bytes=%zu src=%ux%u dst=%ux%u reclaim=%u",
+            g_agc_dev.up.session_number,selected,stage==3?"allocate":stage==4?"map":"release",(unsigned)rc,
+            bytes,sw,sh,dw,dh,g_agc_dev.up.reclaim_mask);
+        // Unused UL maps must not starve the base FSR/Anime4K path.
+        if(!blk && g_agc_dev.up.mem_bytes[2] && !(g_agc_dev.up.frame_blocks&(1u<<2)))
+            g_agc_dev.up.reclaim_mask|=1u<<2;
         return -1;
     }
     g_agc_dev.up.mem_offset[selected] = off;
     g_agc_dev.up.mem_base[selected] = (uint8_t *)va;
     g_agc_dev.up.mem_bytes[selected] = bytes;
     g_agc_dev.up.alloc_state[selected] = 1;
+    g_agc_dev.up.failed_bytes[selected]=0;
     if (!blk) g_agc_dev.up.active_base = selected;
+    evo_boot_log("agc upscale: session=%u block=%d ready bytes=%zu src=%ux%u dst=%ux%u mode=%d",
+        g_agc_dev.up.session_number,selected,bytes,sw,sh,dw,dh,mode);
     return 0;
 }
 
-/* Called from shutdown after the GPU drain. */
+// Compatibility entry for fixed FSR or M allocations. The plan passes the
+// network explicitly, avoiding unneeded M/UL buffers for Standard Anime4K.
+static int agc_upscale_alloc(int blk,uint32_t sw,uint32_t sh,uint32_t dw,uint32_t dh,int mode)
+{
+    return agc_upscale_alloc_for_network(blk,sw,sh,dw,dh,mode,1);
+}
+
+/* Unmap a block only once a caller has established GPU ownership is over. */
+static int agc_upscale_release_block(int blk)
+{
+    const size_t bytes = g_agc_dev.up.mem_bytes[blk];
+    if (g_agc_dev.up.mem_base[blk]) {
+        if (sceKernelMunmap(g_agc_dev.up.mem_base[blk], bytes) != 0)
+            return -1; /* do not hand mapped pages back to the kernel */
+        g_agc_dev.up.mem_base[blk] = NULL;
+    }
+    if (bytes && g_agc_dev.up.mem_offset[blk] >= 0) {
+        if (sceKernelReleaseDirectMemory(g_agc_dev.up.mem_offset[blk], bytes) != 0)
+            return -1;
+    }
+    g_agc_dev.up.mem_offset[blk] = -1;
+    g_agc_dev.up.mem_bytes[blk] = 0;
+    g_agc_dev.up.alloc_state[blk] = 0;
+    g_agc_dev.up.retry_after[blk] = 0;
+    g_agc_dev.up.failed_bytes[blk] = 0;
+    memset(g_agc_dev.up.block_fence[blk],0,sizeof g_agc_dev.up.block_fence[blk]);
+    const int base = blk == 2 ? 10 : blk * EVO_AGC_UP_SURFACES;
+    const int count = blk == 2 ? EVO_AGC_UP_EXT_SURFACES : EVO_AGC_UP_SURFACES;
+    memset(g_agc_dev.up.slot_offset + base, 0, (size_t)count * sizeof(size_t));
+    memset(g_agc_dev.up.slot_capacity + base, 0, (size_t)count * sizeof(size_t));
+    return 0;
+}
+
+// A fence belongs to the last DCB that referenced a particular scratch block,
+// not to all later menu/video DCBs. Completed ownership is remembered before the
+// shared fence slot is reset to zero for its next submit.
+static void agc_upscale_observe_fence(unsigned slot,uint32_t value)
+{
+    if(slot>=EVO_AGC_FRAME_SLOTS || !value)return;
+    for(int block=0;block<3;++block) {
+        const uint32_t want=g_agc_dev.up.block_fence[block][slot];
+        // Markers are monotonic modulo uint32_t; a later marker in the SAME slot
+        // proves its earlier work retired. Zero is the CPU's reset, not completion.
+        if(want && (int32_t)(value-want)>=0)g_agc_dev.up.block_fence[block][slot]=0;
+    }
+}
+static void agc_upscale_note_submit(unsigned slot,uint32_t marker)
+{
+    for(int block=0;block<3;++block)
+        if(g_agc_dev.up.frame_blocks&(1u<<block))g_agc_dev.up.block_fence[block][slot]=marker;
+}
+static int agc_upscale_block_idle(int block)
+{
+    for(unsigned slot=0;slot<EVO_AGC_FRAME_SLOTS;++slot) {
+        if(g_agc_dev.fences[slot]) {
+            evo_agc_runtime_cache_flush((const void *)g_agc_dev.fences[slot],4);
+            agc_upscale_observe_fence(slot,*g_agc_dev.fences[slot]);
+        }
+        if(g_agc_dev.up.block_fence[block][slot])return 0;
+    }
+    return 1;
+}
+static void agc_upscale_maintenance(void)
+{
+    ++g_agc_dev.up.frame_serial;
+    if(g_agc_dev.frame_active)return;
+    // Observe even when no recycling is requested; later unrelated frames may
+    // reset their fence slots while these surfaces still await a future resize.
+    for(unsigned slot=0;slot<EVO_AGC_FRAME_SLOTS;++slot)
+        if(g_agc_dev.fences[slot]) {
+            evo_agc_runtime_cache_flush((const void *)g_agc_dev.fences[slot],4);
+            agc_upscale_observe_fence(slot,*g_agc_dev.fences[slot]);
+        }
+    for(int block=0;block<3;++block) {
+        if(!(g_agc_dev.up.reclaim_mask&(1u<<block)))continue;
+        if(!agc_upscale_block_idle(block)) {
+            if(g_agc_dev.up.frame_serial%240u==0)
+                evo_boot_log("agc upscale: session=%u block=%d waiting for GPU retirement",
+                    g_agc_dev.up.session_number,block);
+            continue;
+        }
+        if(g_agc_dev.up.frame_serial<g_agc_dev.up.retry_after[block])continue;
+        const size_t bytes=g_agc_dev.up.mem_bytes[block];
+        if(agc_upscale_release_block(block)==0) {
+            g_agc_dev.up.reclaim_mask&=~(1u<<block);
+            evo_boot_log("agc upscale: session=%u released idle block=%d bytes=%zu",
+                g_agc_dev.up.session_number,block,bytes);
+        } else {
+            g_agc_dev.up.retry_after[block]=g_agc_dev.up.frame_serial+120u;
+            g_agc_dev.up.allocation_failure=5;
+            evo_boot_log("agc upscale: release retry queued for block=%d bytes=%zu",block,bytes);
+        }
+    }
+}
+/* Do not free scratch that a timed-out GPU still owns. Process teardown will
+ * reclaim it; active-session maintenance retries only after proved completion. */
 static void agc_upscale_release(void)
 {
-    for (int blk = 0; blk < 3; ++blk) {
-        const size_t bytes = g_agc_dev.up.mem_bytes[blk];
-        if (g_agc_dev.up.mem_base[blk]) {
-            sceKernelMunmap(g_agc_dev.up.mem_base[blk], bytes);
-            g_agc_dev.up.mem_base[blk] = NULL;
-        }
-        if (g_agc_dev.up.mem_offset[blk] >= 0) {
-            sceKernelReleaseDirectMemory(g_agc_dev.up.mem_offset[blk], bytes);
-            g_agc_dev.up.mem_offset[blk] = -1;
-        }
-        g_agc_dev.up.alloc_state[blk] = 0;
-        g_agc_dev.up.mem_bytes[blk] = 0;
-    }
+    g_agc_dev.up.reclaim_mask|=7u;
+    for(int block=0;block<3;++block)g_agc_dev.up.retry_after[block]=0;
+    agc_upscale_maintenance();
 }
 
 static void up_viewport_scissor(int x, int y, int w, int h, int lim_w, int lim_h)
@@ -3588,7 +3756,7 @@ static int up_pipes_valid(int first, int count)
     return 1;
 }
 
-static const char *const k_up_mode_name[] = { "Off", "Sharp", "AI" };
+static const char *const k_up_mode_name[] = { "Off", "Sharp", "AI", "Auto" };
 
 /*
  * Decide what this frame gets. `sx`/`sy` are the Off quad's NDC half-extents,
@@ -3604,6 +3772,7 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
         mode = g_agc_dev.up.cap;
     const char *reason = NULL;
     int net = 0;
+    int memory_fallback = 0;
 
     const float W = (float)g_agc_dev.width, H = (float)g_agc_dev.height;
     const float img_w = sx * W, img_h = sy * H;
@@ -3650,8 +3819,7 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
             net = g_agc_dev.up.net_cap;
         if (net == 2 && !(up_pipes_valid(EVO_AGC_PIPE_UP_UL_CONV0, EVO_AGC_UP_UL_CONVS) &&
                           up_pipes_valid(EVO_AGC_PIPE_UP_UL_ACC0, EVO_AGC_UP_UL_ACCS) &&
-                          up_pipes_valid(EVO_AGC_PIPE_UP_RGB_FINAL, 1) &&
-                          agc_upscale_alloc(1, src_w, src_h, (uint32_t)(x1 - x0), (uint32_t)(y1 - y0)) == 0))
+                          up_pipes_valid(EVO_AGC_PIPE_UP_RGB_FINAL, 1)))
             net = 1;
         if (net == 1 && !(up_pipes_valid(EVO_AGC_PIPE_UP_M_CONV0, EVO_AGC_UP_M_CONVS) &&
                           up_pipes_valid(EVO_AGC_PIPE_UP_M_ACC0, EVO_AGC_UP_M_CONVS)))
@@ -3661,11 +3829,53 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
             (net == 0 && !up_pipes_valid(EVO_AGC_PIPE_UP_S_CONV0, EVO_AGC_UP_S_CONVS)))
             mode = EVO_AGC_UPSCALE_SHARP;
     }
+    // Memory policy is separate from the performance cap and the saved choice.
+    // Retry the preferred effect periodically, not once per frame or only after relaunch.
+    const int preferred_mode=mode, preferred_net=net;
+    if(!reason && mode!=EVO_AGC_UPSCALE_OFF &&
+       g_agc_dev.up.frame_serial<g_agc_dev.up.memory_retry_frame) {
+        if(mode==EVO_AGC_UPSCALE_AI && g_agc_dev.up.memory_mode==EVO_AGC_UPSCALE_AI &&
+           net>g_agc_dev.up.memory_net){net=g_agc_dev.up.memory_net;memory_fallback=1;}
+        else if(automatic && mode==EVO_AGC_UPSCALE_AI &&
+                g_agc_dev.up.memory_mode==EVO_AGC_UPSCALE_SHARP){mode=EVO_AGC_UPSCALE_SHARP;net=0;memory_fallback=1;}
+    }
     if (!reason && mode == EVO_AGC_UPSCALE_SHARP &&
         !(up_pipes_valid(EVO_AGC_PIPE_UP_EASU, 1) && up_pipes_valid(EVO_AGC_PIPE_UP_RCAS, 1)))
         reason = "pipeline missing";
-    if (!reason && mode != EVO_AGC_UPSCALE_OFF && agc_upscale_alloc(0, src_w, src_h, (uint32_t)(x1 - x0), (uint32_t)(y1 - y0)) != 0)
-        reason = "no memory";
+    if (!reason && mode != EVO_AGC_UPSCALE_OFF) {
+        int ok = (mode==EVO_AGC_UPSCALE_AI && net!=1)
+            ? agc_upscale_alloc_for_network(0,src_w,src_h,x1-x0,y1-y0,mode,net)
+            : agc_upscale_alloc(0,src_w,src_h,x1-x0,y1-y0,mode);
+        // M -> S can shed the two accumulators. UL adds separate maps below.
+        if(ok!=0 && mode==EVO_AGC_UPSCALE_AI && net>0 &&
+           up_pipes_valid(EVO_AGC_PIPE_UP_A4K_FINAL,1) && up_pipes_valid(EVO_AGC_PIPE_UP_S_CONV0,EVO_AGC_UP_S_CONVS)) {
+            net=0;ok=agc_upscale_alloc_for_network(0,src_w,src_h,x1-x0,y1-y0,mode,net);
+            if(!ok)memory_fallback=1;
+        }
+        if(ok!=0 && automatic && mode==EVO_AGC_UPSCALE_AI &&
+           up_pipes_valid(EVO_AGC_PIPE_UP_EASU,1) && up_pipes_valid(EVO_AGC_PIPE_UP_RCAS,1)) {
+            mode=EVO_AGC_UPSCALE_SHARP;net=0;
+            ok=agc_upscale_alloc(0,src_w,src_h,x1-x0,y1-y0,mode);
+            if(!ok)memory_fallback=1;
+        }
+        if(ok!=0)reason="no memory";
+    }
+    if(!reason && mode==EVO_AGC_UPSCALE_AI && net==2 &&
+       agc_upscale_alloc_for_network(1,src_w,src_h,x1-x0,y1-y0,mode,2)!=0) {
+        net=(up_pipes_valid(EVO_AGC_PIPE_UP_M_CONV0,EVO_AGC_UP_M_CONVS) &&
+             up_pipes_valid(EVO_AGC_PIPE_UP_M_ACC0,EVO_AGC_UP_M_CONVS))?1:0;
+        memory_fallback=1;
+        if(!up_pipes_valid(EVO_AGC_PIPE_UP_A4K_FINAL,1) ||
+           (net==0 && !up_pipes_valid(EVO_AGC_PIPE_UP_S_CONV0,EVO_AGC_UP_S_CONVS)))reason="pipeline missing";
+    }
+    if(!reason && memory_fallback && g_agc_dev.up.frame_serial>=g_agc_dev.up.memory_retry_frame) {
+        g_agc_dev.up.memory_mode=mode;g_agc_dev.up.memory_net=net;
+        g_agc_dev.up.memory_retry_frame=g_agc_dev.up.frame_serial+300u;
+        evo_boot_log("agc upscale: memory fallback %d/%d -> %d/%d; preferred retry after 300 rendered frames",
+            preferred_mode,preferred_net,mode,net);
+    } else if(!reason && !memory_fallback)g_agc_dev.up.memory_retry_frame=0;
+    if(mode!=EVO_AGC_UPSCALE_AI || net!=2)
+        if(g_agc_dev.up.mem_bytes[2])g_agc_dev.up.reclaim_mask|=1u<<2;
 
     if (reason || mode == EVO_AGC_UPSCALE_OFF) {
         /* Preserve the exact bypass reason for Playback Information.
@@ -3676,12 +3886,18 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
             : !strcmp(reason, "source >= output") ? "Off (no enlargement needed)"
             : !strcmp(reason, "size") ? "Off (frame dimensions unsupported)"
             : !strcmp(reason, "pipeline missing") ? "Off (FSR shader pipeline missing)"
-            : !strcmp(reason, "no memory") ? "Off (GPU scratch memory unavailable)"
+            : !strcmp(reason, "no memory") ?
+                (g_agc_dev.up.allocation_failure==2 ? "Off (waiting for GPU scratch retirement)" :
+                 g_agc_dev.up.allocation_failure==4 ? "Off (GPU scratch mapping failed; retrying)" :
+                 g_agc_dev.up.allocation_failure==5 ? "Off (GPU scratch cleanup pending)" :
+                 "Off (GPU scratch allocation failed; retrying)")
             : "Off (unknown renderer error)";
         mode = EVO_AGC_UPSCALE_OFF;
     } else {
         static const char *const k_net_label[] = { "AI (Standard)", "AI (Large)", "AI (Maximum)" };
-        g_agc_dev.up.label = mode != EVO_AGC_UPSCALE_AI ? "Sharp" : k_net_label[net];
+        static const char *const fallback_labels[]={"AI (Standard; memory fallback)","AI (Large; memory fallback)","AI (Maximum; memory fallback)"};
+        g_agc_dev.up.label=mode!=EVO_AGC_UPSCALE_AI ? (memory_fallback?"Sharp (memory fallback)":"Sharp") :
+            memory_fallback?fallback_labels[net]:k_net_label[net];
     }
 
     /* Log a change of plan once, not per frame. */
@@ -3793,8 +4009,8 @@ static int agc_upscale_run(const agc_up_plan_t *pl)
     } else {
         agc_up_surface_t f[2] = { up_surface(UP_SLOT_F0, sw, sh, 1),
                                   up_surface(UP_SLOT_F0 + 1, sw, sh, 1) };
-        agc_up_surface_t a[2] = { up_surface(UP_SLOT_A0, sw, sh, 1),
-                                  up_surface(UP_SLOT_A0 + 1, sw, sh, 1) };
+        agc_up_surface_t a[2] = {{0},{0}};
+        if(pl->net==1){a[0]=up_surface(UP_SLOT_A0,sw,sh,1);a[1]=up_surface(UP_SLOT_A0+1,sw,sh,1);}
         agc_up_tex_t in = l0_tex, residual;
         if (pl->net == 2) {
             rc = agc_upscale_run_ul(pl, &l0_tex, &scan);
@@ -3884,6 +4100,45 @@ static void agc_upscale_note_gpu_time(uint64_t us)
                  k_up_mode_name[from], k_up_mode_name[to]);
 }
 
+void evo_agc_upscale_begin_session(void)
+{
+    ++g_agc_dev.up.session_number;
+    g_agc_dev.up.memory_retry_frame=0;
+    agc_upscale_maintenance();
+    evo_boot_log("agc upscale: begin session=%u retained=%zu/%zu/%zu reclaim=%u",
+        g_agc_dev.up.session_number,g_agc_dev.up.mem_bytes[0],g_agc_dev.up.mem_bytes[1],
+        g_agc_dev.up.mem_bytes[2],g_agc_dev.up.reclaim_mask);
+    g_agc_dev.up.cap = EVO_AGC_UPSCALE_AI;
+    g_agc_dev.up.net_cap = 2;
+    g_agc_dev.up.downgrade_notice = -1;
+    g_agc_dev.up.window_frames = 0;
+    g_agc_dev.up.window_us = 0;
+    g_agc_dev.up.over_budget_windows = 0;
+    g_agc_dev.up.this_frame = 0;
+    memset(g_agc_dev.up.last_key, -1, sizeof g_agc_dev.up.last_key);
+    g_agc_dev.up.label = "Off (waiting for video)";
+    // An allocation failure on the previous stream is not permanent. Existing
+    // scratch buffers remain allocated and untouched for in-flight GPU work.
+    for (int i = 0; i < 3; ++i)
+        if (!g_agc_dev.up.mem_base[i] && !g_agc_dev.up.mem_bytes[i]) {
+            g_agc_dev.up.alloc_state[i] = 0;
+            g_agc_dev.up.retry_after[i] = 0;
+        }
+}
+
+void evo_agc_upscale_end_session(void)
+{
+    // Decoder teardown has finished. Hand scratch back once its final submit is
+    // retired, before the next decoder competes for physical memory. This is
+    // render-thread only and never frees an in-flight surface or blocks the UI.
+    for(int block=0;block<3;++block) {
+        if(g_agc_dev.up.mem_bytes[block])g_agc_dev.up.reclaim_mask|=1u<<block;
+        g_agc_dev.up.retry_after[block]=0;
+    }
+    agc_upscale_maintenance();
+    evo_boot_log("agc upscale: end session=%u pending cleanup=%u",g_agc_dev.up.session_number,g_agc_dev.up.reclaim_mask);
+}
+
 void evo_agc_upscale_set_mode(int mode)
 {
     if (mode < EVO_AGC_UPSCALE_OFF || mode > EVO_AGC_UPSCALE_AUTO)
@@ -3892,6 +4147,7 @@ void evo_agc_upscale_set_mode(int mode)
         return;
     /* A fresh choice in Settings is a fresh chance: drop the GPU-time cap. */
     g_agc_dev.up.requested = mode;
+    g_agc_dev.up.memory_retry_frame=0;
     g_agc_dev.up.cap = EVO_AGC_UPSCALE_AI;
     g_agc_dev.up.net_cap = 2;
     g_agc_dev.up.over_budget_windows = 0;
@@ -3906,6 +4162,7 @@ void evo_agc_upscale_set_network(int pref)
     if (pref == g_agc_dev.up.net_pref)
         return;
     g_agc_dev.up.net_pref = pref;
+    g_agc_dev.up.memory_retry_frame=0;
     g_agc_dev.up.net_cap = 2;
     g_agc_dev.up.over_budget_windows = 0;
     g_agc_dev.up.window_frames = 0;
@@ -3915,6 +4172,20 @@ void evo_agc_upscale_set_network(int pref)
 const char *evo_agc_upscale_label(void)
 {
     return g_agc_dev.up.label ? g_agc_dev.up.label : "Off";
+}
+
+const char *evo_agc_upscale_memory_status(void)
+{
+    const size_t retained=g_agc_dev.up.mem_bytes[0]+g_agc_dev.up.mem_bytes[1]+g_agc_dev.up.mem_bytes[2];
+    if(g_agc_dev.up.allocation_rc) {
+        snprintf(g_agc_dev.up.memory_status,sizeof g_agc_dev.up.memory_status,
+            "Last rc=%08x; request %zu MiB", // error code first: never hidden by a truncated value column
+            (unsigned)g_agc_dev.up.allocation_rc,g_agc_dev.up.allocation_bytes>>20);
+    } else {
+        snprintf(g_agc_dev.up.memory_status,sizeof g_agc_dev.up.memory_status,
+            "Reserved %zu MiB; pending cleanup=%u",retained>>20,g_agc_dev.up.reclaim_mask);
+    }
+    return g_agc_dev.up.memory_status;
 }
 
 int evo_agc_upscale_take_downgrade(void)

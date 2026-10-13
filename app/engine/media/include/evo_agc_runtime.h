@@ -304,6 +304,10 @@ enum {
     EVO_AGC_UPSCALE_AUTO = 3, /* choose one pass per frame from source/output ratio */
 };
 void        evo_agc_upscale_set_mode(int mode);
+/* Render thread, once at a new playback: clear prior stream's performance caps. */
+void        evo_agc_upscale_begin_session(void);
+/* Render thread after decoder teardown; defers any in-flight GPU allocation. */
+void        evo_agc_upscale_end_session(void);
 /* Which Anime4K network AI mode runs. AUTO = Large on a detected PS5 Pro,
  * Standard otherwise; STANDARD / LARGE / MAXIMUM are the Settings override
  * (the Pro probe cannot identify every Pro). Each steps down one network
@@ -320,6 +324,8 @@ void        evo_agc_upscale_set_network(int pref);
  * "AI (Large)",
  * with the bypass reason appended when the requested mode was not Off. */
 const char *evo_agc_upscale_label(void);
+/* Last native allocation details; does not change a mode or clear errors. */
+const char *evo_agc_upscale_memory_status(void);
 /* -1, or the mode the runtime just downgraded to because of GPU time
  * (EVO_AGC_UPSCALE_AI means one AI network down: Maximum -> Large ->
  * Standard; evo_agc_upscale_label() names the new one). Reading it clears it, so the

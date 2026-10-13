@@ -1,3 +1,4 @@
+#include "gfx/shape_geometry.h"
 /*
  * Emby5 — Emby for PS5
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -20,6 +21,8 @@
 #include "evo_agc_transient_ring.h"
 #include "evo_agc_writer.h"
 #include "evo_boot_trace.h"
+#include "ui/theme_presets.h"
+#include "ui/anim.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,8 +54,6 @@ float s_scale = 1.f;            /* panel px per logical px */
 int s_pw = 1920, s_ph = 1080;
 uint64_t s_frame = 0;
 Texture *s_white = nullptr;
-Texture *s_shadow = nullptr;    /* a blurred rounded box for drop shadows */
-Texture *s_rim = nullptr;       /* a rounded box's lit edge, for glass */
 std::vector<Rect> s_scissors;
 std::vector<float> s_opacity_stack;
 float s_opacity = 1.f;            /* product of the stack */
@@ -249,63 +250,6 @@ void quad(const Rect &r, const Texture *t, float u0, float v0, float u1, float v
     draw_mesh(v, 4, kQuad, 6, t, &r, radius);
 }
 
-Texture *make_shadow_texture()
-{
-    /* A 128x128 rounded box inset by 32 px, blurred: drawn as nine slices,
-     * so one texture serves every card size. */
-    ui_canvas c;
-    if (ui_canvas_init(&c, 128, 128) != 0)
-        return nullptr;
-    ui_canvas_clear(&c);
-    ui_fill_rrect(&c, 32, 32, 64, 64, 16, UI_BLACK);
-    ui_image img;
-    img.px = c.px;
-    img.w = c.w;
-    img.h = c.h;
-    ui_image_blur(&img, 12);
-    Texture *t = texture_from_pixels(img.px, img.w, img.h, img.w);
-    ui_canvas_free(&c);
-    return t;
-}
-
-/* A 256x256 rounded box (corner 64) as a thin line of light, brightest where
- * light from the top left meets it, with a fainter glint opposite: the rim of a
- * glass pane (Apple's Liquid Glass). Drawn as nine slices at any size. */
-Texture *make_rim_texture()
-{
-    const int n = 256;
-    const float cx = n / 2.f, half = n / 2.f - 2.f, rad = 64.f;
-    std::vector<uint32_t> px((size_t)n * n, 0);
-    const float lx = -0.6f, ly = -0.8f;   /* toward the light */
-    for (int y = 0; y < n; y++)
-        for (int x = 0; x < n; x++) {
-            /* Signed distance to the rounded box, and the outward normal there. */
-            const float qx = std::fabs(x + 0.5f - cx) - (half - rad), qy = std::fabs(y + 0.5f - cx) - (half - rad);
-            const float ox = std::max(qx, 0.f), oy = std::max(qy, 0.f);
-            const float d = std::sqrt(ox * ox + oy * oy) + std::min(std::max(qx, qy), 0.f) - rad;
-            const float line = std::max(0.f, 1.f - std::fabs(d + 0.8f) / 1.6f);
-            if (line <= 0.f)
-                continue;
-            float nx = 0, ny = 0;
-            if (ox > 0 || oy > 0) {
-                const float l = std::sqrt(ox * ox + oy * oy);
-                nx = ox / l;
-                ny = oy / l;
-            } else if (qx > qy) {
-                nx = 1;
-            } else {
-                ny = 1;
-            }
-            nx *= (x + 0.5f < cx) ? -1.f : 1.f;
-            ny *= (y + 0.5f < cx) ? -1.f : 1.f;
-            const float lit = nx * lx + ny * ly;
-            const float k = std::min(1.f, 0.28f + 0.72f * std::max(lit, 0.f) + 0.35f * std::max(-lit, 0.f));
-            const uint32_t a = (uint32_t)(line * k * 255.f + 0.5f);
-            px[(size_t)y * n + x] = (a << 24) | (a << 16) | (a << 8) | a;   /* premultiplied white */
-        }
-    return texture_from_pixels(px.data(), n, n, n);
-}
-
 } // namespace
 
 bool init()
@@ -319,16 +263,29 @@ bool init()
     s_ready = true;
     const uint32_t white[4] = {0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
     s_white = texture_from_pixels(white, 2, 2, 2);
-    s_shadow = make_shadow_texture();
-    s_rim = make_rim_texture();
-    evo_bt("gfx: %dx%d scale %.2f white=%p shadow=%p", s_pw, s_ph, s_scale, (void *)s_white, (void *)s_shadow);
+    // Borders and shadows are texture-free; only the shared white texel is needed.
+    evo_bt("gfx: %dx%d scale %.2f white=%p; geometry borders/shadows", s_pw, s_ph, s_scale, (void *)s_white);
     return s_white != nullptr;
 }
 
+static float s_text_scale = 1.f;
 float scale() { return s_scale; }
+float text_scale() { return s_text_scale; }
+float exchange_text_scale(float value) {
+    const auto old=s_text_scale;
+    s_text_scale=std::isfinite(value)?std::max(.9f,std::min(1.2f,value)):1.f;
+    return old;
+}
+static TextStyle appearance_text_style(TextStyle st) {
+    st.size *= s_text_scale;
+    if (st.line_h > 0) st.line_h *= s_text_scale;
+    return st;
+}
 
 void begin_frame()
 {
+    ui::reduced_motion_active=ui::theme_reduced_motion();
+    s_text_scale = ui::theme_text_scale();
     s_frame++;
     evo_agc_runtime_frame_begin();
     evo_agc_runtime_clear_black();
@@ -340,6 +297,8 @@ void begin_frame()
 
 void begin_overlay()
 {
+    ui::reduced_motion_active=ui::theme_reduced_motion();
+    s_text_scale = ui::theme_text_scale();
     s_frame++;
     evo_agc_runtime_set_scissor(0, 0, s_pw, s_ph);
     s_scissors.clear();
@@ -810,69 +769,80 @@ void push_fade_mask(const Rect &r, float top, float bottom, float left, float ri
 
 void pop_fade_mask() { s_mask_on = false; }
 
-void rim(const Rect &r, float radius, float opacity)
+// Shape rings share one perimeter: no four clipped boxes, nine-slice corner
+// mismatch or opaque centre that would erase the content beneath the outline.
+static void shape_ring(const Shape &outer,const Shape &inner,uint32_t top,uint32_t bottom,
+                       float outer_alpha=1.f,float inner_alpha=1.f)
 {
-    if (!s_rim || opacity <= 0.f || r.w < 2 * radius || r.h < 2 * radius)
-        return;
-    /* Nine slices: the texture's 64-pixel corners drawn at the panel's radius. */
-    const float xs[4] = {r.x, r.x + radius, r.x + r.w - radius, r.x + r.w};
-    const float ys[4] = {r.y, r.y + radius, r.y + r.h - radius, r.y + r.h};
-    const float us[4] = {0.f, 0.25f, 0.75f, 1.f};
-    const uint32_t c = premul(0xffffffffu, opacity);
-    Vertex v[16];
-    for (int j = 0; j < 4; j++)
-        for (int i = 0; i < 4; i++)
-            v[j * 4 + i] = {xs[i], ys[j], c, us[i], us[j]};
-    uint16_t idx[54];
-    int n = 0;
-    for (int j = 0; j < 3; j++)
-        for (int i = 0; i < 3; i++) {
-            if (i == 1 && j == 1)
-                continue;   /* the middle is empty */
-            const uint16_t a = (uint16_t)(j * 4 + i);
-            const uint16_t q[6] = {a, (uint16_t)(a + 1), (uint16_t)(a + 4), (uint16_t)(a + 4),
-                                   (uint16_t)(a + 1), (uint16_t)(a + 5)};
-            std::memcpy(idx + n, q, sizeof q);
-            n += 6;
-        }
-    draw_mesh(v, 16, idx, n, s_rim, nullptr, 0);
+    const auto a=shape_geometry::boundary(outer),b=shape_geometry::boundary(inner);
+    Vertex v[shape_geometry::max_points*2];
+    uint16_t idx[shape_geometry::max_points*6];
+    for(int i=0;i<a.count;++i)for(int j=0;j<2;++j){
+        const auto p=j?b.points[i]:a.points[i];
+        const float t=std::max(0.f,std::min(1.f,(p.y-outer.rect.y)/std::max(1.f,outer.rect.h)));
+        auto color=lerp_color(premul(top),premul(bottom),t);
+        color=scale_color(color,(j?inner_alpha:outer_alpha)*(s_mask_on?mask_at(p.x,p.y):1.f));
+        v[2*i+j]={p.x,p.y,color,0,0};
+    }
+    int n=0;
+    for(int i=0;i<a.count;++i){
+        const uint16_t k=2*i,q=2*((i+1)%a.count);
+        const uint16_t t[]={k,q,(uint16_t)(k+1),(uint16_t)(k+1),q,(uint16_t)(q+1)};
+        std::memcpy(idx+n,t,sizeof t);n+=6;
+    }
+    draw_mesh(v,a.count*2,idx,n,s_white,nullptr,0);
 }
-
-void shadow(const Rect &r, float radius, float blur, float opacity, float dy)
+Shape inset_shape(const Shape &s,float n){return shape_geometry::inset(s,n);}
+void gradient_shape(const Shape &input,uint32_t top,uint32_t bottom)
 {
-    if (!s_shadow || opacity <= 0.f)
-        return;
-    /* Nine slices of the shadow texture: corners fixed at `blur` px, edges stretched. */
-    const float e = blur * 1.6f;
-    const Rect o{r.x - e, r.y - e + dy, r.w + 2 * e, r.h + 2 * e};
-    /* A side shorter than both corners (a 60 px note under a 40 px blur): the
-     * corners meet in the middle, each cut short, instead of folding over each
-     * other (that drew a dark band with a hard edge). */
-    auto slices = [e](float from, float size, float *at, float *uv) {
-        const float c = std::min(2 * e, size / 2);
-        at[0] = from, at[1] = from + c, at[2] = from + size - c, at[3] = from + size;
-        uv[0] = 0.f, uv[1] = 0.5f * c / (2 * e), uv[2] = 1.f - uv[1], uv[3] = 1.f;
+    const auto s=shape_geometry::normalise(input);const auto &r=s.rect;
+    if(r.w<=0||r.h<=0)return;
+    if(!s.chamfer){fill_vgradient(r,top,bottom,s.corner);return;}
+    const auto path=shape_geometry::boundary(s);
+    Vertex v[shape_geometry::max_points+1];uint16_t idx[shape_geometry::max_points*3];
+    const auto colour=[&](float x,float y){
+        auto c=lerp_color(premul(top),premul(bottom),std::max(0.f,std::min(1.f,(y-r.y)/r.h)));
+        return s_mask_on?scale_color(c,mask_at(x,y)):c;
     };
-    float xs[4], ys[4], us[4], vs[4];
-    slices(o.x, o.w, xs, us);
-    slices(o.y, o.h, ys, vs);
-    const uint32_t c = premul(0xff000000u, opacity);
-    Vertex v[16];
-    for (int j = 0; j < 4; j++)
-        for (int i = 0; i < 4; i++)
-            v[j * 4 + i] = {xs[i], ys[j], c, us[i], vs[j]};
-    uint16_t idx[54];
-    int n = 0;
-    for (int j = 0; j < 3; j++)
-        for (int i = 0; i < 3; i++) {
-            const uint16_t a = (uint16_t)(j * 4 + i);
-            const uint16_t q[6] = {a, (uint16_t)(a + 1), (uint16_t)(a + 4), (uint16_t)(a + 4),
-                                   (uint16_t)(a + 1), (uint16_t)(a + 5)};
-            std::memcpy(idx + n, q, sizeof q);
-            n += 6;
-        }
-    (void)radius;
-    draw_mesh(v, 16, idx, n, s_shadow, nullptr, 0);
+    v[0]={r.x+r.w/2,r.y+r.h/2,colour(r.x+r.w/2,r.y+r.h/2),0,0};
+    for(int i=0;i<path.count;++i){auto p=path.points[i];v[i+1]={p.x,p.y,colour(p.x,p.y),0,0};
+        idx[i*3]=0;idx[i*3+1]=i+1;idx[i*3+2]=1+(i+1)%path.count;}
+    draw_mesh(v,path.count+1,idx,path.count*3,s_white,nullptr,0);
+    shape_ring(inset_shape(s,-1.f/std::max(1.f,s_scale)),s,top,bottom,0,1);
+}
+void fill_shape(const Shape &s,uint32_t c){gradient_shape(s,c,c);}
+void stroke_shape(const Shape &input,float width,uint32_t c)
+{
+    const auto s=shape_geometry::normalise(input);
+    if(width<=0||s.rect.w<=0||s.rect.h<=0)return;
+    width=std::min(width,std::min(s.rect.w,s.rect.h)/2);
+    const auto inner=inset_shape(s,width);
+    const float aa=1.f/std::max(1.f,s_scale);
+    shape_ring(s,inner,c,c);
+    shape_ring(inset_shape(s,-aa),s,c,c,0,1);
+    if(inner.rect.w>2*aa&&inner.rect.h>2*aa)shape_ring(inner,inset_shape(inner,aa),c,c,1,0);
+}
+void shadow_shape(const Shape &input,float blur,float opacity,float dy)
+{
+    if(opacity<=0||input.rect.w<=0||input.rect.h<=0)return;
+    auto s=input;s.rect.y+=dy;
+    blur=std::max(1.f,std::min(40.f,blur));
+    // Layered geometry follows square/round/chamfer corners, with no shadow texture
+    // or offscreen GPU target. The low-opacity outer layers avoid harsh halos.
+    for(int i=5;i>=0;--i){
+        const float extent=blur*(i+1)/6.f;
+        const auto a=std::min(1.f,opacity*(.025f+.012f*(5-i)));
+        fill_shape(inset_shape(s,-extent),(uint32_t)(a*255+.5f)<<24);
+    }
+}
+void rim(const Rect &r,float radius,float opacity)
+{
+    const Shape s{r,radius,false};
+    stroke_shape(s,1.f,(uint32_t)(std::max(0.f,std::min(1.f,opacity))*.40f*255)<<24|0xffffffu);
+}
+void shadow(const Rect &r,float radius,float blur,float opacity,float dy)
+{
+    shadow_shape({r,radius,false},blur,opacity,dy);
 }
 
 /* ---- text ------------------------------------------------------------------------ */
@@ -964,16 +934,21 @@ TextEntry &text_entry(const std::string &s, const TextStyle &st)
 
 } // namespace
 
+float measure_text(const std::string &s, const TextStyle &st)
+{
+    return s.empty() ? 0.f : ui_text_width(to_ui(st.weight), st.size * s_text_scale * s_scale, s.c_str()) / s_scale;
+}
+
 float text_width(const std::string &s, const TextStyle &st)
 {
-    return s.empty() ? 0.f : text_entry(s, st).advance;
+    return s.empty() ? 0.f : text_entry(s, appearance_text_style(st)).advance;
 }
 
 float text(float x, float baseline, const std::string &s, const TextStyle &st, uint32_t color, int align)
 {
     if (s.empty())
         return 0;
-    TextEntry &e = text_entry(s, st);
+    TextEntry &e = text_entry(s, appearance_text_style(st));
     if (!e.tex)
         return e.advance;
     /* The raster carries 2 logical px of padding on every side. */

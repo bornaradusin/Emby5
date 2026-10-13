@@ -14,7 +14,7 @@ public:
     float nav_alpha() const override {return 1.f;}
 private:
     struct Group {std::string title;size_t count=0;};
-    struct EpisodeState {std::mutex mutex;std::vector<iptv_vod::Episode> list;bool ready=false;};
+    struct EpisodeState {std::mutex mutex;std::vector<iptv_vod::Episode> list;bool ready=false;std::string error;};
     uint64_t seen=0;
     bool shows=false,search=false,detail=false;
     int row=0,episode_index=0;

@@ -26,6 +26,15 @@ struct Rect {
     float x = 0, y = 0, w = 0, h = 0;
 };
 
+/* Shared surface geometry. Insets/outsets preserve the same corner model. */
+struct Shape { Rect rect; float corner=0; bool chamfer=false; };
+Shape inset_shape(const Shape &s,float amount);
+void fill_shape(const Shape &s,uint32_t color);
+void gradient_shape(const Shape &s,uint32_t top,uint32_t bottom);
+// A continuous hollow border, with a one-device-pixel coverage fringe.
+void stroke_shape(const Shape &s,float width,uint32_t color);
+void shadow_shape(const Shape &s,float blur,float opacity,float dy=0);
+
 /* A GPU texture (RGBA8, premultiplied). Owned by the renderer. */
 struct Texture;
 
@@ -34,6 +43,10 @@ bool init();
 
 /* Panel pixels per logical pixel (2 on a 4K panel). */
 float scale();
+/* Interface text scale, independent of subtitle sizing and video output. */
+float text_scale();
+// Render-thread only: scoped override for comparison previews and themed confirmations.
+float exchange_text_scale(float scale);
 
 void begin_frame();          /* frame_begin + clear */
 /* Drawing into a frame someone else began (the player's): resets the
@@ -104,6 +117,8 @@ struct TextStyle {
 float text(float x, float baseline, const std::string &s, const TextStyle &st, uint32_t color,
            int align = 0 /* 0 left, 1 centre, 2 right */);
 float text_width(const std::string &s, const TextStyle &st);
+/* Render-thread-only measurement without a GPU texture allocation. */
+float measure_text(const std::string &s, const TextStyle &st);
 
 /* Drops cached textures that were not drawn for a while (call once per frame). */
 void collect();

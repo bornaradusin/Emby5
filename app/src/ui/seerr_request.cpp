@@ -109,7 +109,7 @@ void RequestSheet::open(const seerr::Detail &d, const seerr::User &user, const s
         sh->loaded = true;
         return;
     }
-    const bool started = jelly5::spawn([sh, c, tv, advanced, uid] {
+    const bool started = emby5::spawn([sh, c, tv, advanced, uid] {
         std::vector<seerr::Server> list;
         if (advanced)
             for (const seerr::Server &s : c->servers(tv)) {
@@ -240,7 +240,7 @@ void RequestSheet::send()
         std::lock_guard<std::mutex> g(sh->lock);
         sh->sending = true;
     }
-    const bool started = jelly5::spawn([sh, c, o] {
+    const bool started = emby5::spawn([sh, c, o] {
         const seerr::RequestResult r = c->request(o);
         if (r.outcome == seerr::RequestResult::SignedOut)
             seerr_service::session_lost();

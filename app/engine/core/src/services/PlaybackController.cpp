@@ -1,4 +1,4 @@
-#include "jelly5_bitstream.h"
+#include "emby5_bitstream.h"
 #include "evo/services/PlaybackController.hpp"
 extern "C" {
 #include <libavutil/cpu.h>
@@ -326,6 +326,8 @@ void PlaybackController::setPaused(bool paused) {
 }
 
 void PlaybackController::stopPlayback() {
+    /* Abort network I/O before reports/subtitle teardown or any worker joins. */
+    evo_stream_io_abort(m_streamIo);
     if (isActive()) {
         saveResumePosition();
     }
@@ -409,8 +411,8 @@ void PlaybackController::stopPlayback() {
     }
 
     if (audio_handle >= 1) {
-        if (jelly5_bs_active())
-            jelly5_bs_close(audio_handle);   /* Jelly5: and HDMI back to the system's output */
+        if (emby5_bs_active())
+            emby5_bs_close(audio_handle);   /* Emby5: and HDMI back to the system's output */
         else
             sceAudioOutClose(audio_handle);
         audio_handle = -1;
@@ -518,7 +520,17 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
         return false;
     }
 
+    if (evo_stream_io_open_cancelled()) return false;
     stopPlayback();
+    if (evo_stream_io_open_cancelled()) return false;
+    /* A cancelled probe is NOT a merely incomplete probe. Do not rewind,
+     * initialize decoders, save history or start threads after the user left. */
+    const auto cancelled = [this]() {
+        if (!evo_stream_io_is_aborted(m_streamIo)) return false;
+        evo_bt("PlaybackController: opening cancelled; skipping subsequent stages");
+        stopPlayback();
+        return true;
+    };
 
     /* A pinned quality belongs to the source it was pinned on. */
     if (m_pinnedVideoFor != filePath) {
@@ -564,8 +576,9 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
     int open_rc = evo_stream_io_open(filePath.c_str(), &play_fmt, &io_cfg, &m_streamIo);
     if (open_rc < 0) {
         m_playbackFsm.postEvent(PlaybackEvent::Fail);
-        toast("OPEN FAIL", source.isProvider() ? "Could not open the stream"
-                                              : "Could not open media");
+        if (!evo_stream_io_open_cancelled())
+            toast("OPEN FAIL", source.isProvider() ? "Could not open the stream"
+                                                  : "Could not open media");
         return false;
     }
 
@@ -587,11 +600,12 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
      * than the return code. A probe that timed out having already identified a
      * decodable video stream costs a frame-rate estimate, not the file.
      */
+    if (cancelled()) return false;
+
     SIO_STAGE("P8_02a_PRE_FIND_INFO", filePath.c_str());
-    evo_stream_io_set_deadline(m_streamIo, kProbeDeadlineSeconds);
-    const int find_rc = avformat_find_stream_info(play_fmt, nullptr);
-    evo_stream_io_set_deadline(m_streamIo, 0.0);
+    const int find_rc = evo_stream_io_probe(m_streamIo, play_fmt, kProbeDeadlineSeconds);
     const bool probe_timed_out = evo_stream_io_deadline_expired(m_streamIo) != 0;
+    if (cancelled()) return false;
     {
         char d[64];
         std::snprintf(d, sizeof d, "rc=%d timeout=%d nb_streams=%u",
@@ -898,6 +912,8 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
 
     m_musicMode = (video_stream_index < 0 && audio_stream_index >= 0);
 
+    if (cancelled()) return false;
+
     // Initialize Video Decoder if video present
     if (video_stream_index >= 0) {
         AVStream* vStream = play_fmt->streams[video_stream_index];
@@ -1083,6 +1099,8 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
         }
     }
 
+    if (cancelled()) return false;
+
     // Initialize Audio Decoder if audio present
     if (audio_stream_index >= 0) {
         AVStream* aStream = play_fmt->streams[audio_stream_index];
@@ -1126,11 +1144,11 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
                     s16_only = std::strstr(nuvio_vdec_conf, "audio_s16=1") != nullptr;
 #endif
                     evo_audio_port_float = 1;
-                    /* Jelly5: HDMI bitstream (Innstillinger: HDMI-bitstrøm) for a film or
+                    /* Emby5: HDMI bitstream (Innstillinger: HDMI-bitstrøm) for a film or
                      * episode in Dolby Digital (Plus) or DTS the TV or receiver takes:
                      * a stereo S16 carrier port, nothing decoded here. Music stays PCM. */
                     if (video_stream_index >= 0) {
-                        handle = jelly5_bs_open(aStream->codecpar->codec_id, aStream->codecpar->profile,
+                        handle = emby5_bs_open(aStream->codecpar->codec_id, aStream->codecpar->profile,
                                                 aStream->codecpar->sample_rate, chCount);
                         if (handle >= 1) {
                             evo_audio_channels = 2;
@@ -1257,6 +1275,8 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
      * yet, only the position it is about to arrive at. If the seek fails the
      * base goes back to 0 with it, which is where playback really will start.
      */
+    if (cancelled()) return false;
+
     const bool wantResume = (resumeOffset > 0.0 && resumeOffset < m_durationSeconds &&
                              (video_stream_index >= 0 || audio_stream_index >= 0));
 
@@ -1306,6 +1326,8 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
                          resumeOffset);
         }
     }
+
+    if (cancelled()) return false;
 
     // Load chapters
     if (auto metaService = Application::getInstance().getMediaMetadataService()) {
@@ -1369,6 +1391,8 @@ bool PlaybackController::startPlaybackSource(const PlaybackSource& source,
         if (network_source)
             SIO_STAGE("P8_03_PREBUFFER_ARM", filePath.c_str());
     }
+
+    if (cancelled()) return false;
 
     // Start background worker threads
     demux_thread_running = 1;

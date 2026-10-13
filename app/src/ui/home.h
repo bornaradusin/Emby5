@@ -59,6 +59,7 @@ public:
     void apply(const UserDataChange &c);
 
     void activate() override;
+    void reconcile_user_data(const jf::Item &fresh) override;
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }

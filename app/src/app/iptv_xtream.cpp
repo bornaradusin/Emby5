@@ -1,5 +1,9 @@
 /* Emby5 IPTV Xtream client. SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/iptv_xtream.h"
+#include "app/request_budget.h"
+#include "app/xtream_fetch.h"
+#include <memory>
+#include <unordered_set>
 #include "jf/jf_http.h"
 #include "evo_data_path.h"
 extern "C" {
@@ -40,7 +44,7 @@ bool valid(const Credentials &c) {
 std::string path() { return evo_data_path("emby5/iptv-xtream.json"); }
 bool response(const Credentials &c, const std::string &action, std::string *body, std::string *error) {
     auto r = jf::http_request("GET", api_url(c, action), {}, "", 25);
-    if (!r.ok()) { if (error) *error = r.error.empty() ? "Xtream HTTP " + std::to_string(r.status) : r.error; return false; }
+    if (!r.ok() || !r.error.empty()) { if (error) *error = (!r.ok() && r.status) ? "Xtream HTTP " + std::to_string(r.status) : "Xtream connection failed or timed out"; return false; }
     if (r.body.size() > (32u << 20)) { if (error) *error = "Channel response too large"; return false; }
     *body = std::move(r.body);
     return true;
@@ -71,30 +75,50 @@ bool authenticate(const Credentials &c, std::string *error) {
     cJSON_Delete(j);
     return ok;
 }
-bool load_catalog(const Credentials &c, Catalog *catalog, std::string *error) {
-    if (!catalog || !valid(c)) return false;
-    Catalog fresh;
-    std::string body;
-    if (!response(c, "get_live_categories", &body, error)) return false;
-    cJSON *j = cJSON_Parse(body.c_str());
-    if (!cJSON_IsArray(j)) { cJSON_Delete(j); if (error) *error = "Invalid category list"; return false; }
-    const cJSON *v;
-    cJSON_ArrayForEach(v, j) {
-        Category cat{field(v, "category_id"), field(v, "category_name")};
-        if (!cat.id.empty()) fresh.categories.push_back(std::move(cat));
+bool load_catalog(const Credentials &c, Catalog *catalog, std::string *error,
+                  int budget_seconds, std::function<bool()> cancelled, bool retry_failed,
+                  std::function<void(const iptv_catalogue::Scan &)> progress) {
+    if(error)error->clear();
+    if(!catalog || !valid(c)) {if(error)*error="Enter an HTTP(S) server URL, username and password";return false;}
+    emby5::RequestBudget budget(budget_seconds,cancelled);
+    std::vector<Channel> fresh;std::unordered_set<std::string> seen;
+    auto collect=[&](const cJSON *array,const std::string &category,const std::vector<Category> &) {
+        const cJSON *v;
+        cJSON_ArrayForEach(v,array) {
+            Channel ch{field(v,"stream_id"),field(v,"name"),field(v,"category_id"),field(v,"stream_icon"),field(v,"container_extension")};
+            if(ch.category_id.empty())ch.category_id=category;
+            ch.category_key=ch.category_id;
+            if(seen.insert(ch.id).second)fresh.push_back(std::move(ch));
+        }
+    };
+    auto scan=iptv_catalogue::fetch(c,"get_live_categories","get_live_streams","stream_id",budget,
+                                   collect,true,retry_failed?&catalog->scan:nullptr,std::move(progress));
+    // Session/provider changes discard the result, including partial responses.
+    if(cancelled&&cancelled()) {if(error)*error="Channel refresh cancelled";return false;}
+    if(!scan.whole && (!scan.complete || scan.incremental)) {
+        std::unordered_set<std::string> known;
+        for(const auto &cat:scan.categories)known.insert(cat.id);
+        for(auto &old:catalog->channels) {
+            std::string key=old.category_key.empty()?old.category_id:old.category_key;
+            if(old.category_key.empty()) {
+                std::string match;unsigned matches=0;
+                for(const auto &cat:scan.categories)if(cat.name==old.category_id){match=cat.id;++matches;}
+                if(matches==1){key=match;old.category_key=key;old.category_id=key;}
+            }
+            if(scan.completed.count(key)||seen.count(old.id))continue;
+            if(scan.complete && !known.count(key))continue;
+            seen.insert(old.id);fresh.push_back(std::move(old));
+        }
     }
-    cJSON_Delete(j);
-    if (!response(c, "get_live_streams", &body, error)) return false;
-    j = cJSON_Parse(body.c_str());
-    if (!cJSON_IsArray(j)) { cJSON_Delete(j); if (error) *error = "Invalid channel list"; return false; }
-    cJSON_ArrayForEach(v, j) {
-        Channel ch{field(v, "stream_id"), field(v, "name"), field(v, "category_id"), field(v, "stream_icon"), field(v, "container_extension")};
-        if (!ch.id.empty() && !ch.name.empty()) fresh.channels.push_back(std::move(ch));
-    }
-    cJSON_Delete(j);
-    *catalog = std::move(fresh);
-    return true;
+    // Preserve old labels for failed/unlisted categories until a full refresh.
+    std::vector<Category> categories=scan.categories;
+    std::unordered_set<std::string> ids;for(const auto &v:categories)ids.insert(v.id);
+    if(!scan.complete)for(const auto &v:catalog->categories)if(ids.insert(v.id).second)categories.push_back(v);
+    catalog->categories=std::move(categories);catalog->channels=std::move(fresh);catalog->scan=std::move(scan);
+    if(error)*error=catalog->scan.error;
+    return catalog->scan.complete;
 }
+
 bool save_credentials(const Credentials &c) {
     if (!valid(c)) return false;
     evo_mkdir(evo_data_dir()); evo_mkdir(evo_data_path("emby5"));

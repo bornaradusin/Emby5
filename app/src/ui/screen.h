@@ -43,7 +43,8 @@ struct Action {
         Play,       /* play item (a series plays its next episode) */
         PlayFromStart,
         PlayShuffled, /* music: item first, the rest of its album in random order */
-        PlayIPTV,     /* live Xtream channel */
+        PlayIPTV,     /* direct IPTV/VOD item outside the Live TV navigator */
+        PlayLiveTV,   /* session-scoped provider/group/channel navigation */
         PlayMix,      /* music: Emby's Instant Mix from item */
         Open,       /* open item's detail page */
         ToNav,      /* focus moves up into the tab bar */
@@ -65,9 +66,17 @@ public:
     virtual ~Screen() = default;
     /* The tab was opened (or re-entered from the navigation bar). */
     virtual void activate() {}
+    virtual void refresh_user_data() {}
+    void defer_user_data_refresh() { m_refresh_needed = true; }
+    void ensure_user_data_refresh() {
+        if (m_refresh_needed) { m_refresh_needed = false; refresh_user_data(); }
+    }
+    virtual void reconcile_user_data(const jf::Item &) {}
     virtual Action input(uint32_t pressed) = 0;
     virtual void draw(double now, float dt) = 0;
     virtual bool animating() const = 0;
+    /* A worker published new data since the last frame. Safe to poll while idle. */
+    virtual bool needs_redraw() const { return false; }
     /* 0..1 while a pushed screen fades in over the one below (1 = opaque). */
     virtual float enter() const { return 1.f; }
     /* The focused card as last drawn: where it is and its picture, for the page
@@ -95,6 +104,7 @@ public:
     virtual bool modal() const { return false; }
 
 protected:
+    bool m_refresh_needed = false;
     bool m_bump = false;
     bool m_focused = true;
 
@@ -144,6 +154,9 @@ private:
 
 /* A check mark drawn from small squares along its two strokes, centred on (cx, cy). */
 void draw_check(float cx, float cy, float size, uint32_t color);
+// A focus outline remains visible even with poster enlargement disabled.
+void draw_focus_outline(const gfx::Rect &r, float radius, float opacity=1.f);
+void draw_image_focus_outline(const gfx::Rect &r,float radius,float opacity=1.f);
 
 /* A 2:3 poster with blurhash placeholder, focus lift and shadow, and its title
  * under it (an album's artist, an episode's series below that). A Seerr title

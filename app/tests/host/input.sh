@@ -6,7 +6,7 @@
 # and UBSan: synthetic pads, no console or server needed.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
-build=$(mktemp -d "${TMPDIR:-/tmp}/jelly5-input.XXXXXX")
+build=$(mktemp -d "${TMPDIR:-/tmp}/emby5-input.XXXXXX")
 trap 'rm -rf -- "$build"' EXIT
 "${CC:-cc}" -std=gnu11 -Wall -Wextra -Werror -g -O1 \
     -fsanitize=address,undefined -fno-omit-frame-pointer \

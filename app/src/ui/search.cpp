@@ -4,6 +4,7 @@
  */
 #include "ui/search.h"
 #include "app/spawn.h"
+#include "app/io_worker.h"
 #include "app/i18n.h"
 #include "app/seerr_service.h"
 
@@ -131,26 +132,23 @@ void Search::load_iptv_catalog()
         std::lock_guard<std::mutex> g(d->lock);
         if (d->iptv_account == account && (d->iptv_loaded || d->iptv_loading))
             return;
+        if(d->iptv_account!=account)d->iptv_catalog={};
         d->iptv_account = account;
         d->iptv_loading = true;
         d->iptv_loaded = false;
         d->iptv.clear();
     }
-    if (!jelly5::spawn([d, creds, account] {
-        iptv_xtream::Catalog catalog;
-        std::string error;
-        const bool ok = iptv_xtream::load_catalog(creds, &catalog, &error);
+    auto failed=[d,account]{std::lock_guard<std::mutex> g(d->lock);
+        if(d->iptv_account==account)d->iptv_loading=false;};
+    if (!emby5::spawn_io([d, creds, account] {
+        iptv_xtream::Catalog catalog;std::string error;
+        const bool ok=iptv_xtream::load_catalog(creds,&catalog,&error,120,[d,account]{
+            std::lock_guard<std::mutex> g(d->lock);return d->iptv_account!=account;});
         std::lock_guard<std::mutex> g(d->lock);
-        if (d->iptv_account != account)
-            return;
-        if (ok) d->iptv_catalog = std::move(catalog);
-        d->iptv_loaded = ok;
-        d->iptv_loading = false;
-        ++d->iptv_generation;
-    })) {
-        std::lock_guard<std::mutex> g(d->lock);
-        d->iptv_loading = false;
-    }
+        if(d->iptv_account!=account)return;
+        if(ok||catalog.scan.changed||!catalog.channels.empty())d->iptv_catalog=std::move(catalog);
+        d->iptv_loaded=ok;d->iptv_loading=false;++d->iptv_generation;
+    },failed))failed();
 }
 
 void Search::type(const std::string &key)
@@ -228,7 +226,7 @@ void Search::more_seerr()
         d->seerr_more_loading = false;
         return;
     }
-    const bool started = jelly5::spawn([d, sc, q, seq, page] {
+    const bool started = emby5::spawn([d, sc, q, seq, page] {
         int pages = 0;
         const std::vector<seerr::Title> found = sc->search(q, page, &pages);
         const int status = sc->last_status();
@@ -282,7 +280,7 @@ void Search::start_search()
         d->seerr_more_retry_at = 0;
     }
     if (sc) {
-        const bool started = jelly5::spawn([d, sc, q, seq] {
+        const bool started = emby5::spawn([d, sc, q, seq] {
             std::vector<jf::Item> found;
             for (const seerr::Title &t : sc->search(q))
                 found.push_back(seerr_service::to_item(t));
@@ -305,16 +303,21 @@ void Search::start_search()
             d->for_seerr = q;
         }
     }
-    jelly5::spawn([d, c, q, seq] {   /* no thread: the next keystroke searches again */
+    emby5::spawn([d, c, q, seq] {   /* no thread: the next keystroke searches again */
         std::vector<jf::Item> r;
+        bool valid = false;
         if (q.empty()) {
-            r = c->library("", "Movie,Series", "Random", false, 0, 16).items;
+            auto page = c->library("", "Movie,Series", "Random", false, 0, 16);
+            valid = page.ok;
+            r = std::move(page.items);
         } else {
             /* Titles and people side by side (people take the server longer); shown
              * titles first, then people and episodes. */
             std::vector<jf::Item> people, found;
-            jelly5::run_all({[&] { people = c->search(q, "Person", 12); },
-                             [&] { found = c->search(q, "Movie,Series,Episode", 60); }});
+            bool people_ok = false, found_ok = false;
+            emby5::run_all({[&] { people = c->search(q, "Person", 12, &people_ok); },
+                             [&] { found = c->search(q, "Movie,Series,Episode", 60, &found_ok); }});
+            valid = people_ok && found_ok;
             for (const char *type : {"Movie|Series", "Person", "Episode"}) {
                 const std::string t = type;
                 for (const jf::Item &it : t == "Person" ? people : found)
@@ -323,11 +326,11 @@ void Search::start_search()
             }
         }
         std::lock_guard<std::mutex> g(d->lock);
-        if (seq != d->seq)
-            return;   /* the query moved on */
+        if (seq != d->seq || (!valid && d->for_query == q))
+            return;   /* old query, or keep last-good results on a failed refresh */
         d->items = std::move(r);
         d->for_query = q;
-        if (d->iptv_loaded && !q.empty()) {
+        if ((d->iptv_loaded || !d->iptv_catalog.channels.empty()) && !q.empty()) {
             const std::string needle = lower_name(q);
             for (const auto &ch : d->iptv_catalog.channels) {
                 if (lower_name(ch.name).find(needle) != std::string::npos) {

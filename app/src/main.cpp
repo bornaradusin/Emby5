@@ -9,7 +9,7 @@
  * Hardware bring-up follows Nuvio PS5 (and EVO Player before it): decoder
  * probes and module loads run before anything else touches the process.
  */
-#include "jelly5_playback.h"
+#include "emby5_playback.h"
 #include "jf/jf_http.h"
 #include "app/accounts.h"
 #include "app/i18n.h"
@@ -17,8 +17,10 @@
 #include "app/remote.h"
 #include "app/seerr_service.h"
 #include "app/spawn.h"
+#include "app/io_worker.h"
 #include "app/syncplay.h"
 #include "app/settings.h"
+#include "app/user_data_update.h"
 #include "app/update_service.h"
 #include "platform/ime.h"
 #include "jf/jf_client.h"
@@ -42,6 +44,7 @@
 #include "ui/vod.h"
 #include "app/iptv_vod.h"
 #include "app/iptv_live.h"
+#include "app/iptv_navigation.h"
 #include "ui/seerr_detail.h"
 #include "ui/settings_screen.h"
 #include "ui/syncplay_screen.h"
@@ -150,7 +153,8 @@ struct State {
     double discover_at = -1;            /* when it last loaded (now_s), -1 never */
 };
 State s_state;
-unsigned s_model_version = 0, s_home_version = 0;   /* model published / taken by Home */
+std::atomic<unsigned> s_model_version{0};
+unsigned s_home_version = 0;   /* model published / taken by Home */
 std::atomic<unsigned> s_discover_version{0};   /* Seerr's tab: published (bumped off the render thread) */
 unsigned s_discover_taken = 0;                 /* ... and taken */
 std::atomic<unsigned> s_discover_appended{0};  /* a next page queued for its rows (a frame to take it) */
@@ -162,16 +166,25 @@ std::atomic<unsigned> s_session{0};                 /* bumped on every account c
 jf::Client *s_client = nullptr;
 std::vector<std::unique_ptr<jf::Client>> s_clients;
 std::string s_device;
+std::atomic<bool> s_user_data_busy{false};
+std::atomic<unsigned> s_home_request{0};
+struct UserDataCompletion {
+    unsigned session;
+    emby5::UserDataResult result;
+};
+std::mutex s_user_data_lock;
+std::vector<std::shared_ptr<UserDataCompletion>> s_user_data_done;
+std::atomic<bool> s_user_data_refresh_requested{false};
 
-jf::Client *new_client(const std::string &server)
+jf::Client *new_client(const std::string &server, jf::ServerKind kind = jf::ServerKind::Emby)
 {
-    s_clients.emplace_back(new jf::Client(server, s_device, "PlayStation 5"));
+    s_clients.emplace_back(new jf::Client(server, s_device, "PlayStation 5", kind));
     return s_clients.back().get();
 }
 
 jf::Client *client_for(const accounts::Account &a)
 {
-    jf::Client *c = new_client(a.server);
+    jf::Client *c = new_client(a.server, jf::server_kind_from_id(a.server_type));
     c->set_session(a.token, a.user_id, a.user_name);
     c->note_image_tag(a.image_tag);
     return c;
@@ -248,7 +261,7 @@ void crash_handler(int sig, siginfo_t *si, void *ctx)
             pthread_attr_destroy(&attr);
         }
         char line[512];
-        int n = std::snprintf(line, sizeof line, "jelly5: crash at %s%#lx; stack:", rip >= lo && rip < hi ? "+" : "",
+        int n = std::snprintf(line, sizeof line, "emby5: crash at %s%#lx; stack:", rip >= lo && rip < hi ? "+" : "",
                               (unsigned long)(rip >= lo && rip < hi ? rip - lo : rip));
         if (rsp && top > rsp) {
             const uintptr_t *sp = (const uintptr_t *)rsp;
@@ -319,7 +332,16 @@ void request_gate(Gate kind, const std::string &server = std::string(), const st
 /* The hero's titles are cached per user between launches: the server's random
  * pick takes over a second, so a start shows the last pick at once and fetches
  * the next one behind it. */
-std::string hero_file(const jf::Client &c) { return std::string(evo_data_path(("emby5/hero-" + c.user_id() + ".json").c_str())); }
+std::string hero_file(const jf::Client &c)
+{
+    // Keep cached home artwork scoped to server AND user, not merely a user ID.
+    const std::string identity = std::string(c.server_type()) + "|" + c.server() + "|" + c.user_id();
+    uint64_t hash = 14695981039346656037ull;
+    for (unsigned char ch : identity) { hash ^= ch; hash *= 1099511628211ull; }
+    char leaf[96];
+    std::snprintf(leaf, sizeof leaf, "emby5/hero-%016llx.json", (unsigned long long)hash);
+    return evo_data_path(leaf);
+}
 
 std::string read_file(const std::string &path)
 {
@@ -369,9 +391,8 @@ long version_number(const std::string &v)
     return a * 1000000L + b * 1000L + c;
 }
 
-/* Opt-in (Innstillinger: Se etter oppdateringer): once a launch, ask GitHub for
- * the latest release and say so when there is a newer one. The only request
- * Emby5 makes that is not to the Emby server, and only when turned on. */
+/* Once per launch, check GitHub for a newer release and show a notice only.
+ * Never download or install updates. */
 void check_for_update()
 {
     static bool asked = false;
@@ -399,32 +420,46 @@ void check_for_update()
 
 void load_home(jf::Client &c, unsigned session, bool keep_hero = false)
 {
+    // Local changes, playback stop and socket events can arrive together. Keep
+    // a single Home snapshot builder alive; each still checks its session.
+    static std::mutex load_lock;
+    std::lock_guard<std::mutex> one_load(load_lock);
+    unsigned request;
     {
         std::lock_guard<std::mutex> g(s_state.lock);
         if (session != s_session)
             return;
+        request = ++s_home_request;
         if (s_state.phase != Phase::Home) {
             s_state.phase = Phase::Loading;
             s_state.message = T("Henter biblioteket \xE2\x80\xA6");
         }
     }
     std::vector<jf::Item> hero, resume, next, views, mylist;
-    std::vector<std::thread> jobs;
+    bool resume_ok = false, next_ok = false, views_ok = false, list_ok = false;
+    std::vector<std::function<void()>> jobs;
     if (!keep_hero) {
         hero = c.featured_from(read_file(hero_file(c)), 6);
         if (hero.empty())
             jobs.emplace_back([&] { refresh_hero_cache(c, &hero); });
         else   /* the next launch's pick (the client outlives every request) */
-            std::thread([&c] { refresh_hero_cache(c, nullptr); }).detach();
+            emby5::spawn_io([&c] { refresh_hero_cache(c, nullptr); });
     }
-    jobs.emplace_back([&] { resume = c.resume(20); });
-    jobs.emplace_back([&] { next = c.next_up(20); });
-    jobs.emplace_back([&] { views = c.views(); });
-    jobs.emplace_back([&] { mylist = c.favorites(30); });
+    jobs.emplace_back([&] { resume = c.resume(20, {}, &resume_ok); });
+    jobs.emplace_back([&] { next = c.next_up(20, {}, &next_ok); });
+    jobs.emplace_back([&] { views = c.views(&views_ok); });
+    jobs.emplace_back([&] { mylist = c.favorites(30, &list_ok); });
     std::vector<std::string> sections;
     jobs.emplace_back([&] { sections = c.home_sections(); });
-    for (auto &j : jobs)
-        j.join();
+    emby5::run_io_jobs(jobs);
+    if (!resume_ok || !next_ok || !views_ok || !list_ok) {
+        std::lock_guard<std::mutex> g(s_state.lock);
+        if (session == s_session && request == s_home_request && s_state.phase != Phase::Home) {
+            s_state.phase = Phase::Failed;
+            s_state.message = "Could not refresh Emby. Check the connection and retry.";
+        }
+        return; // keep the last valid rows on a failed refresh
+    }
     /* Rows for video libraries; music opens from Biblioteker. Books and photos are not here. */
     auto video = [](const jf::Item &v) {
         const std::string &t = v.collection_type;
@@ -453,16 +488,29 @@ void load_home(jf::Client &c, unsigned session, bool keep_hero = false)
         if (has_latest(v))
             latest.push_back({T("Nylig lagt til i ") + v.name, {}});
     jobs.clear();
+    std::vector<unsigned char> latest_ok(latest.size(), 0);
     size_t k = 0;
     for (const jf::Item &v : views)
         if (has_latest(v)) {
-            auto *slot = &latest[k++].second;
+            auto *slot = &latest[k].second;
+            auto *ok = &latest_ok[k++];
             const std::string id = v.id;
-            jobs.emplace_back([&c, slot, id] { *slot = c.latest(id, 20); });
+            jobs.emplace_back([&c, slot, ok, id] {
+                bool success = false;
+                *slot = c.latest(id, 20, &success);
+                *ok = success;
+            });
         }
-    for (auto &j : jobs)
-        j.join();
+    emby5::run_io_jobs(jobs);
 
+    if (std::find(latest_ok.begin(), latest_ok.end(), 0) != latest_ok.end()) {
+        std::lock_guard<std::mutex> g(s_state.lock);
+        if (session == s_session && request == s_home_request && s_state.phase != Phase::Home) {
+            s_state.phase = Phase::Failed;
+            s_state.message = "Could not refresh Emby. Check the connection and retry.";
+        }
+        return; // a network failure is not an empty library
+    }
     ui::HomeModel m;
     {
         std::lock_guard<std::mutex> g(s_state.lock);
@@ -487,6 +535,28 @@ void load_home(jf::Client &c, unsigned session, bool keep_hero = false)
     }
     if (!libs.empty())
         m.rows.push_back({T("Biblioteker"), std::move(libs), false, Row::Libraries});
+    if (keep_hero) {
+        std::set<std::string> ids;
+        for (const auto &it : m.hero) if (!it.id.empty()) ids.insert(it.id);
+        for (const Row &row : m.rows)
+            if (row.kind == Row::Recommended || row.kind == Row::Genre)
+                for (const auto &it : row.items) if (!it.id.empty()) ids.insert(it.id);
+        if (!ids.empty()) {
+            std::string filter = "&Ids=";
+            for (const auto &id : ids) filter += (filter.size() > 5 ? "," : "") + id;
+            const auto fresh = c.library("", "", "SortName", false, 0, (int)ids.size(), filter);
+            if (fresh.ok) {
+                std::map<std::string, jf::Item> by_id;
+                for (const auto &it : fresh.items) by_id[it.id] = it;
+                auto update = [&](jf::Item &it) {
+                    const auto f = by_id.find(it.id);
+                    if (f != by_id.end()) emby5::reconcile_user_data(it, f->second);
+                };
+                for (auto &it : m.hero) update(it);
+                for (auto &row : m.rows) for (auto &it : row.items) update(it);
+            }
+        }
+    }
     /* The user's own order from Emby (Settings -> Home), when they set one:
      * its sections in that order, the ones left out hidden; ours (Min liste,
      * recommendations, genres) after them; Biblioteker always, as it is the way
@@ -518,8 +588,8 @@ void load_home(jf::Client &c, unsigned session, bool keep_hero = false)
         m.rows = std::move(ordered);
     }
     std::lock_guard<std::mutex> g(s_state.lock);
-    if (session != s_session)
-        return;   /* the account changed while this loaded */
+    if (session != s_session || request != s_home_request)
+        return;   /* old account or out-of-order refresh */
     s_state.model = std::move(m);
     s_state.views = std::move(views);
     s_model_version++;
@@ -554,6 +624,8 @@ void load_extras(jf::Client &c, unsigned session)
     using Row = ui::HomeRow;
     static std::mutex s_lock;   /* sign-in and a return from playback can both ask */
     std::lock_guard<std::mutex> once(s_lock);
+    if (session != s_session) return;
+    const unsigned request = s_home_request;
     static std::vector<std::string> s_genres;
     static unsigned s_genres_for = ~0u;
     std::vector<jf::Client::Recommendation> recs;
@@ -608,7 +680,7 @@ void load_extras(jf::Client &c, unsigned session)
     }
 
     std::lock_guard<std::mutex> g(s_state.lock);
-    if (session != s_session || s_state.phase != Phase::Home)
+    if (session != s_session || request != s_home_request || s_state.phase != Phase::Home)
         return;
     ui::HomeModel m = s_state.model;
     std::vector<Row> base, libraries;
@@ -674,7 +746,7 @@ void load_more_discover(unsigned session, int shelf, int page)
             return;
         s_state.discover_more_loading = true;
     }
-    const bool started = jelly5::spawn([session, shelf, page] {
+    const bool started = emby5::spawn([session, shelf, page] {
         using Shelf = seerr::Client::Shelf;
         const Shelf shelves[] = {Shelf::Trending, Shelf::PopularMovies, Shelf::PopularTv, Shelf::UpcomingMovies,
                                  Shelf::UpcomingTv};
@@ -744,7 +816,7 @@ std::vector<seerr::Title> load_mine(seerr::Client &c, std::map<std::string, int>
             if (!(rq.tv ? c.tv(rq.tmdb_id, &found[i]) : c.movie(rq.tmdb_id, &found[i])))
                 found[i].title.id = 0;
         });
-    jelly5::run_all(jobs);
+    emby5::run_all(jobs);
     std::vector<seerr::Title> out;
     for (const seerr::Detail &d : found)
         if (d.title.id > 0)
@@ -775,7 +847,7 @@ void refresh_mine(unsigned session)
 {
     if (!seerr_service::available())
         return;
-    jelly5::spawn([session] {
+    emby5::spawn([session] {
         std::shared_ptr<seerr::Client> c = seerr_service::client();
         if (!c)
             return;
@@ -842,7 +914,7 @@ void load_discover(unsigned session)
             if (st == 401 || st == 403)
                 lost = true;
         });
-        jelly5::run_all(jobs);   /* side by side; a job without a thread runs here */
+        emby5::run_all(jobs);   /* side by side; a job without a thread runs here */
         if (lost)
             seerr_service::session_lost();
     }
@@ -899,7 +971,7 @@ void refresh_discover(double max_age, bool force = false)
             return;
     }
     const unsigned session = s_session;
-    jelly5::spawn([session] { load_discover(session); });   /* no thread: the tab's next opening tries again */
+    emby5::spawn([session] { load_discover(session); });   /* no thread: the tab's next opening tries again */
 }
 
 /* Saves an account; when its server answered at a new address, its Seerr
@@ -918,11 +990,19 @@ void use_account(jf::Client &c, unsigned session, accounts::Account a)
 {
     set_phase(Phase::Connecting, T("Kobler til ") + (a.server_name.empty() ? a.server : a.server_name) + " \xE2\x80\xA6");
     while (session == s_session) {
-        if (c.validate()) {
-            std::string name, version, id;
-            c.public_info(&name, &version, &id);   /* (before the check below: it waits on the server) */
+        std::string name, version, id;
+        // Public probe first: do not send a saved token to a replaced server.
+        const bool found = c.public_info(&name, &version, &id);
+        if (session != s_session) return;
+        if (found && (a.server_type != c.server_type() ||
+                      (!a.server_id.empty() && a.server_id != id))) {
+            request_gate(Gate::Login, a.server, a.user_name, true, true);
+            return;
+        }
+        if (found && c.validate()) {   /* (before the check below: it waits on the server) */
             if (session != s_session)
                 return;   /* switched away meanwhile: leave "last account" and prefs alone */
+            a.server_type = c.server_type();
             a.user_name = c.user_name();
             a.image_tag = c.user_image_tag();
             if (!name.empty())   /* renamed; an answer without them keeps what was saved */
@@ -938,6 +1018,7 @@ void use_account(jf::Client &c, unsigned session, accounts::Account a)
                 s_state.server_version = version;
             }
             evo_bt("emby5: signed in as %s on %s %s", c.user_name().c_str(), name.c_str(), version.c_str());
+            if (session == s_session) update_service::automatic_check();
             load_home(c, session);
             if (session == s_session)
                 seerr_service::attach(&c);   /* Seerr, when this account has it on */
@@ -945,12 +1026,11 @@ void use_account(jf::Client &c, unsigned session, accounts::Account a)
             remote::start(&c, [session] { return session == s_session; });
             syncplay::attach(&c);
             load_extras(c, session);
-            update_service::check();
             return;
         }
         const std::string err = c.last_error();
         evo_bt("emby5: sign-in check failed: %s", err.c_str());
-        if (err.find("-> 401") != std::string::npos) {
+        if (err.find("-> 401") != std::string::npos || err.find("-> 403") != std::string::npos) {
             request_gate(Gate::Login, a.server, a.user_name, true, true);
             return;
         }
@@ -1085,7 +1165,7 @@ void theme_follow()
             return;
         s_theme_on = true;
         nuvio_player_set_headless(1);
-        jelly5_play_theme(*c, songs.front());
+        emby5_play_theme(*c, songs.front());
         nuvio_player_set_headless(0);
         s_theme_on = false;
     }).detach();
@@ -1124,7 +1204,7 @@ void start_music(const jf::Item &item, bool shuffle, const std::vector<jf::Item>
     std::thread([c, item, shuffle, q, start] {
         nuvio_player_set_headless(1);
         std::string error;
-        const bool ok = q.size() > 1 ? jelly5_play_queue(*c, q, start, &error) : jelly5_play(*c, item, &error, shuffle);
+        const bool ok = q.size() > 1 ? emby5_play_queue(*c, q, start, &error) : emby5_play(*c, item, &error, shuffle);
         nuvio_player_set_headless(0);
         if (!ok)
             notify((T("Emby5: kunne ikke spille av\n") + error).c_str());
@@ -1261,6 +1341,108 @@ void open_tab(int tab)
     screen_for(tab)->activate();
 }
 
+void refresh_user_data_screens()
+{
+    ui::Detail::invalidate_user_data();
+    if (s_movies) s_movies->defer_user_data_refresh();
+    if (s_shows) s_shows->defer_user_data_refresh();
+    if (s_music) s_music->defer_user_data_refresh();
+    if (s_search) s_search->defer_user_data_refresh();
+    for (auto &screen : s_stack) screen->defer_user_data_refresh();
+    if (auto *visible = screen_for(s_tab)) visible->ensure_user_data_refresh();
+}
+
+bool poll_user_data_results()
+{
+    std::vector<std::shared_ptr<UserDataCompletion>> done;
+    { std::lock_guard<std::mutex> g(s_user_data_lock); done.swap(s_user_data_done); }
+    bool changed = false;
+    for (const auto &completion : done) {
+        const auto &d = *completion;
+        s_user_data_busy = false;
+        if (d.session != s_session) continue; // results belong to the account that sent them
+        changed = true;
+        if (d.result.refreshed) {
+            const jf::Item &fresh = d.result.item;
+            if (s_home) s_home->reconcile_user_data(fresh);
+            if (s_movies) s_movies->reconcile_user_data(fresh);
+            if (s_shows) s_shows->reconcile_user_data(fresh);
+            if (s_music) s_music->reconcile_user_data(fresh);
+            for (auto &screen : s_stack) screen->reconcile_user_data(fresh);
+            std::lock_guard<std::mutex> g(s_state.lock);
+            for (auto &it : s_state.model.hero) emby5::reconcile_user_data(it, fresh);
+            for (auto &row : s_state.model.rows)
+                for (auto &it : row.items) emby5::reconcile_user_data(it, fresh);
+            ++s_model_version;
+        }
+        s_user_data_refresh_requested = true;
+        if (!d.result.accepted && !(d.result.refreshed && d.result.matched))
+            notify("The server did not confirm the change. Refreshing the server state.");
+        else if (d.result.refreshed && !d.result.matched)
+            notify("The server returned a different status. The server state will be shown.");
+        // Successful writes are quiet, including empty 2xx acknowledgements.
+    }
+    return changed;
+}
+
+// Each switch is consumed only after the previous player has stopped and the
+// Emby/Jellyfin reporter/encoding cleanup has returned. No concurrent decoders.
+void play_live_tv() {
+    struct Finish {
+        ~Finish(){iptv_navigation::end();iptv_live::set_playing_channel({});}
+    } finish;
+    if(!s_client)return;
+    if(s_user_data_busy){notify("A server change is still pending. Try again when it finishes.");return;}
+    if(syncplay::active()){notify("Leave SyncPlay before switching Live TV channels.");return;}
+    stop_theme(true);stop_music();nuvio_player_set_headless(0);nuvio_input_close();
+    try {
+        do {
+            iptv_navigation::Selection live;
+            if(!iptv_navigation::current(&live))break;
+            if(s_iptv)s_iptv->focus_channel(live.group_id,live.channel.id);
+            iptv_live::set_playing_channel(live.channel.id);
+            iptv_live::request_guide(s_client,live.channel);
+            if(live.channel.source=="Emby" || live.channel.source=="Jellyfin") {
+                if(live.channel.source!=s_client->server_product()){
+                    notify("The server changed. Refresh Live TV before playing this channel.");break;
+                }
+                jf::Item item;item.id=live.channel.emby_id;item.name=live.channel.name;item.type="LiveTvChannel";
+                std::string error;
+                const bool ok=emby5_play(*s_client,item,&error);
+                if(!error.empty())notify(error.c_str());
+                if(!ok)break;
+            } else {
+                std::string url;
+                if(live.channel.source=="M3U")url=live.channel.extension;
+                else if(live.channel.source=="Xtream") {
+                    iptv_xtream::Credentials credentials;
+                    if(!iptv_xtream::load_credentials(&credentials)){notify("Xtream credentials are unavailable.");break;}
+                    auto channel=live.channel;
+                    if(channel.id.rfind("xtream:",0)==0)channel.id.erase(0,7);
+                    url=iptv_xtream::live_url(credentials,channel);
+                }
+                if(url.empty()){notify("This channel has no playable stream.");break;}
+                cJSON *req=cJSON_CreateObject();
+                cJSON_AddStringToObject(req,"url",url.c_str());
+                cJSON_AddStringToObject(req,"title",live.channel.name.c_str());
+                cJSON_AddStringToObject(req,"itemType","movie");
+                cJSON_AddStringToObject(req,"playMethod","DirectPlay");
+                cJSON_AddStringToObject(req,"liveChannelId",live.channel.id.c_str());
+                cJSON_AddStringToObject(req,"liveGroupName",live.group_name.c_str());
+                cJSON_AddStringToObject(req,"liveNavigationToken",live.token.c_str());
+                cJSON *stream=cJSON_CreateObject();
+                cJSON_AddStringToObject(stream,"addon","IPTV");
+                cJSON_AddStringToObject(stream,"title","Live TV");cJSON_AddItemToObject(req,"stream",stream);
+                char *json=cJSON_PrintUnformatted(req);cJSON_Delete(req);
+                if(!json){notify("Unable to prepare Live TV playback.");break;}
+                const std::string request(json);std::free(json);
+                nuvio_player_run(request.c_str());nuvio_player_leave();
+            }
+        } while(iptv_navigation::advance());
+    } catch(...) {notify("Live TV playback could not continue. Returning to channels.");}
+    nuvio_player_leave();nuvio_input_open(s_user);
+}
+
 /* Top-level input once signed in: the tab bar, or the active screen. */
 void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool *shuffle)
 {
@@ -1333,6 +1515,9 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
         *shuffle = a.kind == ui::Action::PlayShuffled;
         s_queue = a.queue;
         s_queue_start = a.queue_start;
+        break;
+    case ui::Action::PlayLiveTV:
+        play_live_tv();
         break;
     case ui::Action::PlayIPTV: {
         if (a.iptv_url.empty()) break;
@@ -1431,18 +1616,43 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
             s_stack.pop_back();
         }
         break;
-    case ui::Action::Changed: {   /* written, then Min liste, Fortsett å se and the rest follow */
-        jf::Client *c = s_client;
+    case ui::Action::Changed: {
+        if (s_user_data_busy.exchange(true)) {
+            notify("A server change is still pending. Please try again when it finishes.");
+            break;
+        }
+        jf::Client *c = s_client; // session clients are immutable and retained by s_clients
         const unsigned session = s_session;
         const ui::UserDataChange ch = a.change;
-        if (s_tab != ui::Nav::Home || !s_stack.empty())
-            s_home->apply(ch);   /* the home rows were not the screen it was made on */
-        std::thread([c, session, ch] {
-            if (ch.favorite_set) c->set_favorite(ch.id, ch.favorite);
-            if (ch.played_set) c->set_played(ch.id, ch.played);
-            if (ch.resume_cleared) c->clear_position(ch.id);
-            load_home(*c, session, true);
-        }).detach();
+        ++s_home_request; // an older in-flight Home snapshot cannot overwrite this change
+        // Keep the result on the heap and publish it immediately after the
+        // server acknowledgement. Do not keep a mutation thread alive through a full
+        // Home/Next Up rebuild or touch any UI object from that worker.
+        auto completion = std::make_shared<UserDataCompletion>();
+        completion->session = session;
+        auto publish = [completion] {
+            std::lock_guard<std::mutex> g(s_user_data_lock);
+            s_user_data_done.push_back(completion);
+        };
+        if (!emby5::spawn_io([c, session, ch, completion, publish] {
+            if (session == s_session) {
+                emby5::UserDataRequest request;
+                request.id = ch.id;
+                request.favorite_set = ch.favorite_set; request.favorite = ch.favorite;
+                request.played_set = ch.played_set; request.played = ch.played;
+                request.resume_cleared = ch.resume_cleared;
+                evo_bt("userdata: begin %s kind=%s", request.id.c_str(),
+                       request.favorite_set ? "favorite" : request.played_set ? "played" : "resume");
+                completion->result = emby5::update_user_data(*c, request);
+                evo_bt("userdata: finished accepted=%d refreshed=%d matched=%d",
+                       completion->result.accepted, completion->result.refreshed, completion->result.matched);
+            }
+            publish();
+        }, publish)) {
+            s_user_data_busy = false;
+            notify("Could not send the server change. No change was sent.");
+        }
+
         break;
     }
     case ui::Action::SwitchUser:
@@ -1494,7 +1704,8 @@ void apply_views(const std::vector<jf::Item> &views)
     std::vector<int> tabs{ui::Nav::Home};
     if (!movies.empty()) { tabs.push_back(ui::Nav::Movies); s_movies->set_sources(movies); }
     if (!shows.empty()) { tabs.push_back(ui::Nav::Shows); s_shows->set_sources(shows); }
-    if (!iptv_live::snapshot().channels.empty()) tabs.push_back(ui::Nav::IPTV);
+    const auto live_status = iptv_live::summary();
+    if (live_status.emby_count + live_status.xtream_count + live_status.m3u_count) tabs.push_back(ui::Nav::IPTV);
     { const auto vod=iptv_vod::snapshot(); if (vod.movie_count || vod.show_count) tabs.push_back(ui::Nav::VOD); }
     if (!music.empty()) { tabs.push_back(ui::Nav::Music); s_music->set_sources(music); }
     if (seerr_service::available()) tabs.push_back(ui::Nav::Discover);
@@ -1574,8 +1785,7 @@ bool draw_frame(double t, float dt)
             apply_views(s_state.views);
             const std::string &tag = s_client->user_image_tag();
             s_nav.set_user(s_client->user_name(),
-                           tag.empty() ? "" : s_client->server() + "/Users/" + s_client->user_id() +
-                                                  "/Images/Primary?tag=" + tag + "&fillWidth=440");
+                           s_client->user_image_url(s_client->user_id(), tag, 440));
         }
         if (s_discover_version != s_discover_taken) {
             s_discover_taken = s_discover_version;
@@ -1598,6 +1808,8 @@ bool draw_frame(double t, float dt)
      * load_more_discover takes itself (taking it twice aborted the app). */
     if (more)
         load_more_discover(s_session, more_shelf, more_page);
+    if (phase == Phase::Home)
+        if (auto *visible = screen_for(s_tab)) visible->ensure_user_data_refresh();
     art::tick();
     gfx::begin_frame();
     bool animating = true;
@@ -1797,6 +2009,11 @@ bool resolve_playable(jf::Item *item)
 void play(jf::Item item, bool from_start, bool shuffle = false, const std::vector<jf::Item> *queue = nullptr,
           size_t start = 0)
 {
+    if (s_user_data_busy) {
+        notify("A server change is still pending. Start playback after it finishes.");
+        return;
+    }
+
     stop_theme(true);   /* the page's theme song makes way */
     if (queue && !queue->empty())
         item = (*queue)[std::min(start, queue->size() - 1)];
@@ -1850,18 +2067,19 @@ void play(jf::Item item, bool from_start, bool shuffle = false, const std::vecto
 
     nuvio_input_close();
     std::string error;
-    const bool ok = queue && queue->size() > 1 ? jelly5_play_queue(*s_client, *queue, start, &error)
-                                               : jelly5_play(*s_client, item, &error, shuffle);
+    const bool ok = queue && queue->size() > 1 ? emby5_play_queue(*s_client, *queue, start, &error)
+                                               : emby5_play(*s_client, item, &error, shuffle);
     if (!ok)
         notify((T("Emby5: kunne ikke spille av\n") + error).c_str());
+    else if (!error.empty())
+        notify(error.c_str());
     nuvio_input_open(s_user);
     /* Back at once; positions and "next up" refresh behind the screen. */
-    if (!s_stack.empty())
-        s_stack.back()->activate();   /* a detail page reloads its progress */
+    refresh_user_data_screens();
     jf::Client *c = s_client;
     const unsigned session = s_session;
     std::thread([c, session] {
-        jelly5_wait_reports(4000);   /* the position just reported, before reading it back */
+        emby5_wait_reports(4000);   /* the position just reported, before reading it back */
         load_home(*c, session, true);
         load_extras(*c, session);   /* what was just watched shapes "Fordi du så" */
     }).detach();
@@ -1987,6 +2205,7 @@ int main()
     std::snprintf(device, sizeof device, "emby5-ps5-%d", s_user);
     s_device = device;
     settings::load_local();
+    update_service::set_automatic_enabled(settings::get().local.check_updates);
     {
         const int mode = settings::get().local.upscale_mode;
         evo_agc_upscale_set_mode(mode == 0 ? EVO_AGC_UPSCALE_OFF
@@ -2042,6 +2261,7 @@ int main()
         }
         if (gate.kind != Gate::None)
             open_gate(gate);
+        bool user_data_changed = poll_user_data_results();
 
         /* The screensaver: on after a while without a button; any button wakes the
          * app and is only that. */
@@ -2069,8 +2289,10 @@ int main()
                 set_phase(Phase::Gate);
             } else if (phase == Phase::Home && s_home_version == s_model_version) {
                 // Native repeats handle normal speed; held navigation takes over after 1 second.
-                const uint32_t pressed = (s_tab == ui::Nav::IPTV && s_iptv &&
-                    !s_nav_focus && s_stack.empty() && s_iptv->accelerating(now_s()))
+                const uint32_t pressed = ((s_tab == ui::Nav::IPTV && s_iptv &&
+                    !s_nav_focus && s_stack.empty() && s_iptv->accelerating(now_s())) ||
+                    (s_tab==ui::Nav::Settings && s_settings && !s_nav_focus && s_stack.empty() &&
+                     s_settings->accelerating(now_s())))
                     ? in.pressed & ~(in.repeats & (NUVIO_BTN_UP | NUVIO_BTN_DOWN)) : in.pressed;
                 if (pressed) shell_input(pressed, &chosen, &chose, &from_start, &shuffle);
             }
@@ -2080,6 +2302,11 @@ int main()
             s_iptv->update_hold(in.held,now_s());
         else if (s_iptv)
             s_iptv->update_hold(0,now_s());
+        if(s_settings) {
+            const bool settings_active=phase==Phase::Home && s_tab==ui::Nav::Settings &&
+                s_stack.empty() && !s_nav_focus && !ime::active() && !s_saver.on();
+            s_settings->update_hold(settings_active?in.held:0,now_s());
+        }
         if (phase == Phase::Gate)
             gate_poll();
         if (lang_gen != i18n::generation()) {   /* Innstillinger -> Språk: rebuild the text that was built */
@@ -2119,6 +2346,28 @@ int main()
             waited = true;
             continue;
         }
+        static bool remote_dirty = false;
+        static double remote_refresh_at = 0;
+        static std::atomic<bool> remote_refreshing{false};
+        if (remote::take_user_data_changed()) remote_dirty = true;
+        if (s_user_data_refresh_requested.exchange(false)) remote_dirty = true;
+        if (phase == Phase::Home && !s_user_data_busy && !remote_refreshing &&
+            remote_dirty && now_s() >= remote_refresh_at) {
+            remote_dirty = false;
+            remote_refresh_at = now_s() + 2.0;
+            refresh_user_data_screens();
+            user_data_changed = true;
+            const unsigned session = s_session;
+            jf::Client *c = s_client;
+            remote_refreshing = true;
+            if (!emby5::spawn_io([c, session] {
+                load_home(*c, session, true);
+                remote_refreshing = false;
+            }, [] { remote_refreshing = false; })) {
+                remote_refreshing = false;
+                remote_dirty = true;
+            }
+        }
         /* Frames only while something moves; idle, the last frame stays up. */
         /* Seerr's state moves on its own (the settings show it). */
         seerr_service::poll();
@@ -2151,14 +2400,20 @@ int main()
             apply_views(s_state.views);
         }
         iptv_live::refresh(s_client);
-        const auto live_now=iptv_live::snapshot();
+        const auto live_now=iptv_live::summary();
         const bool iptv_moved=live_now.generation!=seen_iptv;
         if (iptv_moved && phase==Phase::Home) {
             seen_iptv=live_now.generation;
             std::lock_guard<std::mutex> g(s_state.lock);
             apply_views(s_state.views);
         }
-        const bool changed = vod_moved || iptv_moved || in.pressed || phase != last_phase || s_model_version != last_model ||
+        static uint64_t seen_update_revision = 0;
+        const auto update_revision = update_service::generation();
+        const bool update_moved = update_revision != seen_update_revision;
+        seen_update_revision = update_revision;
+        ui::Screen *active_screen = phase == Phase::Home ? screen_for(s_tab) : nullptr;
+        const bool screen_moved = active_screen && active_screen->needs_redraw();
+        const bool changed = screen_moved || update_moved || user_data_changed || vod_moved || iptv_moved || in.pressed || phase != last_phase || s_model_version != last_model ||
                              gate.kind != Gate::None || seerr_moved || s_discover_version != last_discover ||
                              s_discover_appended != last_appended;
         if (changed || animating || idle_frames < 2) {

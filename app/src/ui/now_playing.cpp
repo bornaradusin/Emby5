@@ -8,7 +8,7 @@
 #include "app/remote.h"
 #include "gfx/art.h"
 #include "nuvio_input.h"
-#include "jelly5_playback.h"
+#include "emby5_playback.h"
 
 #include <algorithm>
 #include <cmath>
@@ -127,7 +127,7 @@ void NowPlaying::draw(double now, float dt)
         std::vector<int> idx;
         int cur = 0, rep = 0;
         bool sh = false;
-        jelly5_music_state(&up, &idx, &cur, &sh, &rep);
+        emby5_music_state(&up, &idx, &cur, &sh, &rep);
         std::string mode;
         if (sh)
             mode = T("Bland");
@@ -149,7 +149,7 @@ void NowPlaying::queue_input(uint32_t p)
     std::vector<int> idx;
     int cur = 0, rep = 0;
     bool sh = false;
-    jelly5_music_state(&up, &idx, &cur, &sh, &rep);
+    emby5_music_state(&up, &idx, &cur, &sh, &rep);
     const int rows = 1 + (int)up.size();
     if (p & (NUVIO_BTN_CIRCLE | NUVIO_BTN_TRIANGLE)) {
         m_queue = false;
@@ -163,11 +163,11 @@ void NowPlaying::queue_input(uint32_t p)
     } else if (p & NUVIO_BTN_CROSS) {
         if (m_qrow == 0) {
             if (m_qcol == 0)
-                jelly5_music_set_shuffle(!sh);
+                emby5_music_set_shuffle(!sh);
             else
-                jelly5_music_set_repeat((rep + 1) % 3);   /* off, all, one */
+                emby5_music_set_repeat((rep + 1) % 3);   /* off, all, one */
         } else if (m_qrow - 1 < (int)idx.size()) {   /* play this one now */
-            jelly5_music_jump(idx[m_qrow - 1]);
+            emby5_music_jump(idx[m_qrow - 1]);
             remote::Command rc;
             rc.kind = remote::Command::Next;
             remote::send(rc);
@@ -188,7 +188,7 @@ void NowPlaying::draw_queue(float dt)
     std::vector<int> idx;
     int cur = 0, rep = 0;
     bool sh = false;
-    jelly5_music_state(&up, &idx, &cur, &sh, &rep);
+    emby5_music_state(&up, &idx, &cur, &sh, &rep);
     m_qrow = std::min(m_qrow, (int)up.size());
     gfx::fill({0, 0, gfx::W, gfx::H}, alpha(0x66000000u, a));
     const float w = 720, x0 = gfx::W - 80 - w + (1.f - a) * 60;

@@ -1,5 +1,6 @@
 /* Emby5 disk-backed VOD screen. SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ui/vod.h"
+#include "app/io_worker.h"
 #include "ui/screen.h"
 #include "nuvio_input.h"
 #include "platform/ime.h"
@@ -16,7 +17,16 @@ void Vod::regroup(const iptv_vod::Snapshot &snap){
     auto found=iptv_vod::groups(shows,search?query:"");
     std::vector<Group> next;next.reserve(found.size());
     for(const auto &g:found)next.push_back({g.name,g.count});
-    groups=std::move(next);columns.assign(groups.size(),0);row=0;
+    // Refresh status changes must not jump the viewer back to the first title.
+    const std::string selected=row>=0&&row<(int)groups.size()?groups[(size_t)row].title:"";
+    std::vector<int> positions(next.size(),0);int next_row=0;
+    for(size_t i=0;i<next.size();++i){
+        for(size_t j=0;j<groups.size();++j)if(next[i].title==groups[j].title&&j<columns.size()){
+            positions[i]=std::max(0,std::min(columns[j],(int)next[i].count-1));break;
+        }
+        if(next[i].title==selected)next_row=(int)i;
+    }
+    groups=std::move(next);columns=std::move(positions);row=next_row;
 }
 Action Vod::input(uint32_t p){
     Action a;if(ime::active())return a;
@@ -51,8 +61,10 @@ Action Vod::input(uint32_t p){
             const auto &v=item.front();
             if(v.series){detail=true;episode_index=0;series_name=v.name;
                 episode_state=std::make_shared<EpisodeState>();auto state=episode_state;
-                std::thread([state,v]{auto eps=iptv_vod::episodes(v);
-                    std::lock_guard<std::mutex> g(state->mutex);state->list=std::move(eps);state->ready=true;}).detach();
+                auto failed=[state]{std::lock_guard<std::mutex> g(state->mutex);
+                    state->error="Could not load episodes. Press Circle to return.";state->ready=true;};
+                if(!emby5::spawn_io([state,v]{std::string error;auto eps=iptv_vod::episodes(v,&error);
+                    std::lock_guard<std::mutex> g(state->mutex);state->list=std::move(eps);state->error=error;state->ready=true;},failed))failed();
             }else if(!v.url.empty()){a.kind=Action::PlayIPTV;a.iptv_title=v.name;
                 a.iptv_url=v.url;a.iptv_is_vod=true;}
         }
@@ -67,7 +79,7 @@ void Vod::draw(double,float){
         if(!episode_state)return;
         std::lock_guard<std::mutex> g(episode_state->mutex);
         if(!episode_state->ready){gfx::text(kPad,390,"Loading episodes...",{gfx::Medium,26},kText2);return;}
-        if(episode_state->list.empty()){gfx::text(kPad,390,"No episodes available",{gfx::Medium,26},kText2);return;}
+        if(episode_state->list.empty()){gfx::text(kPad,390,episode_state->error.empty()?"No episodes available":episode_state->error,{gfx::Medium,26},kText2);return;}
         for(int i=std::max(0,episode_index-5);i<(int)episode_state->list.size()&&i<episode_index+8;++i){
             const auto &ep=episode_state->list[(size_t)i];const float y=390+(i-episode_index)*70;
             if(y<270||y>1030)continue;
@@ -79,14 +91,16 @@ void Vod::draw(double,float){
     if(snap.movie_count&&snap.show_count)gfx::text(kPad,300,"Movies  /  TV Shows    (Square to switch)",{gfx::SemiBold,23},kText2);
     gfx::text(kPad,350,shows?"TV Shows":"Movies",{gfx::Bold,32},kText);
     if(snap.loading&&groups.empty()){gfx::text(kPad,450,"Loading provider catalogue...",{gfx::Medium,26},kText2);return;}
-    if(groups.empty()){gfx::text(kPad,450,"No titles in this section",{gfx::Medium,26},kText2);return;}
-    constexpr float w=210,h=300,gap=20;
+    if(groups.empty()){gfx::text(kPad,450,snap.error.empty()?"No titles in this section":snap.error,{gfx::Medium,26},kText2);return;}
+    const float card_scale=theme_card_scale();
+    const float w=210*card_scale,h=300*card_scale,gap=20;
     for(int r=0;r<(int)groups.size();++r){
-        const float y=490+(r-row)*410.f;if(y<350||y>1100)continue;
+        const float y=490+(r-row)*(h+110.f);if(y<350||y>1100)continue;
         const auto &group=groups[(size_t)r];
         gfx::text(kPad,y-30,group.title,{gfx::SemiBold,28,1500},r==row?kText:kText2);
         const int focused=columns[(size_t)r],begin=std::max(0,focused-2);
-        auto cards=iptv_vod::page(shows,group.title,(size_t)begin,7,search?query:"");
+        const int visible=std::max(1,(int)((gfx::W-2*kPad)/(w+gap)));
+        auto cards=iptv_vod::page(shows,group.title,(size_t)begin,(size_t)visible,search?query:"");
         for(size_t j=0;j<cards.size();++j){
             const int i=begin+(int)j;const auto &item=cards[j];const float x=kPad+(i-begin)*(w+gap);
             glass_panel({x,y,w,h},15,r==row&&i==focused?1.f:0.5f,false);

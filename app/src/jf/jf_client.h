@@ -9,6 +9,8 @@
  */
 #pragma once
 
+#include "server_kind.h"
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -30,7 +32,13 @@ struct Item {
     int64_t position_ticks = 0;               /* resume point */
     double played_percent = 0;
     bool played = false, favorite = false;
-    int local_trailers = 0;                   /* trailer files next to the title */
+    // Masked acknowledgements change only the fields actually confirmed by the server.
+    enum UserDataField : unsigned { PlayedField=1, FavoriteField=2, PositionField=4,
+                                   PercentField=8, UnplayedField=16, AllUserData=31 };
+    unsigned user_data_fields = AllUserData;
+    bool user_data_present = false;          /* absent data must not clear existing badges */
+    int local_trailers = 0;
+    std::vector<std::string> remote_trailers; // Public metadata links only; never append server authentication.                   /* trailer files next to the title */
     int unplayed = 0;                         /* a series' or season's episodes not yet watched */
     int special_features = 0;                 /* extras: behind the scenes, deleted scenes ... */
     std::vector<std::string> genres;
@@ -107,6 +115,8 @@ struct Version {
 
 struct Playback {
     std::string item_id, media_source_id, play_session_id;
+    std::string live_stream_id;
+    bool close_live_stream = false;
     std::string play_method;                  /* DirectPlay, DirectStream, Transcode */
     std::string url;                          /* absolute, authorised */
     std::string container, transcode_reasons;
@@ -143,6 +153,7 @@ struct PublicUser {
 };
 
 struct Page {
+    bool ok = false;
     std::vector<Item> items;
     int total = 0;
 };
@@ -171,7 +182,14 @@ struct QuickConnect {
 
 class Client {
 public:
-    Client(std::string server, std::string device_id, std::string device_name);
+    Client(std::string server, std::string device_id, std::string device_name,
+           ServerKind kind = ServerKind::Emby);
+
+    ServerKind server_kind() const { return kind_.load(); }
+    bool is_jellyfin() const { return server_kind() == ServerKind::Jellyfin; }
+    const char *server_type() const { return server_kind_id(server_kind()); }
+    const char *server_product() const { return server_kind_name(server_kind()); }
+    const std::string &server_id() const { return server_id_; }
 
     const std::string &server() const { return server_; }
     const std::string &device_id() const { return device_id_; }
@@ -191,6 +209,7 @@ public:
     bool public_info(std::string *name, std::string *version, std::string *id = nullptr);
 
     bool authenticate(const std::string &user, const std::string &password);
+    bool quick_connect_enabled();
     bool quick_connect_start(QuickConnect *out);
     /* true once the code was approved (and the session is set). */
     bool quick_connect_poll(const QuickConnect &qc, bool *approved);
@@ -203,16 +222,16 @@ public:
     bool get_prefs(UserPrefs *out);
     bool set_prefs(const UserPrefs &p);
 
-    std::vector<Item> resume(int limit, const std::string &parent_id = std::string());
-    std::vector<Item> next_up(int limit, const std::string &series_id = std::string());
-    std::vector<Item> views();
+    std::vector<Item> resume(int limit, const std::string &parent_id = std::string(), bool *ok = nullptr);
+    std::vector<Item> next_up(int limit, const std::string &series_id = std::string(), bool *ok = nullptr);
+    std::vector<Item> views(bool *ok = nullptr);
     /* Random movies and series that have both a logo and a backdrop (the hero). */
     std::vector<Item> featured(int limit, std::string *raw = nullptr);
     /* The same from a response saved earlier (the hero is cached between launches). */
     std::vector<Item> featured_from(const std::string &raw, int limit);
-    std::vector<Item> latest(const std::string &parent_id, int limit);
-    std::vector<Item> episodes(const std::string &series_id, const std::string &season_id);
-    std::vector<Item> upcoming_episodes(const std::string &series_id);
+    std::vector<Item> latest(const std::string &parent_id, int limit, bool *ok = nullptr);
+    std::vector<Item> episodes(const std::string &series_id, const std::string &season_id, bool *ok = nullptr);
+    std::vector<Item> upcoming_episodes(const std::string &series_id, bool *ok = nullptr);
     /* A library page: types e.g. "Movie" or "Series"; sort_by e.g. "DateCreated,SortName". */
     /* filter: extra query, e.g. "&AlbumArtistIds=<id>" (an artist's albums). */
     Page library(const std::string &parent_id, const std::string &types, const std::string &sort_by,
@@ -241,7 +260,7 @@ public:
     /* A song's lyrics (Emby's .lrc / lyric plugins); empty when it has none. */
     std::vector<LyricLine> lyrics(const std::string &item_id);
     /* types e.g. "Movie,Series" or "Person" (Emby's own matching and order). */
-    std::vector<Item> search(const std::string &term, const std::string &types, int limit);
+    std::vector<Item> search(const std::string &term, const std::string &types, int limit, bool *ok = nullptr);
 
     /* Emby's recommendations: "because you watched X" and the like. */
     struct Recommendation {
@@ -255,24 +274,24 @@ public:
     /* Titles in a genre, in random order. */
     std::vector<Item> genre_items(const std::string &genre, int limit);
     /* A title's extras: behind the scenes, deleted scenes, featurettes. */
-    std::vector<Item> special_features(const std::string &id);
+    std::vector<Item> special_features(const std::string &id, bool *ok = nullptr);
     /* A title's theme songs (an episode's or season's come from its series). */
     std::vector<Item> theme_songs(const std::string &id);
     bool item(const std::string &id, Item *out, Detail *detail = nullptr);
-    std::vector<Item> seasons(const std::string &series_id);
-    std::vector<Item> similar(const std::string &id, int limit);
+    std::vector<Item> seasons(const std::string &series_id, bool *ok = nullptr);
+    std::vector<Item> similar(const std::string &id, int limit, bool *ok = nullptr);
     /* What a person is in, in this library: types e.g. "Movie" or "Series", newest first. */
     std::vector<Item> person_items(const std::string &person_id, const std::string &types, int limit);
-    bool set_favorite(const std::string &id, bool favorite);
-    bool set_played(const std::string &id, bool played);
+    bool set_favorite(const std::string &id, bool favorite, Item *confirmed = nullptr);
+    bool set_played(const std::string &id, bool played, Item *confirmed = nullptr);
     /* A title's own trailer files (YouTube trailers are not played: not Emby's). */
-    std::vector<Item> local_trailers(const std::string &id);
+    std::vector<Item> local_trailers(const std::string &id, bool *ok = nullptr);
     /* Drops the resume point: the title leaves "Fortsett å se". */
     bool clear_position(const std::string &id);
     /* Min liste: the user's favourite movies, series and collections, newest first. */
-    std::vector<Item> favorites(int limit);
+    std::vector<Item> favorites(int limit, bool *ok = nullptr);
     /* A folder's or collection's direct children, e.g. sort_by "PremiereDate,SortName". */
-    std::vector<Item> children(const std::string &parent_id, const std::string &sort_by, int limit);
+    std::vector<Item> children(const std::string &parent_id, const std::string &sort_by, int limit, bool *ok = nullptr);
     std::vector<Segment> segments(const std::string &item_id);
     /* Chapters and trickplay of what plays (media_source_id picks the version). */
     bool media_extras(const std::string &item_id, const std::string &media_source_id, std::vector<Chapter> *chapters,
@@ -286,9 +305,9 @@ public:
     std::string image_url(const std::string &owner, const char *type, const std::string &tag,
                           int width, bool allow_untagged = false) const;
 
-    void report_start(const Playback &pb, int64_t position_ticks);
-    void report_progress(const Playback &pb, int64_t position_ticks, bool paused);
-    void report_stopped(const Playback &pb, int64_t position_ticks);
+    bool report_start(const Playback &pb, int64_t position_ticks);
+    bool report_progress(const Playback &pb, int64_t position_ticks, bool paused, const char *event = "TimeUpdate");
+    bool report_stopped(const Playback &pb, int64_t position_ticks);
     /* Ends a server transcode (no-op for direct play). */
     void stop_encoding(const Playback &pb);
 
@@ -298,6 +317,9 @@ public:
     /* "Authorization: MediaBrowser ..." with this session's token (also for /socket). */
     std::string auth_header() const;
     std::string api_url(const std::string &path) const;
+    std::string resource_url(const std::string &path) const;
+    std::string websocket_url() const;
+    std::string user_image_url(const std::string &user, const std::string &tag, int width) const;
     std::vector<std::string> request_headers() const;
     /* Remote control: this device plays video and audio and takes playstate
      * commands and messages (POST /Sessions/Capabilities/Full). */
@@ -320,9 +342,12 @@ public:
     bool post_json(const std::string &path, const std::string &json, std::string *body);
 
 private:
-    std::vector<Item> items_of(const std::string &body);
+    bool send_playback(const char *path, const std::string &body);
+    std::vector<Item> items_of(const std::string &body, bool *ok = nullptr);
 
     std::string server_, device_id_, device_name_;
+    std::atomic<ServerKind> kind_{ServerKind::Emby};
+    std::string server_id_;
     std::string token_, user_id_, user_name_, user_image_tag_;
     bool is_admin_ = false, manages_subtitles_ = false, subtitle_search_ = false;
     std::vector<std::string> latest_excludes_;

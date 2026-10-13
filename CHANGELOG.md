@@ -1,3 +1,68 @@
+## 1.2.4 (development - native/console validation pending)
+
+### Music artwork and System settings
+
+- Wake the idle library and album screens when asynchronous artwork/detail data arrives; prioritise visible albums with a bounded metadata worker and stale-generation checks.
+- Preserve resolved primary/fallback artwork across abbreviated library refreshes, prefer usable album covers over track alternatives, and retry transient metadata failures without redrawing or refetching continuously.
+- Remove the About page. Put Connected server and Persistent storage directly in System, with Appearance, What's New, Check for updates and Installed version. Licence files and source credits are retained.
+- Add a persistent Check for updates switch (On by default). Off blocks automatic checks and suppresses pending notifications. Manual What's New remains available. Use the existing PS5 kernel notifier, at most once per newer release per app launch, with no downloads/installations.
+- Add host regressions for delayed music metadata, stale callbacks, refresh retention and notification switch races. Native console verification remains required.
+
+See `MUSIC_AND_SYSTEM_1.2.4.md` for the scope and test checklist.
+
+### Theme name, confirmation and season presentation
+
+- Rename the default preset display name to Emby5; retain preset ID 31 and existing saved appearances.
+- Appearance exit/reset/overwrite confirmations follow the current draft palette, material and button shape instead of a fixed blue skin. Safe default actions and Apply/Discard semantics remain unchanged.
+- Replace the nested season track/drop with independently themed season controls and one matching focus outline. Keep the selected season visible while browsing its episodes.
+- Use padded whole-card episode windows with count/range hints, scaled metadata spacing and stable 16:9 thumbnails. Preserve the selected episode by ID when refreshing; empty seasons display a message.
+- Cross on a season enters its episodes without starting playback. Watched/favourite, upcoming metadata, providers, Live TV controls and GPU policy are not changed.
+
+See `SEASONS_AND_CONFIRMATION_1.2.4.md` for scope and console checks.
+
+### Live TV controller and Emby5 revision
+
+- Full-screen Live TV: Up/Down plays the previous/next group's first channel; Left/Right switches within the group. Visible menus retain normal navigation.
+- Preserve saved custom group order, skip empty groups, wrap within each axis and reject held/repeated or stale-session requests. Switch only after old-player/stream cleanup.
+- Keep each server channel on its existing Emby/Jellyfin playback/reporting path; direct Xtream and M3U channels use their existing URLs.
+- Append Emby5 as the default for new settings without reassigning older preset IDs or overwriting custom themes.
+- Refine the existing palettes, strengthen accents and selected states, and add nine background colours.
+- Add actual PlayerUi, group-cursor, browser-launch and request-parser regression coverage.
+
+See `LIVE_TV_CONTROLS_AND_EMBY_GLASS_1.2.4.md` for exact behaviour and test limits.
+
+### Latest network/state revision (PS5 retest required)
+
+- Correct user-scoped Emby item read-back; consume mutation UserData and quietly acknowledge empty successful replies without clearing unrelated fields.
+- Bound HTTP, Xtream and VOD refreshes; preserve valid caches on failure and clear loading states on every exit.
+- Allow Circle to cancel opening/probing; avoid reconnecting finite VOD at normal EOF.
+- Remove backdrop refraction from compact glass/frost controls, including focus state.
+- Add metadata-driven Trailer QR for Emby/Jellyfin movie and series libraries without Seerr.
+- Reset upscaler performance limits per playback while retaining compatibility and safety bypasses.
+- Add transport, provider/cache, pre-open cancellation, upscaler-state, QR and surface-dispatch host regressions and optional real-FFmpeg loopback tests.
+
+See `NETWORK_STATE_FIXES_1.2.4.md` for exact scope and verification limits.
+
+### Original 1.2.4 development changes
+
+- Rename app-owned Jelly5 files and build/runtime identifiers to Emby5; retain upstream legal credits.
+- Gate episode four behind explicit confirmation after three completed episodes.
+- Count actual active playback for two-hour mode and preserve the guard across stream reopen.
+- Reconcile watched/unwatched and resume changes with Emby; refresh dependent screens and isolate account/session responses.
+- Order playback start/progress/stop reports and retry/report failures without blind played-state retries.
+- Add Emby/Jellyfin server detection and provider-specific API paths, authorization, saved accounts, public avatars and socket URLs.
+- Add optional Jellyfin Quick Connect with password fallback and cancellation-safe manual sign-in.
+- Preserve proxy base paths and pass server authorization to video, alternate sources and external subtitles.
+- Use Jellyfin user-data APIs for watched/favorite/resume operations; preserve other user-data fields when clearing resume.
+- Carry LiveStreamId through playback/reporting and close server-managed Live TV streams when required.
+- Add deterministic host regression tests, dual-backend request/account tests and a CT108 source/build verification workflow.
+- Reuse unchanged font assets from the original 1.2.3 source ZIP using a checked local manifest.
+- Preserve the existing player, storage, language and notification-only update settings.
+
+See `docs/Emby5-1.2.4-validation.md` for test evidence and the required PS5 checks.
+
+---
+
 ### Additional 1.0.0 changes (pending PS5 verification)
 
 - Dedicated USB diagnostic log: `/mnt/usb0/emby5/emby5.log`, with automatic folder creation; no longer shares EVO Player's `evo.log`.

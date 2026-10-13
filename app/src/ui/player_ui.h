@@ -28,6 +28,7 @@
 #include "gfx/gfx.h"
 #include "nuvio_osd.h"   /* NuvioStatus, OsdCommand */
 #include "app/remote.h"
+#include "app/watch_guard.h"
 #include "ui/anim.h"
 #include "ui/screen.h"
 
@@ -40,8 +41,20 @@ class PlayerUi {
 public:
     void begin(const NuvioRequest *req, double now);
     void end();
+    void reopen(const NuvioRequest *req, double now) {
+        const emby5::WatchGuard saved = m_watch;
+        const bool had_input = m_had_input;
+        begin(req, now);
+        m_watch = saved;
+        m_watch.sample(now, false);
+        m_had_input = had_input;
+    }
     bool stats_shown() const { return m_stats; }
     bool had_user_input() const { return m_had_input; }
+    int completed_episodes(bool automatic_next) const { return m_watch.completed_after(automatic_next); }
+    double watched_seconds() const { return m_watch.seconds(); }
+    bool still_watching_approved() const { return m_watch.approved(); }
+    bool block_autoplay(const NuvioStatus &st);
 
     /* The controller. In a SyncPlay group, pause, seek and next go to the group
      * (which then tells everyone, this player included). */
@@ -59,7 +72,7 @@ public:
     void toast(const std::string &text, double now);
     void playback_ended(const NuvioStatus &st, std::vector<OsdCommand> &out);
     void note_subtitle_choice() { m_dirty = true; }
-    bool post_play_active() const { return false; }
+    bool post_play_active() const { return m_still_prompt; }
 
 private:
     enum class Overlay { None, Tracks, Episodes, Chapters };
@@ -103,6 +116,7 @@ private:
 
     const NuvioRequest *m_req = nullptr;
     bool m_music = false;
+    bool m_live_input_ready = false;
     std::string m_live_channel_id;               /* an audio track: the now-playing screen */
     double m_now = 0, m_last = 0, m_load_since = 0;
     bool m_dirty = true;
@@ -124,7 +138,9 @@ private:
     bool m_skip_done[16] = {};
     bool m_had_input = false;
     bool m_still_prompt = false;
-    bool m_still_approved = false;
+    emby5::WatchGuard m_watch;
+    bool m_still_next = false;
+    bool m_still_resume = false;
     bool check_still_watching(const NuvioStatus &st) const;
     bool m_card_dismissed = false;
     double m_card_since = -1;           /* the next-episode countdown */

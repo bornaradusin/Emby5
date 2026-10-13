@@ -5,6 +5,8 @@
  * Sizes, colours and timings follow concept/style.css.
  */
 #include "ui/home.h"
+#include "app/appearance.h"
+#include "app/user_data_update.h"
 #include "app/seerr_service.h"
 #include "app/i18n.h"
 
@@ -136,6 +138,13 @@ const jf::Item *Home::focused_item() const
     return c >= 0 && c < (int)items.size() ? &items[c] : nullptr;
 }
 
+void Home::reconcile_user_data(const jf::Item &fresh)
+{
+    for (auto &it : m_model.hero) emby5::reconcile_user_data(it, fresh);
+    for (auto &row : m_model.rows)
+        for (auto &it : row.items) emby5::reconcile_user_data(it, fresh);
+}
+
 void Home::activate()
 {
     /* Entered from the navigation bar: start on the hero. */
@@ -192,8 +201,6 @@ Action Home::input(uint32_t p)
     Action action;
     if (m_menu.active()) {
         m_menu.input(p, &action);
-        if (action.kind == Action::Changed)
-            apply(action.change);
         return action;
     }
     if ((p & NUVIO_BTN_OPTIONS) && !m_discover) {   /* Seerr's titles have no options of the library's */
@@ -275,6 +282,9 @@ std::string Home::backdrop_url(const jf::Item &it) const
 
 void Home::draw_card_art(const jf::Item &it, const gfx::Rect &r, float radius, float a) const
 {
+    if (settings::hide_episode_spoilers(settings::get_appearance(),it)) {
+        draw_glass_placeholder(r,radius,a);return;
+    }
     if (it.external()) {   /* Seerr's: its name on its colours, the picture over it, where it stands */
         draw_glass_placeholder(r, radius, a);
         art::draw(r, it.ext.thumb, "", 640, 360, radius, a, 0);
@@ -292,6 +302,9 @@ void Home::draw_backdrop(float dt)
      * and quicker (its picture is already loaded). */
     const bool hero = m_row < 0;
     const jf::Item *f = focused_item();
+    if(!theme_artwork_enabled() || (f && settings::hide_episode_spoilers(settings::get_appearance(),*f))) {
+        m_bd.clear();gfx::fill({0,0,gfx::W,gfx::H},kBg);return;
+    }
     /* A title without a backdrop gets its own colours (its BlurHash) rather than
      * keeping the last one's picture: a layer keyed "colour:<id>". */
     std::string want = f ? backdrop_url(*f) : std::string();
@@ -325,7 +338,7 @@ void Home::draw_backdrop(float dt)
 
     const gfx::Rect full{0, 0, gfx::W, gfx::H};
     gfx::fill(full, kBg);
-    if (!m_bd.empty() && m_now - m_bd.back().since < 30.0)
+    if (!theme_reduced_motion() && !m_bd.empty() && m_now - m_bd.back().since < 30.0)
         m_animating = true;   /* the drift moves */
     for (size_t i = 0; i < m_bd.size(); i++) {
         const float a = i == 0 ? 1.f : smoothstep(m_bd[i].mix.value);
@@ -338,6 +351,8 @@ void Home::draw_backdrop(float dt)
             if (const gfx::Texture *ph = art::blurhash(m_bd[i].hash))
                 gfx::image(full, ph, a, 0, true);
     }
+
+    gfx::fill(full,alpha(kBg,theme_backdrop_dim(0.f)));
 
     /* Scrims (concept: .scrim-left, .scrim-bottom, .scrim-top). */
     gfx::fill_hgradient({0, 0, 576, gfx::H}, alpha(kBg, 0.92f), alpha(kBg, 0.72f));
@@ -353,6 +368,7 @@ void Home::draw_info(const jf::Item &it, float bottom, bool hero, float a)
     if (a <= 0.f)
         return;
     const bool episode = it.type == "Episode";
+    const bool hidden=settings::hide_episode_spoilers(settings::get_appearance(),it);
     /* Measure from the bottom up so a tall logo never collides with the rows. */
     const gfx::TextStyle ov{gfx::Regular, 26, 780, hero ? 3 : 2, 37.7f};
     const gfx::TextStyle meta{gfx::Medium, 24};
@@ -366,15 +382,17 @@ void Home::draw_info(const jf::Item &it, float bottom, bool hero, float a)
         title_bottom -= 48;
 
     /* Logo (fading in; nothing until then) or the name in large type. */
-    const std::string logo = m_client.image_url(it.logo_owner, "Logo", it.logo_tag, 800);
+    const std::string logo = settings::get_appearance().title_as_text?std::string():m_client.image_url(it.logo_owner, "Logo", it.logo_tag, 800);
     const float max_lw = hero ? 640.f : 520.f, max_lh = hero ? 200.f : 150.f;
+    bool drew_logo=false;
     if (!logo.empty()) {
         if (const gfx::Texture *t = art::get(logo, 800, 800)) {
             const float iw = (float)gfx::texture_width(t), ih = (float)gfx::texture_height(t);
-            const float k = std::min(max_lw / iw, max_lh / ih);
-            gfx::image({kPad, title_bottom - ih * k, iw * k, ih * k}, t, a * art::fade(logo), 0, false);
+            if(iw>0 && ih>0) {const float k = std::min(max_lw / iw, max_lh / ih);
+            gfx::image({kPad, title_bottom - ih * k, iw * k, ih * k}, t, a * art::fade(logo), 0, false);drew_logo=true;}
         }
-    } else {
+    }
+    if(!drew_logo) {
         const std::string name = episode ? it.series_name : it.name;
         gfx::text(kPad, title_bottom - 14, name, {gfx::Bold, hero ? 84.f : 72.f, 1500}, alpha(kText, a));
     }
@@ -432,7 +450,7 @@ void Home::draw_info(const jf::Item &it, float bottom, bool hero, float a)
     }
 
     if (!it.overview.empty())
-        gfx::text(kPad, meta_y + 50, it.overview, ov, alpha(kText2, a));
+        gfx::text(kPad, meta_y + 50, hidden?"Episode description hidden. Open details and press Square to reveal.":it.overview, ov, alpha(kText2, a));
 
     if (hero) {
         /* "Spill av" / "Fortsett" and "Mer info": glass buttons, the focus drop on
@@ -487,7 +505,10 @@ void Home::draw_rows(float dt)
 
     /* Seerr's tab shows posters, as Seerr does: the backdrop is the background
      * only, never the card as well (Seerr has one of each per title). */
-    const float cw = m_discover ? 210 : kCardW, ch = m_discover ? 315 : kCardH, rowh = m_discover ? 480 : kRowH;
+    const float card_scale=theme_card_scale();
+    const float cw = (m_discover ? 210 : kCardW)*card_scale;
+    const float ch = (m_discover ? 315 : kCardH)*card_scale;
+    const float rowh = (m_discover ? 480 : kRowH) + (ch-(m_discover ? 315:kCardH));
     for (size_t r = 0; r < m_model.rows.size(); r++) {
         const HomeRow &row = m_model.rows[r];
         const float rel = (float)r - m_rows_y.value;
@@ -497,7 +518,7 @@ void Home::draw_rows(float dt)
             a = std::max(0.f, 1.f + rel * 1.6f);   /* rows above fade out */
         if (a <= 0.f || ry > gfx::H + 40)
             continue;
-        gfx::text(kPad, ry + 30, row.title, {gfx::Bold, 30}, alpha(0xebffffffu, a));
+        gfx::text(kPad, ry + 30, row.title, {gfx::Bold, 30}, alpha(kText, a*.92f));
 
         /* Horizontal: the focused card sits at the left edge, until the row ends. */
         const int col = m_cols[r];
@@ -530,7 +551,7 @@ void Home::draw_rows(float dt)
                 draw_poster(m_client, it, {cx, cy, cw, ch}, lift.value, a);
                 continue;
             }
-            const float k = 1.f + 0.1f * lift.value;
+            const float k = 1.f + 0.1f * theme_poster_lift(lift.value);
             const gfx::Rect cr{cx - cw * (k - 1) / 2, cy - ch * (k - 1) / 2, cw * k, ch * k};
             draw_card_art(it, cr, kCardR * k, a);
             if (it.played_percent > 0 && it.played_percent < 100) {
@@ -552,7 +573,7 @@ void Home::draw_rows(float dt)
             lift.to(1.f);
             if (lift.step(dt, 14.f))
                 m_animating = true;
-            const float k = 1.f + 0.1f * lift.value;
+            const float k = 1.f + 0.1f * theme_poster_lift(lift.value);
             const gfx::Rect cr{cx - cw * (k - 1) / 2, cy - ch * (k - 1) / 2, cw * k, ch * k};
             if (m_discover) {   /* the poster draws its own lift, shadow and title (brighter on focus) */
                 draw_poster(m_client, it, {cx, cy, cw, ch}, lift.value, a);
@@ -563,7 +584,8 @@ void Home::draw_rows(float dt)
             }
             gfx::shadow(cr, kCardR * k, 26, 0.3f * lift.value * a, 10 * lift.value);
             draw_card_art(it, cr, kCardR * k, a);
-            m_card = {cr, card_url(it), it.thumb_blurhash.empty() ? it.backdrop_blurhash : it.thumb_blurhash,
+            draw_image_focus_outline(cr,kCardR*k,a);
+            m_card = {cr, settings::hide_episode_spoilers(settings::get_appearance(),it)?std::string():card_url(it), settings::hide_episode_spoilers(settings::get_appearance(),it)?std::string():(it.thumb_blurhash.empty() ? it.backdrop_blurhash : it.thumb_blurhash),
                       kCardR * k};
             m_has_card = true;
             if (it.played_percent > 0 && it.played_percent < 100) {

@@ -17,10 +17,12 @@
  * tracks chosen) before it reopens.
  */
 #include "nuvio_player.h"
+#include "app/iptv_navigation.h"
 #include "app/i18n.h"
 #include "app/settings.h"
 #include "app/perf.h"
-#include "jelly5_bitstream.h"
+#include "emby5_bitstream.h"
+#include "emby5_playback.h"
 
 #include "nuvio_bridge.h"
 #include "nuvio_control.h"
@@ -42,6 +44,7 @@
 #include "evo_boot_trace.h"
 #include "evo_playback.h"
 #include "evo_thread.h"
+#include "evo_stream_io.h"
 #include "evo_vdec.h"
 #include "pp_playback.h"
 
@@ -274,6 +277,8 @@ struct OpenJob {
     pthread_t thread{};
     std::atomic<bool> running{false};
     std::atomic<bool> done{false};
+    std::atomic<bool> cancel{false};
+    std::atomic<double> deadline{0};
     bool ok = false;
     int kind = 0;                 /* 0 open, 1 audio switch */
     evo::PlaybackSource src;
@@ -284,10 +289,17 @@ struct OpenJob {
 void *open_thread(void *arg)
 {
     OpenJob *j = static_cast<OpenJob *>(arg);
-    if (j->kind == 1)
-        j->ok = s_pb->switchAudioTrack(j->audio_stream);
-    else
-        j->ok = s_pb->startPlaybackSource(j->src, j->at);
+    evo_stream_io_set_open_interrupt([](void *p) -> int {
+        auto *job = static_cast<OpenJob *>(p);
+        return !job->done.load() && (job->cancel.load() || now_s() >= job->deadline);
+    }, j);
+    try {
+        if (j->kind == 1)
+            j->ok = s_pb->switchAudioTrack(j->audio_stream);
+        else
+            j->ok = s_pb->startPlaybackSource(j->src, j->at);
+    } catch (...) { j->ok = false; }
+    evo_stream_io_set_open_interrupt(nullptr, nullptr);
     j->done = true;
     return nullptr;
 }
@@ -295,10 +307,13 @@ void *open_thread(void *arg)
 bool start_job(OpenJob &j)
 {
     j.done = false;
+    j.cancel = false;
+    j.deadline = now_s() + 45.0;
     j.ok = false;
     j.running = true;
     if (evo_thread_create(&j.thread, open_thread, &j) != 0) {
         j.running = false;
+        j.done = true;
         return false;
     }
     return true;
@@ -406,6 +421,7 @@ struct Session {
     double open_started = 0;
     double last_frame_at = 0;
     double last_pos = 0, last_pos_change = 0;
+    double last_valid_position = 0;
     double wd_since = 0;              /* hardware decoder watchdog */
     int wd_frames = -1;
     int wd_consumed = 0;
@@ -534,6 +550,7 @@ std::vector<std::pair<std::string, std::string>> playback_stats(const Session &s
         const char *up = evo_agc_upscale_label();
         std::string active = up ? up : "Off";
         if (active == "Sharp") active = "FSR 1 - Active";
+        else if (active.rfind("Sharp (",0)==0) active="FSR 1 - Active "+active.substr(6);
         else if (active.rfind("AI (", 0) == 0) active = "Anime4K - Active " + active.substr(3);
         else if (active == "Off") active = "Native - Off";
         else if (active.rfind("Off (", 0) == 0) {
@@ -541,6 +558,7 @@ std::vector<std::pair<std::string, std::string>> playback_stats(const Session &s
             if (!active.empty() && active.back() == ')') active.pop_back();
         }
         v.push_back({"Upscaling", active});
+        v.push_back({"GPU scratch", evo_agc_upscale_memory_status()});
     }
     if (audio_stream_index >= 0 && audio_stream_index < (int)play_fmt->nb_streams) {
         const AVCodecParameters *p = play_fmt->streams[audio_stream_index]->codecpar;
@@ -556,8 +574,8 @@ std::vector<std::pair<std::string, std::string>> playback_stats(const Session &s
             a += b;
         }
         v.push_back({T("Lyd"), a});
-        if (jelly5_bs_active())   /* the TV or receiver decodes it */
-            std::snprintf(b, sizeof b, T("HDMI-bitstr\xC3\xB8m (%s)"), jelly5_bs_name());
+        if (emby5_bs_active())   /* the TV or receiver decodes it */
+            std::snprintf(b, sizeof b, T("HDMI-bitstr\xC3\xB8m (%s)"), emby5_bs_name());
         else
             std::snprintf(b, sizeof b, T("PCM, %d kanaler"), p->ch_layout.nb_channels);
         v.push_back({T("Utgang"), b});
@@ -710,8 +728,11 @@ void open_source(Session &s, int index, double at)
     s.job.src.provider = "nuvio";
     s.job.at = at;
     s.open_started = now_s();
-    s_osd.begin(&s.req, s.open_started);
-    start_job(s.job);
+    s_osd.reopen(&s.req, s.open_started);
+    if (!start_job(s.job)) {
+        s.failed = true;
+        s.error = "Could not start playback. Press Circle to return.";
+    }
     evo_bt("nuvio: opening source %d at %.1f s", index, at);
 }
 
@@ -729,9 +750,18 @@ void apply(Session &s, const OsdCommand &c)
         if (s.res.state.empty())
             s.res.state = s.failed ? "error" : "stopped";
         break;
+    case OsdCmd::LiveGroup:
+    case OsdCmd::LiveChannel:
+        if(iptv_navigation::request_move(s.req.live_navigation_token,s.req.live_channel_id,
+             c.cmd==OsdCmd::LiveGroup?c.index:0,c.cmd==OsdCmd::LiveChannel?c.index:0)) {
+            s.done=true;s.res.state="stopped"; // normal teardown, including server stop report
+        }
+        break;
     case OsdCmd::PlayNext:
+        if (c.automatic && s_osd.block_autoplay(s.st)) return;
+        s.res.automatic_next = c.automatic;
         s.done = true;
-        s.res.state = "ended";
+        s.res.state = c.automatic ? "ended" : "stopped";
         s.res.action = "next";
         s.res.season = s.req.next.season;
         s.res.episode = s.req.next.episode;
@@ -748,7 +778,11 @@ void apply(Session &s, const OsdCommand &c)
             s.job.kind = 1;
             s.job.audio_stream = s.audio_streams[c.index];
             s.st.switching = true;
-            start_job(s.job);
+            if (!start_job(s.job)) {
+                s.st.switching = false;
+                s.failed = true;
+                s.error = "Could not start playback. Press Circle to return.";
+            }
         }
         break;
     case OsdCmd::SelectSubtitle:
@@ -846,8 +880,11 @@ static void reopen_at(Session &s, double at)
     s.job.at = at;
     s.open_started = now_s();
     s.wd_frames = -1;
-    s_osd.begin(&s.req, s.open_started);
-    start_job(s.job);
+    s_osd.reopen(&s.req, s.open_started);
+    if (!start_job(s.job)) {
+        s.failed = true;
+        s.error = "Could not start playback. Press Circle to return.";
+    }
 }
 
 static void reopen_software(Session &s, const char *why)
@@ -906,6 +943,12 @@ extern "C" void nuvio_player_run(const char *json)
     std::snprintf(nuvio_stream_user_agent, sizeof nuvio_stream_user_agent, "%s", s.req.user_agent.c_str());
 
     const bool headless = s_headless;
+    if (!headless) {
+        const int mode = settings::get().local.upscale_mode;
+        evo_agc_upscale_set_mode(mode == 0 ? EVO_AGC_UPSCALE_OFF : mode == 1 ? EVO_AGC_UPSCALE_AUTO
+                                  : mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+        evo_agc_upscale_begin_session();
+    }
     if (!headless)
         nuvio_input_open(s_user_id);
     nuvio_control_set_playing(1);
@@ -948,7 +991,10 @@ extern "C" void nuvio_player_run(const char *json)
     s.job.src.provider = "nuvio";   /* a network stream: no local resume file */
     s.job.at = s.req.start_position;
     evo_bt("nuvio: open '%s' at %.1f s", s.req.header_title().c_str(), s.req.start_position);
-    start_job(s.job);
+    if (!start_job(s.job)) {
+        s.failed = true;
+        s.error = "Could not start playback. Press Circle to return.";
+    }
 
     double last_report = 0, last_diag = 0, last_auto = 0;
     bool seen_active = false;
@@ -1015,6 +1061,7 @@ extern "C" void nuvio_player_run(const char *json)
         if (nuvio_control_take_stop() || nuvio_control_quit_requested()) {
             if (s.job.running && !s.opened) {
                 s.cancel = true;
+                s.job.cancel = true;
             } else {
                 s.done = true;
                 s.res.state = "stopped";
@@ -1030,7 +1077,15 @@ extern "C" void nuvio_player_run(const char *json)
             if (active)
                 seen_active = true;
             s.st.paused = s_pb->isPaused();
+            s.st.seeking = evo_demux_seek_busy() != 0;
             s.st.position = s_pb->getPositionSeconds();
+            // Some engines reset their clock when the last frame is released.
+            // Do not turn a completed movie into a resume point at zero.
+            if (s.st.position <= 0 && s.started && !s.st.seeking &&
+                (!active || evo_pb_is_eof()) && s.last_valid_position > 0)
+                s.st.position = s.last_valid_position;
+            if (std::isfinite(s.st.position) && s.st.position >= 0)
+                s.last_valid_position = s.st.position; // backward seeks remain valid
             s.st.duration = s_pb->getDurationSeconds();
             int vq = 0, aq = 0, ab = 0;
             evo_pb_queue_depth(&vq, &aq, &ab);
@@ -1102,7 +1157,7 @@ extern "C" void nuvio_player_run(const char *json)
                 s.drop_retries = 0;   /* playing well again */
             /* Broke off early (not near the end): the connection, not the end. */
             const bool early = s.st.duration > 60 && s.st.position < s.st.duration - 45;
-            if (!s.failed && s.started && early && s.retry_at == 0 &&
+            if (!s.failed && s.started && early && !s_osd.post_play_active() && s.retry_at == 0 &&
                 ((seen_active && !active) || (evo_pb_is_eof() && vq == 0 && now - s.last_frame_at > 1.5))) {
                 connection_dropped(s, now);
                 continue;
@@ -1119,17 +1174,26 @@ extern "C" void nuvio_player_run(const char *json)
             s.st.open_stage = s.req.str("opening", "Opening stream\xE2\x80\xA6");
             s.st.open_progress = 0;
         }
+        if (s.cancel && s.job.running) s.st.open_stage = "Cancelling...";
+        if (s.job.running && !s.opened && now >= s.job.deadline) {
+            s.job.cancel = true;
+            s.failed = true;
+            s.error = "Opening the stream timed out. Press Circle to return.";
+        }
         if (!s.started && !s.failed && s.opened && now - s.open_started > 30.0) {
             s.failed = true;
             s.error = s.req.str("did_not_start", "Playback did not start. The source may be too slow or unavailable.");
         }
         s.st.error = s.error;
+        emby5_playback_state(s.st.position, s.st.duration, s.st.paused || s.st.buffering ||
+                             s_osd.post_play_active(), s.st.started);
 
         s_osd.input(in, s.st, cmds);
         s_osd.tick(s.st, cmds);
         for (const OsdCommand &c : cmds) {
             if (c.cmd == OsdCmd::Stop && s.job.running && !s.opened) {
-                s.cancel = true;     /* the open finishes, then we leave */
+                s.cancel = true;
+                s.job.cancel = true; // interrupt blocked open/probe, then join it safely
                 continue;
             }
             apply(s, c);
@@ -1250,10 +1314,18 @@ extern "C" void nuvio_player_run(const char *json)
 
     /* ---- leave ---- */
     s_session++;
+    s.job.cancel = true;
     finish_job(s.job);
     s.res.position = s.started ? s_pb->getPositionSeconds() : s.req.start_position;
     s.res.duration = s_pb->getDurationSeconds();
     s.res.user_interacted = s_osd.had_user_input();
+    s.res.playback_started = s.started;
+    s.res.completed_episodes = s_osd.completed_episodes(s.res.automatic_next);
+    s.res.watched_seconds = s_osd.watched_seconds();
+    // The decoder may reset its position at EOS. Keep the last observed position,
+    // but do not take a maximum during ordinary seeks (rewinding is valid).
+    if (s.res.state == "ended" && s.res.position <= 0 && s.st.position > 0)
+        s.res.position = s.st.position;
     if (s.failed && s.res.error.empty())
         s.res.error = s.error;
     if (s.res.state.empty())
@@ -1272,6 +1344,7 @@ extern "C" void nuvio_player_run(const char *json)
            s.res.action.empty() ? "" : " -> ", s.res.action.c_str(), s.res.error.empty() ? "" : " - ",
            s.res.error.c_str());
     s_pb->stopPlayback();
+    if(!headless)evo_agc_upscale_end_session();
     screen = kScreenNone;
     nuvio_subs_close();
     if (!headless)
@@ -1282,7 +1355,7 @@ extern "C" void nuvio_player_run(const char *json)
         s_now_active = false;
     } else if (s.req.item_type == "audio") {
         /* Emby5: music stays in player mode from one track to the next - leaving it
-         * and coming back blanked the screen at every change. jelly5_playback calls
+         * and coming back blanked the screen at every change. emby5_playback calls
          * nuvio_player_leave when the queue is done. */
         s_left_in_player = true;
     } else {

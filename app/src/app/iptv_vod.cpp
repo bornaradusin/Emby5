@@ -1,5 +1,10 @@
 /* Disk-indexed Xtream and M3U VOD catalogue. SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/iptv_vod.h"
+#include "app/io_worker.h"
+#include "app/request_budget.h"
+#include "app/xtream_fetch.h"
+#include <stdexcept>
+#include <memory>
 #include "app/iptv_m3u.h"
 #include "jf/jf_http.h"
 #include "evo_data_path.h"
@@ -21,14 +26,17 @@ extern "C" {
 namespace iptv_vod {
 namespace {
 struct Ref { uint64_t offset; std::string name; };
-struct Index { std::vector<std::string> order; std::unordered_map<std::string,std::vector<Ref>> by_group; size_t count=0; };
+struct Index { std::vector<std::string> order; std::unordered_map<std::string,std::vector<Ref>> by_group; size_t count=0; std::string path; iptv_catalogue::Scan scan; };
 std::mutex mu;
 Snapshot status;
-Index movies,shows;
+std::shared_ptr<Index> movies=std::make_shared<Index>(),shows=std::make_shared<Index>();
 std::vector<Item> m3u_movies;
-std::string identity,filepath;
+std::string identity;
+bool refreshing=false;
 std::chrono::steady_clock::time_point last{};
 int interval_hours=-1;
+uint64_t epoch=0;
+bool cache_loaded=false;
 std::string lower(std::string s) { for(char &c:s)c=(char)std::tolower((unsigned char)c);return s; }
 std::string value(const cJSON *j,const char *name) {
     const cJSON *v=cJSON_GetObjectItemCaseSensitive(j,name);
@@ -55,6 +63,10 @@ std::string cache_file(const std::string &key) {
     char name[64];std::snprintf(name,sizeof name,"emby5/vod-catalog-%016llx.ndjson",(unsigned long long)h);
     return evo_data_path(name);
 }
+std::string section_file(const std::string &key,bool series) {
+    const auto base=cache_file(key);
+    return base.substr(0,base.size()-7)+(series?"-series.ndjson":"-movies.ndjson");
+}
 int interval_impl() {
     if(interval_hours>=0)return interval_hours;
     interval_hours=24;
@@ -68,44 +80,91 @@ bool json(const std::string &url,cJSON **out) {
     if(!r.ok()||r.body.size()>(32u<<20))return false;
     *out=cJSON_Parse(r.body.c_str());return *out!=nullptr;
 }
-// Each line is an independent JSON object; no monolithic JSON parse or file-size ceiling.
-bool write_item(FILE *f,const Item &v,Index &m,Index &s) {
-    if(!f||v.id.empty()||v.name.empty())return false;
-    cJSON *obj=cJSON_CreateObject();if(!obj)return false;
-    cJSON_AddStringToObject(obj,"id",v.id.c_str());cJSON_AddStringToObject(obj,"name",v.name.c_str());
-    cJSON_AddStringToObject(obj,"poster",v.poster.c_str());cJSON_AddStringToObject(obj,"group",v.group.c_str());
-    cJSON_AddStringToObject(obj,"extension",v.extension.c_str());cJSON_AddStringToObject(obj,"source",v.source.c_str());
-    cJSON_AddBoolToObject(obj,"series",v.series);
-    // M3U URLs can contain credentials/tokens. Do not persist them.
-    if(v.source=="M3U") {cJSON_Delete(obj);return false;}
-    char *line=cJSON_PrintUnformatted(obj);cJSON_Delete(obj);if(!line)return false;
+// Each NDJSON record is independently readable. New files end with refresh
+// metadata, in the SAME atomic rename as the data and its newly built index.
+bool write_json_line(FILE *f,const cJSON *obj) {
+    char *line=cJSON_PrintUnformatted(obj);if(!line)return false;
+    const bool ok=std::fputs(line,f)>=0 && std::fputc('\n',f)!=EOF;
+    std::free(line);return ok;
+}
+bool write_item(FILE *f,const Item &v,Index &index) {
+    if(!f||v.id.empty()||v.name.empty()||v.source=="M3U")return false;
+    iptv_catalogue::Json obj(cJSON_CreateObject(),cJSON_Delete);if(!obj)return false;
+    cJSON_AddStringToObject(obj.get(),"id",v.id.c_str());cJSON_AddStringToObject(obj.get(),"name",v.name.c_str());
+    cJSON_AddStringToObject(obj.get(),"poster",v.poster.c_str());cJSON_AddStringToObject(obj.get(),"group",v.group.c_str());
+    cJSON_AddStringToObject(obj.get(),"categoryId",v.category_id.c_str());
+    cJSON_AddStringToObject(obj.get(),"extension",v.extension.c_str());cJSON_AddStringToObject(obj.get(),"source",v.source.c_str());
+    cJSON_AddBoolToObject(obj.get(),"series",v.series);
     const long pos=std::ftell(f);
-    bool ok=pos>=0 && std::fputs(line,f)>=0 && std::fputc('\n',f)!=EOF;
-    std::free(line);
-    if(ok){auto &index=v.series?s:m;auto &refs=index.by_group[v.group];
-        if(refs.empty())index.order.push_back(v.group);
-        refs.push_back({(uint64_t)pos,lower(v.name)});++index.count;}
-    return ok;
-}
-bool read_item(FILE *f,Item &v) {
-    std::string line;char part[4096];
-    while(std::fgets(part,sizeof part,f)){line+=part;if(!line.empty()&&line.back()=='\n')break;if(line.size()>1048576)return false;}
-    if(line.empty())return false;
-    cJSON *obj=cJSON_Parse(line.c_str());if(!obj)return false;
-    v.id=value(obj,"id");v.name=value(obj,"name");v.poster=value(obj,"poster");v.group=value(obj,"group");
-    v.extension=value(obj,"extension");v.source=value(obj,"source");
-    v.series=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(obj,"series"));
-    cJSON_Delete(obj);return !v.id.empty()&&!v.name.empty();
-}
-void load_cache(const std::string &path,Index &m,Index &s) {
-    FILE *f=std::fopen(path.c_str(),"rb");if(!f)return;
-    for(;;){const long pos=std::ftell(f);if(pos<0)break;Item v;
-        if(!read_item(f,v))break;
-        auto &index=v.series?s:m;auto &refs=index.by_group[v.group];
-        if(refs.empty())index.order.push_back(v.group);
+    const bool ok=pos>=0&&write_json_line(f,obj.get());
+    if(ok) {
+        auto &refs=index.by_group[v.group];if(refs.empty())index.order.push_back(v.group);
         refs.push_back({(uint64_t)pos,lower(v.name)});++index.count;
     }
-    std::fclose(f);
+    return ok;
+}
+struct Record { iptv_catalogue::Json json{nullptr,cJSON_Delete};bool eof=false; };
+Record read_record(FILE *f) {
+    std::string line;char part[4096];
+    while(std::fgets(part,sizeof part,f)) {
+        line+=part;
+        if(line.size()>(4u<<20))return {};
+        if(!line.empty()&&line.back()=='\n')break;
+    }
+    if(line.empty()) {Record r;r.eof=std::feof(f)!=0;return r;}
+    Record r;r.json.reset(cJSON_ParseWithOpts(line.c_str(),nullptr,1));return r;
+}
+bool parse_item(const cJSON *obj,Item &v) {
+    v.id=value(obj,"id");v.name=value(obj,"name");v.poster=value(obj,"poster");v.group=value(obj,"group");
+    v.extension=value(obj,"extension");v.source=value(obj,"source");v.category_id=value(obj,"categoryId");
+    v.series=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(obj,"series"));
+    return !v.id.empty()&&!v.name.empty();
+}
+bool read_item(FILE *f,Item &v) {auto r=read_record(f);return r.json&&parse_item(r.json.get(),v);}
+void add_ref(Index &index,const Item &v,long pos) {
+    auto &refs=index.by_group[v.group];if(refs.empty())index.order.push_back(v.group);
+    refs.push_back({(uint64_t)pos,lower(v.name)});++index.count;
+}
+bool load_cache(const std::string &path,Index &index,bool series) {
+    std::unique_ptr<FILE,decltype(&std::fclose)> f(std::fopen(path.c_str(),"rb"),&std::fclose);if(!f)return false;
+    Index fresh;fresh.path=path;bool metadata=false;
+    for(;;) {
+        const long pos=std::ftell(f.get());if(pos<0)return false;
+        auto r=read_record(f.get());if(r.eof)break;if(!r.json)return false;
+        if(const auto *scan=cJSON_GetObjectItemCaseSensitive(r.json.get(),"_emby5_catalogue")) {
+            fresh.scan=iptv_catalogue::read_scan(scan);metadata=true;continue;
+        }
+        Item v;if(metadata||!parse_item(r.json.get(),v)||v.series!=series||v.source!="Xtream")return false;
+        add_ref(fresh,v,pos);
+    }
+    if(!metadata)return false;
+    index=std::move(fresh);return true;
+}
+void load_legacy(const std::string &path,Index &m,Index &s) {
+    std::unique_ptr<FILE,decltype(&std::fclose)> f(std::fopen(path.c_str(),"rb"),&std::fclose);if(!f)return;
+    m.path=s.path=path;
+    for(;;) {
+        const long pos=std::ftell(f.get());if(pos<0)break;auto r=read_record(f.get());
+        if(r.eof)break;
+        Item v;if(!r.json||!parse_item(r.json.get(),v)){m=Index{};s=Index{};return;}
+        if(v.source=="Xtream")add_ref(v.series?s:m,v,pos);
+    }
+    m.scan.error=s.scan.error="Cached catalogue requires refresh";
+}
+void update_status(bool changed=true) { // caller holds mu
+    status.m3u_count=m3u_movies.size();
+    status.movie_count=movies->count+status.m3u_count;status.show_count=shows->count;
+    status.loading=refreshing;
+    status.categories_done=status.movies.done+status.shows.done;
+    status.categories_total=status.movies.total+status.shows.total;
+    status.error.clear();
+    for(const auto &pair:{std::make_pair("Movies",&status.movies),std::make_pair("TV shows",&status.shows),std::make_pair("M3U",&status.playlist)}) {
+        if(pair.second->configured&&!pair.second->error.empty()) {
+            if(!status.error.empty())status.error+="; ";
+            status.error+=std::string(pair.first)+": "+pair.second->error;
+        }
+    }
+    if(changed)++status.generation;
 }
 std::string ext_of(const std::string &url) {
     const size_t end=url.find('?'),dot=url.rfind('.',end);
@@ -116,7 +175,7 @@ std::string ext_of(const std::string &url) {
 Snapshot snapshot() {std::lock_guard<std::mutex> g(mu);return status;}
 std::vector<Group> groups(bool series,const std::string &search) {
     std::lock_guard<std::mutex> g(mu);
-    const Index &idx=series?shows:movies;std::vector<Group> result;std::string needle=lower(search);
+    const Index &idx=*(series?shows:movies);std::vector<Group> result;std::string needle=lower(search);
     for(const auto &name:idx.order) {
         auto it=idx.by_group.find(name);if(it==idx.by_group.end())continue;
         size_t count=0;
@@ -134,9 +193,9 @@ std::vector<Group> groups(bool series,const std::string &search) {
 std::vector<Item> page(bool series,const std::string &group,size_t first,size_t limit,const std::string &search) {
     std::lock_guard<std::mutex> g(mu);
     std::vector<Item> result;if(limit==0||limit>32)limit=32;
-    const Index &idx=series?shows:movies;
+    const Index &idx=*(series?shows:movies);
     auto it=idx.by_group.find(group);
-    FILE *f=std::fopen(filepath.c_str(),"rb");
+    FILE *f=std::fopen(idx.path.c_str(),"rb");
     const auto needle=lower(search);size_t match=0;
     iptv_xtream::Credentials creds;const bool has_creds=limit==1&&iptv_xtream::load_credentials(&creds);
     if(it!=idx.by_group.end())for(const auto &ref:it->second) {
@@ -165,147 +224,195 @@ void set_refresh_interval_hours(int hours){
     FILE *f=std::fopen(evo_data_path("emby5/vod-refresh-hours.txt"),"wb");
     if(f){std::fprintf(f,"%d\n",hours);std::fclose(f);}
 }
-void refresh(bool force){
+void refresh(bool force,bool retry_failed){
     iptv_xtream::Credentials c;const bool xtream=iptv_xtream::load_credentials(&c);
     const std::string m3u=iptv_m3u::playlist_url();
     const std::string key=(xtream?c.server+"|"+c.username+"|"+c.password:"")+"|"+m3u;
+    uint64_t ticket;bool need_cache;
     {
         std::lock_guard<std::mutex> g(mu);
-        if(identity!=key){identity=key;filepath=cache_file(key);movies=Index{};shows=Index{};m3u_movies.clear();
-            // Index loading happens off the UI thread below; do not deserialize 223k titles on Home.
-            status=Snapshot{};++status.generation;last={};
+        if(identity!=key){
+            identity=key;movies=std::make_shared<Index>();shows=std::make_shared<Index>();m3u_movies.clear();
+            const auto generation=status.generation+1;
+            status=Snapshot{};status.generation=generation;++epoch;last={};cache_loaded=false;refreshing=false;
         }
-        if(status.loading)return;
-        if(!force){const int hours=interval_impl();
-            if(hours==0&&(status.movie_count||status.show_count))return;
-            if(last.time_since_epoch().count()&&std::chrono::steady_clock::now()-last<std::chrono::minutes(5))return;
+        if(refreshing)return;
+        if(!force&&last.time_since_epoch().count()) {
+            // Partial catalogues retry the missing sections after a short cooldown,
+            // not a full download every Settings/Home frame or a 24-hour wait.
+            const auto wait=status.error.empty()?std::chrono::seconds(300):std::chrono::seconds(60);
+            if(std::chrono::steady_clock::now()-last<wait)return;
+            if(interval_impl()==0&&cache_loaded)return;
         }
-        status.loading=true;last=std::chrono::steady_clock::now();++status.generation;
+        refreshing=true;status.loading=true;
+        status.movies.configured=xtream;status.shows.configured=xtream;status.playlist.configured=!m3u.empty();
+        status.movies.loading=xtream;status.shows.loading=xtream;status.playlist.loading=!m3u.empty();
+        ticket=++epoch;need_cache=!cache_loaded;++status.generation;
     }
-    std::thread([key,c,xtream,m3u,force] {
-        const std::string path=cache_file(key);
-        Index cached_m,cached_s;load_cache(path,cached_m,cached_s);
+    auto fail=[ticket] {
+        std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+        for(auto *s:{&status.movies,&status.shows,&status.playlist})if(s->loading) {
+            s->loading=false;s->error="Catalogue worker failed";s->cached=true;
+        }
+        refreshing=false;last=std::chrono::steady_clock::now();update_status();
+    };
+    const bool started=emby5::spawn_io([key,c,xtream,m3u,force,retry_failed,ticket,need_cache] {
+        auto cancelled=[ticket] {std::lock_guard<std::mutex> g(mu);return epoch!=ticket;};
+        if(need_cache) {
+            auto cm=std::make_shared<Index>(),cs=std::make_shared<Index>();
+            const bool have_m=load_cache(section_file(key,false),*cm,false);
+            const bool have_s=load_cache(section_file(key,true),*cs,true);
+            // Read the existing v1.2.3/v1.2.4 mixed cache without changing it.
+            if(!have_m||!have_s) {
+                Index lm,ls;load_legacy(cache_file(key),lm,ls);
+                if(!have_m)*cm=std::move(lm);
+                if(!have_s)*cs=std::move(ls);
+            }
+            std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+            movies=std::move(cm);shows=std::move(cs);cache_loaded=true;
+            if(xtream) {
+                status.movies=iptv_catalogue::result_state(movies->scan,true);status.movies.loading=true;
+                status.shows=iptv_catalogue::result_state(shows->scan,true);status.shows.loading=true;
+            }
+            update_status();
+        }
+        if(cancelled())return;
+        bool targeted_retry=false;
         {
-            std::lock_guard<std::mutex> g(mu);
-            if(identity!=key)return;
-            movies=std::move(cached_m);shows=std::move(cached_s);
-            status.movie_count=movies.count;status.show_count=shows.count;++status.generation;
+            std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+            targeted_retry=retry_failed&&(!status.movies.error.empty()||!status.shows.error.empty()||!status.playlist.error.empty());
         }
-        struct stat st{};bool fresh=false;
-        if(!force&&stat(path.c_str(),&st)==0){const time_t now=std::time(nullptr);
-            int hours=24;{std::lock_guard<std::mutex> g(mu);hours=interval_impl();}
-            fresh=(hours==0||(now>=st.st_mtime&&now-st.st_mtime<(time_t)hours*3600));
-        }
-        if(!m3u.empty()){
-            iptv_xtream::Catalog catalog;std::string err;std::vector<Item> discovered;
-            if(iptv_m3u::load_catalog(m3u,&catalog,&err))for(const auto &ch:catalog.channels){
-                const auto ext=ext_of(ch.extension);
-                if(ext!="mp4"&&ext!="mkv"&&ext!="avi"&&ext!="mov"&&ext!="webm")continue;
-                Item v;v.name=ch.name;v.id=ch.id;v.url=ch.extension;v.poster=ch.logo;
-                v.group=ch.category_id;v.extension=ext;v.source="M3U";
-                discovered.push_back(std::move(v));
-            }
-            std::lock_guard<std::mutex> g(mu);
-            if(identity==key){m3u_movies=std::move(discovered);status.movie_count=movies.count+m3u_movies.size();++status.generation;}
-        }
-        if(!fresh){
-            evo_mkdir(evo_data_dir());evo_mkdir(evo_data_path("emby5"));
-            const std::string tmp=path+".next";FILE *f=std::fopen(tmp.c_str(),"wb");
-            if(f){Index nm,ns;size_t loaded=0;
-                bool publishing=false;
-                // Expose a flushed, readable partial catalogue while discovery runs.
-                // Readers use filepath under mu, so a batch is never shown before flush.
-                auto publish=[&]() {
-                    if (!loaded || std::fflush(f)!=0) return;
-                    std::lock_guard<std::mutex> g(mu);
-                    if (identity!=key) return;
-                    if (!publishing) {
-                        movies=Index{};shows=Index{};
-                        filepath=tmp;
-                        publishing=true;
-                    }
-                    for (const auto &name:nm.order) {
-                        auto &dst=movies.by_group[name];
-                        if (dst.empty())movies.order.push_back(name);
-                        auto &src=nm.by_group[name];
-                        dst.insert(dst.end(),std::make_move_iterator(src.begin()),std::make_move_iterator(src.end()));
-                    }
-                    for (const auto &name:ns.order) {
-                        auto &dst=shows.by_group[name];
-                        if (dst.empty())shows.order.push_back(name);
-                        auto &src=ns.by_group[name];
-                        dst.insert(dst.end(),std::make_move_iterator(src.begin()),std::make_move_iterator(src.end()));
-                    }
-                    movies.count+=nm.count;shows.count+=ns.count;
-                    nm=Index{};ns=Index{};
-                    status.movie_count=movies.count+m3u_movies.size();
-                    status.show_count=shows.count;
-                    ++status.generation;
-                };
-                if(xtream)for(int kind=0;kind<2;++kind){
-                    const std::string prefix=kind?"series":"vod",action=kind?"get_series":"get_vod_streams";
-                    std::unordered_map<std::string,std::string> labels;std::vector<std::string> ids;
-                    cJSON *cats=nullptr;
-                    if(json(iptv_xtream::api_url(c,"get_"+prefix+"_categories"),&cats)){
-                        const cJSON *v;cJSON_ArrayForEach(v,cats){const auto id=value(v,"category_id");
-                            if(!id.empty()&&labels.emplace(id,value(v,"category_name")).second)ids.push_back(id);}
-                    }cJSON_Delete(cats);
-                    std::unordered_set<std::string> seen;
-                    auto collect=[&](const cJSON *array){const cJSON *v;cJSON_ArrayForEach(v,array){
-                        Item item;item.series=kind!=0;item.id=value(v,kind?"series_id":"stream_id");
-                        item.name=value(v,"name");item.poster=value(v,kind?"cover":"stream_icon");
-                        item.extension=value(v,"container_extension");item.group=labels[value(v,"category_id")];
-                        if(item.group.empty())item.group=kind?"TV Shows":"Movies";
+        // Use independent workers/files/deadlines. A failed/slow series API cannot
+        // discard valid movies, hold up Live TV, or invalidate the other index.
+        auto section=[&](bool series) {
+            try {
+                std::shared_ptr<const Index> old;int hours;bool skip=false,failed_before=false;
+                {
+                    std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                    old=series?shows:movies;hours=interval_impl();
+                    const auto &state=series?status.shows:status.movies;
+                    failed_before=!state.error.empty();
+                    skip=targeted_retry&&state.error.empty()&&old->scan.complete;
+                }
+                struct stat st{};
+                if(!force && !old->path.empty() && stat(old->path.c_str(),&st)==0) {
+                    const auto now=std::time(nullptr);
+                    skip=(hours==0 || (old->scan.complete&&!failed_before&&now>=st.st_mtime&&now-st.st_mtime<(time_t)hours*3600));
+                }
+                if(skip) {
+                    std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                    auto &s=series?status.shows:status.movies;s.loading=false;s.cached=true;update_status();return;
+                }
+                emby5::RequestBudget budget(300,cancelled);
+                evo_mkdir(evo_data_dir());evo_mkdir(evo_data_path("emby5"));
+                const auto path=section_file(key,series),tmp=path+".next-"+std::to_string(ticket);
+                struct TempFile {
+                    std::string path;FILE *f;
+                    ~TempFile(){if(f)std::fclose(f);std::remove(path.c_str());}
+                } file{tmp,std::fopen(tmp.c_str(),"wb")};
+                if(!file.f)throw std::runtime_error("cache write");
+                auto next=std::make_shared<Index>();next->path=path;
+                std::unordered_set<std::string> seen;
+                auto collect=[&](const cJSON *array,const std::string &category,const std::vector<iptv_catalogue::Category> &categories) {
+                    std::unordered_map<std::string,std::string> labels;
+                    for(const auto &cat:categories)labels[cat.id]=cat.name;
+                    const cJSON *v;
+                    cJSON_ArrayForEach(v,array) {
+                        Item item;item.series=series;item.id=value(v,series?"series_id":"stream_id");
+                        item.name=value(v,"name");item.poster=value(v,series?"cover":"stream_icon");
+                        item.extension=value(v,"container_extension");item.category_id=value(v,"category_id");
+                        if(item.category_id.empty())item.category_id=category;
+                        item.group=labels[item.category_id];if(item.group.empty())item.group=series?"TV Shows":"Movies";
                         item.source="Xtream";
-                        if(item.id.empty()||item.name.empty()||!seen.insert(item.id).second)continue;
-                        if(write_item(f,item,nm,ns)) {
-                            ++loaded;
-                            if (loaded%256==0) publish();
-                        }
-                    }};
-                    cJSON *all=nullptr;
-                    const bool ok=json(iptv_xtream::api_url(c,action),&all)&&cJSON_IsArray(all)&&cJSON_GetArraySize(all)>0;
-                    if(ok)collect(all);cJSON_Delete(all);
-                    if(!ok)for(const auto &id:ids){cJSON *part=nullptr;
-                        if(json(iptv_xtream::api_url(c,action)+"&category_id="+encode(id),&part)&&cJSON_IsArray(part))collect(part);
-                        cJSON_Delete(part);
+                        if(seen.insert(item.id).second&&!write_item(file.f,item,*next))throw std::runtime_error("cache write");
+                    }
+                };
+                auto progress=[&](const iptv_catalogue::Scan &scan) {
+                    std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                    auto &s=series?status.shows:status.movies;
+                    s.done=scan.done;s.total=scan.total;s.failed=scan.failed.size();update_status(false);
+                };
+                const bool retry=retry_failed||(!force&&!old->scan.complete);
+                next->scan=iptv_catalogue::fetch(c,series?"get_series_categories":"get_vod_categories",
+                    series?"get_series":"get_vod_streams",series?"series_id":"stream_id",budget,collect,false,
+                    retry?&old->scan:nullptr,progress);
+                if(cancelled())return;
+                bool retained=false;
+                if(!next->scan.whole&&(!next->scan.complete||next->scan.incremental)&&!old->path.empty()) {
+                    std::unique_ptr<FILE,decltype(&std::fclose)> f(std::fopen(old->path.c_str(),"rb"),&std::fclose);
+                    if(!f&&old->count)throw std::runtime_error("cache read");
+                    if(f)for(;;) {
+                        const auto record=read_record(f.get());
+                        if(record.eof)break;
+                        if(!record.json)throw std::runtime_error("cache read");
+                        if(cJSON_GetObjectItemCaseSensitive(record.json.get(),"_emby5_catalogue"))continue;
+                        Item item;if(!parse_item(record.json.get(),item))throw std::runtime_error("cache read");
+                        if(item.series!=series||item.source!="Xtream"||seen.count(item.id))continue;
+                        // Stable IDs are stored in new caches. Legacy label-only
+                        // rows are replaced on full success; a partial refresh
+                        // conservatively keeps them rather than guessing identity.
+                        if(!item.category_id.empty()&&next->scan.completed.count(item.category_id))continue;
+                        if(next->scan.complete&&item.category_id.empty())continue;
+                        if(cancelled())return;
+                        if(!write_item(file.f,item,*next))throw std::runtime_error("cache write");
+                        seen.insert(item.id);retained=true;
                     }
                 }
-                publish();
-                // M3U VOD URLs are not stored on disk (they may embed access tokens).
-                // They remain a live-source-only catalogue until a safe credential store is available.
-                const bool flushed=std::fflush(f)==0;
-                const bool closed=std::fclose(f)==0;const bool saved=flushed&&closed;
-                if(saved&&loaded>0){
-                    std::lock_guard<std::mutex> g(mu);
-                    if (identity==key) {
-                        // A rename cannot race an in-flight page read: page() takes mu.
-                        if (std::rename(tmp.c_str(),path.c_str())==0) {
-                            filepath=path;
-                            ++status.generation;
-                        }
-                    }
-                } else {
-                    // An incomplete refresh must not replace the last valid catalogue.
-                    Index oldm,olds;
-                    load_cache(path,oldm,olds);
-                    std::lock_guard<std::mutex> g(mu);
-                    if(identity==key){movies=std::move(oldm);shows=std::move(olds);
-                        filepath=path;status.movie_count=movies.count+m3u_movies.size();
-                        status.show_count=shows.count;++status.generation;}
-                    std::remove(tmp.c_str());
-                }
+                auto metadata=iptv_catalogue::Json(cJSON_CreateObject(),cJSON_Delete);
+                if(!metadata)throw std::runtime_error("cache metadata");
+                cJSON_AddItemToObject(metadata.get(),"_emby5_catalogue",iptv_catalogue::scan_json(next->scan));
+                if(!write_json_line(file.f,metadata.get()))throw std::runtime_error("cache metadata");
+                bool saved=std::fflush(file.f)==0;saved=(std::fclose(file.f)==0)&&saved;file.f=nullptr;
+                if(!saved)throw std::runtime_error("cache flush");
+                std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                if(std::rename(tmp.c_str(),path.c_str())!=0)throw std::runtime_error("cache publish");
+                (series?shows:movies)=std::move(next);
+                auto &s=series?status.shows:status.movies;
+                s=iptv_catalogue::result_state((series?shows:movies)->scan,retained);
+                update_status();
+            } catch(...) {
+                std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                auto &s=series?status.shows:status.movies;
+                s.loading=false;s.cached=(series?shows:movies)->count!=0;
+                s.error="Catalogue cache/worker failed; previous titles kept";update_status();
             }
-        }
-        std::lock_guard<std::mutex> g(mu);
-        if(identity==key){status.loading=false;++status.generation;}
-    }).detach();
+        };
+        auto playlist=[&] {
+            try {
+                iptv_xtream::Catalog cat;std::string error;std::vector<Item> discovered;
+                const bool ok=iptv_m3u::load_catalog(m3u,&cat,&error);
+                if(ok)for(const auto &ch:cat.channels) {
+                    const auto ext=ext_of(ch.extension);
+                    if(ext!="mp4"&&ext!="mkv"&&ext!="avi"&&ext!="mov"&&ext!="webm")continue;
+                    Item v;v.name=ch.name;v.id=ch.id;v.url=ch.extension;v.poster=ch.logo;
+                    v.group=ch.category_id;v.extension=ext;v.source="M3U";discovered.push_back(std::move(v));
+                }
+                std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                if(ok)m3u_movies=std::move(discovered);
+                status.playlist.loading=false;status.playlist.cached=!ok&&!m3u_movies.empty();
+                status.playlist.error=ok?"":"M3U refresh failed";update_status();
+            } catch(...) {
+                std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                status.playlist.loading=false;status.playlist.error="M3U refresh failed";update_status();
+            }
+        };
+        std::vector<std::function<void()>> jobs;
+        if(xtream){jobs.push_back([&]{section(false);});jobs.push_back([&]{section(true);});}
+        if(!m3u.empty())jobs.push_back(playlist);
+        emby5::run_io_jobs(jobs);
+        std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+        refreshing=false;status.movies.loading=status.shows.loading=status.playlist.loading=false;
+        last=std::chrono::steady_clock::now();update_status();
+    },fail);
+    if(!started)fail();
 }
-std::vector<Episode> episodes(const Item &series){
+std::vector<Episode> episodes(const Item &series,std::string *error){
+    if(error)error->clear();
     std::vector<Episode> result;if(!series.series||series.source!="Xtream")return result;
     iptv_xtream::Credentials c;if(!iptv_xtream::load_credentials(&c))return result;
     cJSON *doc=nullptr;
-    if(!json(iptv_xtream::api_url(c,"get_series_info")+"&series_id="+encode(series.id),&doc))return result;
+    if(!json(iptv_xtream::api_url(c,"get_series_info")+"&series_id="+encode(series.id),&doc)){
+        if(error)*error="Could not load episodes. Press Circle to return and retry.";return result;}
     const cJSON *seasons=cJSON_GetObjectItemCaseSensitive(doc,"episodes");
     if(cJSON_IsObject(seasons))for(const cJSON *season=seasons->child;season;season=season->next){
         const int n=season->string?std::atoi(season->string):0;const cJSON *ep;

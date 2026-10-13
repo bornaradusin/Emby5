@@ -50,6 +50,19 @@ void evo_stream_io_set_deadline(evo_stream_io_ctx_t *io_ctx, double seconds);
 /* Fail every blocking I/O call on this context from now on (stop/quit). */
 void evo_stream_io_abort(evo_stream_io_ctx_t *ctx);
 
+/* Installed by the current opening thread; copied into its stream context.
+ * The opaque object must live until that stream is closed. Other threads are
+ * unaffected. The callback becomes inert once the opening job is done. */
+void evo_stream_io_set_open_interrupt(int (*callback)(void *), void *opaque);
+/* Current opening job cancellation/overall timeout. Does NOT include a short
+ * probe deadline, which can legitimately allow playback from parsed headers. */
+int evo_stream_io_open_cancelled(void);
+int evo_stream_io_is_aborted(evo_stream_io_ctx_t *ctx);
+
+/* Probe with a separate short deadline. A user cancel/overall opening timeout
+ * remains AVERROR_EXIT even if FFmpeg returns partial stream headers as success. */
+int evo_stream_io_probe(evo_stream_io_ctx_t *ctx, AVFormatContext *fmt, double seconds);
+
 /**
  * Non-zero once an armed deadline has passed - i.e. the last libavformat call
  * returned because it was interrupted rather than because it finished.

@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-namespace jelly5 {
+namespace emby5 {
 
 /* Runs f on a detached thread. false when the system refused one: nothing ran,
  * so the caller undoes what it set up for it (a "loading" flag, say). */
@@ -44,4 +44,4 @@ inline void run_all(const std::vector<std::function<void()>> &jobs)
         t.join();
 }
 
-} // namespace jelly5
+} // namespace emby5

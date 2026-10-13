@@ -22,7 +22,10 @@ class Album : public Screen {
 public:
     Album(jf::Client &client, const jf::Item &album);
 
+    ~Album() override;
     void activate() override;
+    bool needs_redraw() const override;
+    void refresh_user_data() override { activate(); }
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }
@@ -30,11 +33,14 @@ public:
     float enter() const override { return m_enter.value; }
 
 private:
+    friend struct MusicRegressionAccess;
     struct Data {
         std::mutex lock;
         jf::Item album;
         std::vector<jf::Item> tracks;
-        bool loaded = false;
+        bool loaded = false, alive = true;
+        unsigned generation = 0;
+        uint64_t revision = 1;
     };
 
     jf::Client &m_client;
@@ -42,6 +48,7 @@ private:
     jf::Item m_album;
     std::vector<jf::Item> m_tracks;     /* this frame's copy */
     bool m_loaded = false;
+    uint64_t m_seen_revision = 0;
 
     enum Button { PlayAll, Shuffle, Mix, Artist };
     std::vector<Button> buttons() const;

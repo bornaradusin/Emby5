@@ -44,6 +44,8 @@ void start(jf::Client *client, std::function<bool()> alive);
 
 /* Queues a command as if a phone had sent it (the app's own music controls). */
 void send(const Command &c);
+/* UserDataChanged is kept separate from playback commands; coalesced by the UI. */
+bool take_user_data_changed();
 /* The next command, if any (any thread). */
 bool take(Command *out);
 /* Puts a command back at the front (the player stops for a new Play, which

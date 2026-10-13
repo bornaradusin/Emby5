@@ -4,6 +4,7 @@
  */
 #include "ui/profiles.h"
 #include "app/i18n.h"
+#include "jf/jf_client.h"
 
 #include "gfx/art.h"
 #include "nuvio_input.h"
@@ -56,6 +57,8 @@ void Profiles::activate()
             s.key = s.accounts.front().server;
         if (s.label.empty())
             s.label = host_of(s.accounts.front().server);
+        s.key = s.accounts.front().server_type + ":" + s.key;
+        s.label += std::string(" - ") + jf::server_kind_name(jf::server_kind_from_id(s.accounts.front().server_type));
     }
     /* Two servers with one name: their addresses tell them apart (counted before any is renamed). */
     const std::vector<std::string> names = labels();
@@ -213,9 +216,11 @@ void Profiles::draw(double, float dt)
             name = a.user_name;
             gfx::fill_vgradient(r, 0xffaa5cc3u, 0xff00a4dcu, dd / 2);
             gfx::text(r.x + dd / 2, r.y + dd / 2 + 32, name.substr(0, 1), {gfx::Bold, 90}, kText, 1);
-            if (!a.image_tag.empty())
-                art::draw(r, a.server + "/Users/" + a.user_id + "/Images/Primary?tag=" + a.image_tag + "&fillWidth=440",
-                          "", 440, 440, dd / 2, 1.f, 0);   /* over the initial until it loads */
+            if (!a.image_tag.empty()) {
+                const jf::Client endpoint(a.server, "", "", jf::server_kind_from_id(a.server_type));
+                art::draw(r, endpoint.user_image_url(a.user_id, a.image_tag, 440),
+                          "", 440, 440, dd / 2, 1.f, 0);
+            }   /* over the initial until it loads */
         } else {
             name = T("Legg til");
             glass_panel(r, dd / 2, 1.f, false);

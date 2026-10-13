@@ -2,8 +2,8 @@
  * Emby5 — Emby for PS5
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Finding Emby servers on the local network, as Emby's own apps do: a
- * UDP broadcast of "who is EmbyServer?" to port 7359, which every server
+ * Finding Emby and Jellyfin servers on the local network using both protocol
+ * UDP discovery questions on port 7359. A reachable server
  * answers with its name, id and address.
  */
 #pragma once

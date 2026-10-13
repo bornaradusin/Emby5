@@ -18,12 +18,13 @@ struct Account {
     std::string server, server_name;
     std::string user_id, user_name, image_tag;
     std::string token;
-    std::string server_id;   /* Emby's server Id: one server reached at two addresses is one */
+    std::string server_id;   /* public server Id */
+    std::string server_type = "emby"; /* old account files default to Emby */
 };
 
 /* Whether two accounts are on the same server. With both Ids known, the Ids
- * decide (an address can be handed to another server). Else the same address,
- * or the same user: Emby's user ids are unique per server. */
+ * decide (an address can be handed to another server). Otherwise compare the
+ * address. User IDs alone never identify a server; providers must match. */
 bool same_server(const Account &a, const Account &b);
 /* Whether an account is saved at this address (the one "Hvem ser på?" shows it at). */
 bool saved_at(const std::string &address);
