@@ -7,6 +7,8 @@
 #include "ui/settings_layout.h"
 #include "app/io_worker.h"
 #include "app/iptv_live.h"
+#include <unordered_map>
+#include <unordered_set>
 #include "app/iptv_vod.h"
 #include "app/iptv_m3u.h"
 #include "ui/theme_presets.h"
@@ -543,35 +545,61 @@ void SettingsScreen::iptv_edit(Row r)
     });
 }
 
-void SettingsScreen::iptv_open_categories()
-{
-    m_iptv_store.load(m_iptv_creds.server + "|" + m_iptv_creds.username);
-    m_iptv_page = IPTVCategoryList;
-    m_iptv_category = 0;
-    m_iptv_channel = 0;
-    m_iptv_search.clear();
-    m_iptv_catalog = std::make_shared<IPTVCatalogState>();
+void SettingsScreen::iptv_open_categories() {
+    m_iptv_store.load(m_iptv_creds.server+"|"+m_iptv_creds.username);
+    m_iptv_page=IPTVCategoryList;m_iptv_category=m_iptv_channel=0;
+    m_iptv_search.clear();m_group_note.clear();m_group_menu=ChoiceSheet{};m_import_confirm=false;
+    m_iptv_catalog=std::make_shared<IPTVCatalogState>();
     m_visible_catalog.reset();m_filtered_channels.clear();m_channel_search_names.clear();
-    m_filtered_query.clear();m_channel_hold.reset();
-    if (m_iptv_creds.server.empty() || m_iptv_creds.username.empty() || m_iptv_creds.password.empty()) return;
-    auto data = m_iptv_catalog;
-    auto creds = m_iptv_creds;
-    { std::lock_guard<std::mutex> lk(data->mutex); data->loading = true; }
-    auto failed=[data]{std::lock_guard<std::mutex> lk(data->mutex);
-        data->loading=false;data->error="Channel refresh failed. Close and retry.";};
-    if(!emby5::spawn_io([data,creds] {
-        iptv_xtream::Catalog catalog;
-        std::string error;
-        const bool ok = iptv_xtream::authenticate(creds, &error) &&
-                        iptv_xtream::load_catalog(creds, &catalog, &error);
-        std::lock_guard<std::mutex> lk(data->mutex);
-        if (ok || catalog.scan.changed || !catalog.channels.empty()) data->catalog = std::make_shared<const iptv_xtream::Catalog>(std::move(catalog));
-        data->error = ok?"":(error.empty()?"Partial channel list; close and retry":error);
-        data->loading = false;
-    },failed))failed();
+    m_filtered_query.clear();m_channel_hold.reset();m_iptv_generation=m_iptv_content_generation=~uint64_t(0);
+    iptv_sync_catalog();
+    // Reuse the single shared catalogue. Opening this editor must not start a
+    // competing authentication/full-download sequence on the provider.
+    if(!m_visible_catalog||m_visible_catalog->channels.empty())iptv_live::refresh(&m_client);
 }
-
+void SettingsScreen::iptv_filter_groups() {
+    m_provider_filtered.clear();auto needle=m_provider_query;
+    std::transform(needle.begin(),needle.end(),needle.begin(),[](unsigned char c){return (char)std::tolower(c);});
+    for(size_t i=0;i<m_provider_groups.size();++i){auto name=m_provider_groups[i].name;
+        std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return (char)std::tolower(c);});
+        if(needle.empty()||name.find(needle)!=std::string::npos)m_provider_filtered.push_back(i);}
+    m_provider_index=std::clamp(m_provider_index,0,std::max(0,(int)m_provider_filtered.size()-1));
+}
+void SettingsScreen::iptv_open_group_actions() {
+    const auto &cats=m_iptv_store.categories();
+    if(m_iptv_category<0||m_iptv_category>=(int)cats.size())return;
+    m_import_confirm=false;
+    m_group_menu.open(cats[m_iptv_category].name,{"Add / remove individual channels","Add channels from a provider group"});
+}
 void SettingsScreen::iptv_sync_catalog() {
+    const auto summary=iptv_live::summary();
+    if(summary.generation!=m_iptv_generation&&summary.catalogue_generation==m_iptv_content_generation) {
+        std::lock_guard<std::mutex> lock(m_iptv_catalog->mutex);
+        m_iptv_catalog->loading=summary.loading;m_iptv_catalog->error=summary.xtream_error;
+        m_iptv_generation=summary.generation;
+    }
+    if(summary.catalogue_generation!=m_iptv_content_generation) {
+        const auto live=iptv_live::snapshot();
+        auto available=std::make_shared<iptv_xtream::Catalog>();
+        available->channels=live.channels;available->scan=live.xtream_scan;
+        m_provider_groups.clear();std::unordered_map<std::string,size_t> by_group;
+        for(const auto &ch:available->channels) {
+            if(ch.id.empty())continue;
+            const auto name=ch.category_id.empty()?ch.source+" Live TV":ch.category_id;
+            const auto id=ch.source+":"+(ch.category_key.empty()?name:ch.category_key);
+            auto inserted=by_group.emplace(id,m_provider_groups.size());
+            if(inserted.second){const auto &state=ch.source=="Xtream"?live.xtream:ch.source=="M3U"?live.playlist:live.server;
+                bool partial=state.loading||state.cached||!state.error.empty();
+                if(ch.source=="Xtream"&&!state.loading&&!ch.category_key.empty()&&live.xtream_scan.completed.count(ch.category_key))partial=false;
+                m_provider_groups.push_back({id,ch.source+" - "+name,{},partial});}
+            m_provider_groups[inserted.first->second].channels.push_back(iptv_categories::Store::channel_key(ch.id));
+        }
+        iptv_filter_groups();
+        {std::lock_guard<std::mutex> lock(m_iptv_catalog->mutex);
+            m_iptv_catalog->catalog=available;m_iptv_catalog->loading=live.loading;
+            m_iptv_catalog->error=live.xtream_error;}
+        m_iptv_generation=live.generation;m_iptv_content_generation=live.catalogue_generation;
+    }
     std::shared_ptr<const iptv_xtream::Catalog> fresh;
     {std::lock_guard<std::mutex> lock(m_iptv_catalog->mutex);fresh=m_iptv_catalog->catalog;}
     const bool changed=fresh!=m_visible_catalog;
@@ -600,20 +628,38 @@ void SettingsScreen::iptv_move_channel(int delta) {
     m_iptv_channel=std::max(0,std::min(m_iptv_channel+delta,(int)m_filtered_channels.size()-1));
 }
 void SettingsScreen::update_hold(uint32_t held,double now) {
-    if(m_iptv_page!=IPTVChannels || ime::active() || !m_focused) {m_channel_hold.reset();return;}
+    if((m_iptv_page!=IPTVChannels && m_iptv_page!=IPTVProviderGroups) || m_group_menu.active() || ime::active() || !m_focused) {m_channel_hold.reset();return;}
     iptv_sync_catalog();
-    iptv_move_channel(m_channel_hold.update(held,now));
+    const int delta=m_channel_hold.update(held,now);
+    if(m_iptv_page==IPTVProviderGroups)m_provider_index=std::clamp(m_provider_index+delta,0,std::max(0,(int)m_provider_filtered.size()-1));
+    else iptv_move_channel(delta);
 }
 
 void SettingsScreen::iptv_category_input(uint32_t p)
 {
+    if(ime::active())return;
+    iptv_sync_catalog();
+    if(m_group_menu.active()) {
+        const int choice=m_group_menu.input(p);if(choice<0)return;
+        if(m_import_confirm) {
+            if(choice==1){size_t added=0;
+                if(m_import_generation!=m_iptv_content_generation)m_group_note="The catalogue changed. Select the provider group again before importing.";
+                else if(m_iptv_store.add_channels(m_import_destination,m_import_channels,&added))m_group_note="Added "+std::to_string(added)+" channels. Existing channels kept; duplicates skipped.";
+                else m_group_note="Could not save the group. No channels were added.";
+            }
+            m_import_channels.clear();m_import_confirm=false;
+        } else if(choice==0) {m_iptv_page=IPTVChannels;m_iptv_channel=0;m_iptv_search.clear();m_channel_hold.reset();}
+        else if(choice==1) {m_iptv_page=IPTVProviderGroups;m_provider_query.clear();m_provider_index=0;iptv_filter_groups();m_channel_hold.reset();}
+        return;
+    }
     const auto &cats = m_iptv_store.categories();
     if (p & NUVIO_BTN_CIRCLE) {
         m_channel_hold.reset();
-        if (m_iptv_page == IPTVChannels) {m_iptv_page = IPTVCategoryList;m_iptv_search.clear();}
+        if (m_iptv_page == IPTVChannels || m_iptv_page == IPTVProviderGroups) {m_iptv_page = IPTVCategoryList;m_iptv_search.clear();}
         else m_iptv_page = IPTVRows;
         return;
     }
+    if ((p&NUVIO_BTN_OPTIONS)&&m_iptv_page!=IPTVProviderGroups){iptv_open_group_actions();return;}
     if (m_iptv_page == IPTVCategoryList) {
         const int n = (int)cats.size();
         if (p & NUVIO_BTN_UP) m_iptv_category = std::max(0,m_iptv_category-1);
@@ -638,6 +684,22 @@ void SettingsScreen::iptv_category_input(uint32_t p)
         return;
     }
     if (m_iptv_category >= (int)cats.size()) {m_iptv_page=IPTVCategoryList;return;}
+    if(m_iptv_page==IPTVProviderGroups) {
+        if(p&NUVIO_BTN_TRIANGLE){ime::request(ime::Kind::Search,"Find provider group",m_provider_query,[this](const std::string &q){m_provider_query=q;m_provider_index=0;iptv_filter_groups();});return;}
+        if(p&NUVIO_BTN_SQUARE){m_provider_query.clear();m_provider_index=0;iptv_filter_groups();return;}
+        if(p&NUVIO_BTN_UP)m_provider_index=std::max(0,m_provider_index-1);
+        if(p&NUVIO_BTN_DOWN)m_provider_index=std::min(std::max(0,(int)m_provider_filtered.size()-1),m_provider_index+1);
+        if((p&NUVIO_BTN_CROSS)&&!m_provider_filtered.empty()) {
+            const auto &group=m_provider_groups[m_provider_filtered[m_provider_index]];
+            const auto &dest=cats[m_iptv_category];m_import_destination=dest.id;m_import_channels=group.channels;m_import_generation=m_iptv_content_generation;
+            std::unordered_set<std::string> existing;for(const auto &id:dest.channels)existing.insert(iptv_categories::Store::channel_key(id));
+            size_t count=0;for(const auto &id:m_import_channels)if(existing.insert(id).second)++count;
+            m_import_confirm=true;
+            m_group_menu.open((group.partial?"Partial/cached group: ":"Import group: ")+group.name,
+                {"Cancel","Add "+std::to_string(count)+" available channels to "+dest.name});
+        }
+        return;
+    }
     iptv_sync_catalog();
     if(!m_visible_catalog)return;
     const auto &catalog=*m_visible_catalog;
@@ -655,8 +717,8 @@ void SettingsScreen::iptv_category_input(uint32_t p)
     const auto id = cats[(size_t)m_iptv_category].id;
     const auto channel_id=catalog.channels[filtered[(size_t)m_iptv_channel]].id;
     const auto &assigned = cats[(size_t)m_iptv_category].channels;
-    const bool is_assigned=std::find(assigned.begin(),assigned.end(),channel_id)!=assigned.end();
-    if (p & NUVIO_BTN_CROSS) m_iptv_store.assign(id,channel_id,!is_assigned);
+    const bool is_assigned=m_iptv_store.contains(id,channel_id);
+    if (p & NUVIO_BTN_CROSS) {if(!m_iptv_store.assign(id,channel_id,!is_assigned))m_group_note="Could not save channel assignment.";else m_group_note.clear();}
     if (p & NUVIO_BTN_L2) m_iptv_store.move_channel(id,channel_id,-1);
     if (p & NUVIO_BTN_R2) m_iptv_store.move_channel(id,channel_id,1);
 }
@@ -667,8 +729,9 @@ void SettingsScreen::iptv_draw_categories()
     gfx::text(180,150,"IPTV category management",{gfx::Bold,54},kText);
     const auto &cats=m_iptv_store.categories();
     const bool channels=m_iptv_page==IPTVChannels;
-    gfx::text(180,212,channels ? "Hold Up/Down: Faster scrolling  Triangle: Search  Square: Clear  X: Assign  Circle: Back" :
-              "X: Rename/Create  Square: Delete  L2/R2: Reorder  Triangle: Assign channels  Circle: Back",
+    const bool providers=m_iptv_page==IPTVProviderGroups;
+    gfx::text(180,212,providers ? "Hold Up/Down: Faster scrolling  Triangle: Find group  X: Review import  Circle: Back" : channels ? "Hold Up/Down: Faster scrolling  Triangle: Search  Square: Clear  X: Assign  Circle: Back" :
+              "X: Rename/Create  Square: Delete  L2/R2: Reorder  Triangle: Channels  Options: Add group",
               {gfx::Medium,23},kText2);
     iptv_sync_catalog();
     std::string error; bool loading;
@@ -679,18 +742,19 @@ void SettingsScreen::iptv_draw_categories()
     if (channels && m_iptv_category >= (int)cats.size()) return;
     const auto &filtered=m_filtered_channels;
     if (channels) gfx::text(180,255,"Search: " + (m_iptv_search.empty()?std::string("All channels (Triangle to search)"):m_iptv_search),{gfx::Medium,23,1400},kText2);
-    const int count=channels ? (int)filtered.size() : (int)cats.size()+1;
-    const int selected=channels ? m_iptv_channel : m_iptv_category;
+    if(providers && m_iptv_category>=0 && m_iptv_category<(int)cats.size()) gfx::text(180,255,"Add to: "+cats[m_iptv_category].name+"  |  Find: "+(m_provider_query.empty()?std::string("All provider groups"):m_provider_query),{gfx::Medium,23,1400},kText2);
+    const int count=providers?(int)m_provider_filtered.size():channels ? (int)filtered.size() : (int)cats.size()+1;
+    const int selected=providers?m_provider_index:channels ? m_iptv_channel : m_iptv_category;
     const int first=std::max(0,selected-7);
     for (int i=first;i<count && i<first+14;i++) {
         const float y=295.f+(i-first)*52.f;
         if (i==selected) {glass_panel({165,y-31,1500,48},14,1.f,false,1.f);draw_focus_outline({165,y-31,1500,48},14);}
         std::string name;
-        if (!channels) name=i<(int)cats.size()?cats[(size_t)i].name:"+ Create category";
+        if(providers){const auto &g=m_provider_groups[m_provider_filtered[i]];name=g.name+" ("+std::to_string(g.channels.size())+" channels"+(g.partial?", partial/cached)":")");}
+        else if (!channels) name=i<(int)cats.size()?cats[(size_t)i].name:"+ Create category";
         else {
             const auto &ch=catalog.channels[filtered[(size_t)i]];
-            const auto &assigned=cats[(size_t)m_iptv_category].channels;
-            const bool checked=std::find(assigned.begin(),assigned.end(),ch.id)!=assigned.end();
+            const bool checked=m_iptv_store.contains(cats[(size_t)m_iptv_category].id,ch.id);
             name=std::string(checked?"[X] ":"[ ] ")+ch.name;
         }
         gfx::text(190,y,name,{gfx::SemiBold,26,1360},i==selected?kText:kText2);
@@ -698,6 +762,9 @@ void SettingsScreen::iptv_draw_categories()
     if (channels && loading) gfx::text(190,1025,"Loading channels...",{gfx::Medium,24},kText2);
     else if(channels && !error.empty()) gfx::text(190,1025,error,{gfx::Medium,24},kText2);
     else if(channels && count==0) gfx::text(190,400,m_iptv_search.empty()?"No channels loaded; check IPTV credentials":"No channels match your search",{gfx::Medium,24},kText2);
+    if(providers&&count==0)gfx::text(190,400,loading?"Catalogue loading; available groups will appear here.":"No matching provider groups available.",{gfx::Medium,24},kText2);
+    if(!m_group_note.empty())gfx::text(190,1060,m_group_note,{gfx::Medium,22,1500},kText2);
+    m_group_menu.draw();
 }
 
 void SettingsScreen::draw(double, float dt)

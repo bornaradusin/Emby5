@@ -1,90 +1,58 @@
-/*
- * Emby5 — Emby for PS5
- * SPDX-License-Identifier: GPL-3.0-or-later
- *
- * Search (concept: .search): an on-screen keyboard on the left, results as
- * posters on the right (films, series, people and episodes), updated as the viewer types (300 ms debounce).
- * Suggestions fill the results while the query is empty. Square deletes.
- *
- * With Seerr on, its films and series follow under their own heading, with
- * where each stands (available, requested, pending ...): titles the library
- * already shows are left out there, and one the server has opens its page.
- */
+/* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-
 #include "ui/screen.h"
-#include "app/iptv_xtream.h"
-
+#include "ui/item_menu.h"
 #include <memory>
 #include <mutex>
-#include <string>
-#include <vector>
 
 namespace ui {
-
+// Results for one immutable context supplied by the screen that opened search.
+// There is deliberately no source selector and no provider catalogue here.
 class Search : public Screen {
 public:
-    explicit Search(jf::Client &client);
-
+    Search(jf::Client &client, SearchContext context, std::string query, bool from_nav = false);
+    ~Search() override;
     void activate() override;
-    void refresh_user_data() override { if (m_suggested) start_search(); }
+    void refresh_user_data() override;
+    void reconcile_user_data(const jf::Item &fresh) override;
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
-    bool animating() const override { return true; }   /* the caret blinks */
-    float nav_alpha() const override { return 1.f; }
-
+    bool animating() const override { return m_animating; }
+    bool needs_redraw() const override;
+    float nav_alpha() const override { return 0.f; }
+    bool modal() const override { return true; }
+    bool return_to_navigation() const { return m_from_nav; }
+    bool focused_card(Card *card) const override {
+        if (!m_has_card || m_menu.active()) return false;
+        *card = m_card; return true;
+    }
 private:
     struct Data {
         std::mutex lock;
-        std::vector<jf::Item> items;
-        std::vector<iptv_xtream::Channel> iptv;
-        iptv_xtream::Catalog iptv_catalog;
-        std::string iptv_account;
-        bool iptv_loaded = false, iptv_loading = false;
-        unsigned iptv_generation = 0;
-        std::string for_query;       /* the query these results answer */
-        unsigned seq = 0;
-        /* Seerr: its results, and those of them shown (the library's left out). */
-        std::vector<jf::Item> seerr, seerr_shown;
-        std::string for_seerr;       /* the query Seerr's results answer */
-        bool seerr_pending = false, seerr_failed = false;
-        int seerr_page = 1;          /* Seerr's pages loaded for this query */
-        bool seerr_more = true, seerr_more_loading = false;
-        double seerr_more_retry_at = 0;  /* after a failed page: not before (m_now) */
-        bool seerr_more_failed = false;  /* a page failed (the render thread sets retry_at) */
+        bool alive = true, loading = false, more = false, failed = false;
+        bool query_ready = false;
+        unsigned generation = 0;
+        uint64_t revision = 1;
+        int next = 0;
+        std::string query;
+        std::shared_ptr<const std::vector<jf::Item>> items = std::make_shared<const std::vector<jf::Item>>();
     };
-    /* The results as laid out: the library's rows, then Seerr's after its heading. */
-    struct Grid {
-        int library = 0, seerr = 0;  /* how many of each */
-        int library_rows() const { return (library + 3) / 4; }
-        int rows() const { return library_rows() + (seerr + 3) / 4; }
-        int count() const { return library + seerr; }
-        int row_of(int i) const;
-        int col_of(int i) const;
-        int row_length(int row) const;
-        int index_at(int row, int col) const;   /* col clamped to the row */
-    };
-    static void merge(Data &d);      /* Seerr's shown results (with the lock held) */
-    Grid grid();
-    void type(const std::string &key);
-    void start_search();
-    void more_seerr();
-    void load_iptv_catalog();               /* Seerr's next page, when the focus nears the end of its results */
-
-    jf::Client &m_client;
     std::shared_ptr<Data> m_data = std::make_shared<Data>();
-    std::string m_query;
-    double m_changed = 0, m_now = 0;
-    bool m_pending = false, m_suggested = false;
-    unsigned m_iptv_seen_generation = 0;
-    std::string m_seerr_retried;        /* the query Seerr was asked again for, once it came up */
-
-    bool m_in_results = false;
-    int m_key = 0, m_result = 0;
+    jf::Client &m_client;
+    const SearchContext m_context;
+    const std::string m_account;
+    std::string m_query, m_anchor;
+    bool m_started = false, m_from_nav = false, m_animating = false, m_has_card = false;
+    int m_index = 0;
+    uint64_t m_revision = 0;
+    std::shared_ptr<const std::vector<jf::Item>> m_items;
     Anim m_scroll;
     Lifts m_lifts;
-    Drop m_drop;                        /* the focus on the keyboard */
-    Ambient m_ambient;
+    ItemMenu m_menu;
+    Card m_card;
+    void edit_query();
+    void consume_query();
+    void start(bool more, bool retain = false);
+    void sync();
 };
-
 } // namespace ui

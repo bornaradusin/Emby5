@@ -17,6 +17,7 @@
 #include "ui/item_menu.h"
 #include "ui/screen.h"
 #include "ui/music_artwork.h"
+#include "app/browse_state.h"
 #include <unordered_map>
 
 #include <memory>
@@ -31,7 +32,7 @@ public:
     /* view_id empty: all libraries. pushed: opened over a tab (Circle goes back). */
     /* filter: extra query (e.g. "&AlbumArtistIds=<id>": an artist's albums). */
     Library(jf::Client &client, std::string title, std::string types, std::string view_id = std::string(),
-            bool pushed = false, std::string filter = std::string());
+            bool pushed = false, std::string filter = std::string(), int collection = -1);
     /* What a library of this collection type lists, e.g. "movies" -> "Movie". */
     static std::string types_for(const std::string &collection_type);
     void set_title(std::string title) { m_title = std::move(title); }   /* the language changed */
@@ -49,6 +50,7 @@ public:
     bool needs_redraw() const override;
     void reconcile_user_data(const jf::Item &fresh) override;
     void refresh_user_data() override;
+    Action search(bool from_navigation = false) override;
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }
@@ -67,6 +69,11 @@ private:
     struct Data {
         std::mutex lock;
         std::vector<jf::Item> items;
+        std::shared_ptr<const std::vector<jf::Item>> published;
+        void publish_items() { published=std::make_shared<const std::vector<jf::Item>>(items); }
+        bool stale=false;
+        bool failed=false;
+        double retry_at=0;
         int total = -1;
         bool loading = false;
         bool alive = true;
@@ -87,6 +94,21 @@ private:
         int decade = 0;             /* 0 all, else kDecades[decade] */
     };
     std::string filter_query() const;
+    int m_collection=-1;
+    std::string m_scope, m_saved_genre, m_anchor;
+    std::shared_ptr<const std::vector<jf::Item>> m_snapshot;
+    void sync_selection();
+    void load_preferences();
+    void save_preferences();
+    std::string preference_key() const;
+    struct SavedSource {
+        std::shared_ptr<Data> data;
+        int index=0, sort=0;
+        Filters filters;
+        float scroll=0;
+        std::string anchor, genre;
+    };
+    std::map<std::string,SavedSource> m_source_cache;
     int active_filters() const;
     void filter_input(uint32_t p);
     void draw_filters(float dt);

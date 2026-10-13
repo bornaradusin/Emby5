@@ -16,5 +16,10 @@ std::vector<Item> page(bool series,const std::string &group,size_t first,size_t 
 void refresh(bool force=false, bool retry_failed=false);
 int refresh_interval_hours();
 void set_refresh_interval_hours(int hours);
+struct Detail { Item item; std::string description; double duration=0; std::vector<Episode> episodes; bool ok=false; std::string error; };
+std::string provider_identity();
+bool find_item(const std::string &source,const std::string &id,bool series,Item *out);
+int locate_item(bool series,const std::string &group,const std::string &source,const std::string &id,const std::string &search="");
+Detail details(const Item &item);
 std::vector<Episode> episodes(const Item &series, std::string *error=nullptr);
 }

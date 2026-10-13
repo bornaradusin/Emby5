@@ -7,6 +7,7 @@
 #include "jf_http.h"
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cctype>
 #include <cstdio>
@@ -37,7 +38,7 @@ HttpResponse tracked_request(const std::string &method, const std::string &url,
 }
 
 constexpr int kTimeout = 15;
-constexpr const char *kVersion = "1.2.4";
+constexpr const char *kVersion = "1.2.5";
 constexpr const char *kFields = "Overview,Genres";            /* rows: what the UI shows */
 constexpr const char *kItemFields =
     "Overview,Genres,MediaStreams,Taglines,People,Studios,ChildCount,ProductionLocations,SpecialFeatureCount,"
@@ -771,13 +772,16 @@ std::string Client::escape(const std::string &s) { return url_escape(s); }
 
 int unreachable_streak() { return g_unreachable.load(); }
 
-std::vector<std::string> Client::home_sections()
+std::vector<std::string> Client::home_sections(bool *ok)
 {
+    if(ok)*ok=false;
     std::vector<std::string> out;
     std::string body;
     if (!get_json("/DisplayPreferences/usersettings?userId=" + user_id_ + "&client=emby", &body))
         return out;
     cJSON *j = cJSON_Parse(body.c_str());
+    if(!cJSON_IsObject(j)){cJSON_Delete(j);return out;}
+    if(ok)*ok=true;
     const cJSON *prefs = cJSON_GetObjectItemCaseSensitive(j, "CustomPrefs");
     for (int i = 0; i < 10; i++) {
         const cJSON *v = cJSON_GetObjectItemCaseSensitive(prefs, ("homesection" + std::to_string(i)).c_str());
@@ -1003,7 +1007,7 @@ bool Client::download_subtitle(const std::string &item_id, const std::string &su
 }
 
 Page Client::album_artists(const std::string &parent_id, const std::string &sort_by, bool descending, int start,
-                           int limit)
+                           int limit, const std::string &search_term)
 {
     Page page;
     std::string body;
@@ -1011,7 +1015,8 @@ Page Client::album_artists(const std::string &parent_id, const std::string &sort
                       (parent_id.empty() ? std::string() : "&parentId=" + parent_id) + "&SortBy=" + sort_by +
                       "&SortOrder=" + (descending ? "Descending" : "Ascending") + "&StartIndex=" +
                       std::to_string(start) + "&Limit=" + std::to_string(limit) + "&fields=" + kFields +
-                      "&EnableTotalRecordCount=true", &body))
+                      "&EnableTotalRecordCount=true" +
+                      (search_term.empty() ? std::string() : "&SearchTerm=" + url_escape(search_term)), &body))
         return page;
     page.items = items_of(body, &page.ok);
     if (cJSON *j = cJSON_Parse(body.c_str())) {
@@ -1125,6 +1130,30 @@ bool Client::clear_position(const std::string &id)
     const bool ok = text && post_json(path, text, nullptr);
     std::free(text); cJSON_Delete(data);
     return ok;
+}
+
+Page Client::collection_page(Collection kind,const std::string &parent,int start,int limit)
+{
+    start=std::max(0,start);limit=std::clamp(limit,1,120);
+    if(kind==FavoritesCollection)return library("","Movie,Series,BoxSet","DateCreated,SortName",true,start,limit,"&Filters=IsFavorite");
+    // Latest's grouped endpoint has no offset. A date-sorted paged library is
+    // its full-list counterpart rather than asking for an unbounded Latest array.
+    if(kind==LatestCollection)return library(parent,"Movie,Series,Episode,Video,MusicVideo","DateCreated,SortName",true,start,limit,"");
+    const std::string query="&StartIndex="+std::to_string(start)+"&Limit="+std::to_string(limit)+"&EnableTotalRecordCount=true&Fields="+kFields;
+    const std::string path=kind==ResumeCollection
+        ? "/Users/"+user_id_+"/Items/Resume?MediaTypes=Video"+query+(parent.empty()?"":"&ParentId="+url_escape(parent))
+        : "/Shows/NextUp?UserId="+user_id_+"&EnableResumable=false"+query;
+    Page page;std::string body;if(!get_json(path,&body))return page;
+    page.items=items_of(body,&page.ok);
+    cJSON *root=cJSON_Parse(body.c_str());
+    const double fallback=(double)start+page.items.size()+(page.items.size()==(size_t)limit?1:0);
+    const double count=root?num_of(root,"TotalRecordCount",fallback):0;
+    page.total=std::isfinite(count)?(int)std::clamp(count,0.0,2147483647.0):(int)std::min(fallback,2147483647.0);
+    cJSON_Delete(root);return page;
+}
+Page Client::search_page(const std::string &query,int start,int limit)
+{
+    return library("","Movie,Series,Episode,Person","SortName",false,std::max(start,0),std::clamp(limit,1,120),"&SearchTerm="+url_escape(query));
 }
 
 std::vector<Item> Client::favorites(int limit, bool *ok)

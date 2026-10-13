@@ -38,13 +38,12 @@ Groups build_groups(const std::vector<iptv_xtream::Channel> &channels,
     const auto visible=[&](const iptv_xtream::Channel &c){
         return !c.id.empty() && (query.empty() || lower(c.name).find(query)!=std::string::npos);
     };
-    for(const auto &c:channels) if(c.source=="Xtream" && visible(c)) by_id.emplace(c.id,&c);
+    for(const auto &c:channels) if(visible(c)) by_id.emplace((c.id.find(':')==std::string::npos?"xtream:"+c.id:c.id),&c);
     for(const auto &category:custom) {
         Group row{"custom:"+category.id,category.name,{}};
         std::unordered_set<std::string> used;
         for(const auto &id:category.channels) {
-            auto it=by_id.find(id);
-            if(it==by_id.end()) it=by_id.find("xtream:"+id);
+            auto it=by_id.find((id.find(':')==std::string::npos?"xtream:"+id:id));
             if(it!=by_id.end() && used.insert(it->second->id).second) row.channels.push_back(*it->second);
         }
         if(!row.channels.empty()) result.push_back(std::move(row));

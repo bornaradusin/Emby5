@@ -75,16 +75,17 @@ void Home::append(int shelf, int page, bool more, const std::vector<jf::Item> &i
 
 void Home::set_model(HomeModel model)
 {
+    auto row_key=[](const HomeRow &r){return std::to_string((int)r.kind)+"/"+(r.parent.empty()?r.title:r.parent);};
     /* Keep focus on the same title where it survived the refresh. */
     std::string focused_id, focused_row;
     if (const jf::Item *f = focused_item())
         focused_id = f->id;
     if (m_row >= 0 && m_row < (int)m_model.rows.size())
-        focused_row = m_model.rows[m_row].title;
+        focused_row = row_key(m_model.rows[m_row]);
     /* Rows keep where they were left (by title: rows come and go between refreshes). */
     std::map<std::string, std::pair<int, Anim>> kept;
     for (size_t r = 0; r < m_model.rows.size() && r < m_cols.size() && r < m_scroll.size(); r++)
-        kept[m_model.rows[r].title] = {m_cols[r], m_scroll[r]};
+        kept[row_key(m_model.rows[r])] = {m_cols[r], m_scroll[r]};
     bool hero_changed = model.hero.size() != m_model.hero.size();
     for (size_t i = 0; !hero_changed && i < model.hero.size(); i++)
         hero_changed = model.hero[i].id != m_model.hero[i].id;
@@ -101,12 +102,12 @@ void Home::set_model(HomeModel model)
     m_cols.assign(m_model.rows.size(), 0);
     m_scroll.assign(m_model.rows.size(), Anim());
     for (size_t r = 0; r < m_model.rows.size(); r++) {
-        auto k = kept.find(m_model.rows[r].title);
+        auto k = kept.find(row_key(m_model.rows[r]));
         if (k != kept.end()) {
             m_cols[r] = std::min(k->second.first, std::max(0, (int)m_model.rows[r].items.size() - 1));
             m_scroll[r] = k->second.second;
         }
-        if (!focused_row.empty() && m_model.rows[r].title == focused_row && m_row >= 0)
+        if (!focused_row.empty() && row_key(m_model.rows[r]) == focused_row && m_row >= 0)
             m_row = (int)r;   /* the focused row moved: stay on it */
     }
     if (m_row >= (int)m_model.rows.size())
@@ -117,6 +118,7 @@ void Home::set_model(HomeModel model)
             if (items[i].id == focused_id)
                 m_cols[m_row] = (int)i;
     }
+    if(!m_interacted&&!m_model.hero.empty())m_row=-1;
     if (m_model.hero.empty() && m_row < 0 && !m_model.rows.empty())
         m_row = 0;
     if (m_hero >= (int)m_model.hero.size() || hero_changed) {   /* the same titles keep their turn */
@@ -147,6 +149,9 @@ void Home::reconcile_user_data(const jf::Item &fresh)
 
 void Home::activate()
 {
+    // First entry keeps the original hero-first layout. Returning keeps focus.
+    if(m_activated)return;
+    m_activated=true;
     /* Entered from the navigation bar: start on the hero. */
     if (!m_model.hero.empty()) {
         m_row = -1;
@@ -198,14 +203,25 @@ void Home::apply(const UserDataChange &c)
 
 Action Home::input(uint32_t p)
 {
+    if(p)m_interacted=true;
     Action action;
     if (m_menu.active()) {
         m_menu.input(p, &action);
         return action;
     }
     if ((p & NUVIO_BTN_OPTIONS) && !m_discover) {   /* Seerr's titles have no options of the library's */
-        if (const jf::Item *f = focused_item())
-            m_menu.open(*f, m_row >= 0 && m_model.rows[m_row].kind == HomeRow::Resume);
+        const auto *f=focused_item();
+        m_menu.open(f?*f:jf::Item{}, m_row >= 0 && m_model.rows[m_row].kind == HomeRow::Resume);
+        Action all;
+        if(m_row>=0 && m_row<(int)m_model.rows.size()) {
+            const auto &row=m_model.rows[(size_t)m_row];
+            if(row.kind==HomeRow::Resume)all.collection=jf::Client::ResumeCollection;
+            if(row.kind==HomeRow::NextUp)all.collection=jf::Client::NextUpCollection;
+            if(row.kind==HomeRow::MyList)all.collection=jf::Client::FavoritesCollection;
+            if(row.kind==HomeRow::Latest && !row.parent.empty())all.collection=jf::Client::LatestCollection;
+            if(all.collection>=0){all.kind=Action::ViewCollection;all.collection_parent=row.parent;all.collection_title=row.title;}
+        }
+        m_menu.browser_actions(true,all);
         return action;
     }
     const int nrows = (int)m_model.rows.size();

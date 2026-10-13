@@ -30,6 +30,8 @@ public:
      * it stays closed. */
     void open_actions(const jf::Item &item, bool played, bool ask_seerr);
     bool take_ask();
+    void confirm_played(const jf::Item &item);
+    void browser_actions(bool retry=false,const Action &collection=Action{});
     bool active() const { return m_open; }
     /* 0..1 as it fades: the screen hides its top navigation under it. */
     float visibility() const { return m_alpha.value; }
@@ -41,7 +43,10 @@ public:
     void draw(float dt, bool *animating);
 
 private:
-    enum Option { Info, List, Played, Resume, AskSeerr };
+    enum Option { Info, List, Played, Resume, AskSeerr, PlayNow, StartOver, Series, Season, Trailer, ViewAll, Retry };
+    Action m_collection;
+    bool m_confirm=false,m_confirm_only=false;
+    int m_confirm_choice=0;
 
     jf::Item m_item;
     std::vector<Option> m_options;

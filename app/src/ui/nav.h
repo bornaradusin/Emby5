@@ -22,7 +22,7 @@ public:
      * Seerr is on and signed in. */
     enum Tab { Home = 0, Movies, Shows, Music, Discover, IPTV, VOD, Search, Settings, Count };
 
-    /* The pill tabs, in order (Home ... Search). */
+    /* The pill tabs in their configured order; search is a contextual action. */
     void set_tabs(std::vector<int> tabs) { m_tabs = std::move(tabs); }
     const std::vector<int> &tabs() const { return m_tabs; }
 
@@ -37,7 +37,7 @@ public:
 
 private:
     std::string m_user, m_avatar;
-    std::vector<int> m_tabs{Home, Movies, Shows, Search};
+    std::vector<int> m_tabs{Home, Movies, Shows};
     Anim m_focus_x, m_focus_w;          /* the drop's target tab (only .target is used) */
     Drop m_drop;                        /* the focus, a liquid glass drop */
 };

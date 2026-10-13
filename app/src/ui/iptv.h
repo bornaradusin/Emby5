@@ -1,49 +1,71 @@
+/* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "ui/screen.h"
-#include "app/iptv_xtream.h"
+#include "ui/choice_sheet.h"
+#include "app/browse_state.h"
 #include "app/iptv_categories.h"
 #include "app/iptv_live.h"
 #include "app/iptv_navigation.h"
-#include "jf/jf_client.h"
+#include <map>
 #include <memory>
-#include <mutex>
+
 namespace ui {
 class IPTV : public Screen {
 public:
     explicit IPTV(jf::Client &client);
-    ~IPTV() override;
+    ~IPTV() override { m_life.reset(); }
     void activate() override;
-    Action input(uint32_t p) override;
+    static bool launch(jf::Client &client, const iptv_xtream::Channel &channel);
+    Action search(bool from_navigation = false) override;
+    Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     void update_hold(uint32_t held, double now);
-    void focus_channel(const std::string &group_id,const std::string &channel_id);
-    bool accelerating(double now) const { return m_hold_dir && m_hold_since>0 && now-m_hold_since>=1.0; }
-    bool animating() const override { return true; }
-    float nav_alpha() const override { return 1.f; }
-    bool modal() const override { return false; }
+    void focus_channel(const std::string &group_id, const std::string &channel_id);
+    void enter_from_top() override;
+    bool accelerating(double now) const { return !m_header && m_hold_dir && m_hold_since > 0 && now - m_hold_since >= 1.; }
+    bool animating() const override { return m_animating; }
+    bool needs_redraw() const override;
+    float nav_alpha() const override { return m_nav.value; }
+    bool modal() const override { return m_menu.active(); }
 private:
+    struct Position { int index = 0; std::string key; };
+    struct ReturnPosition { std::string group; Position position; bool header = false; float scroll = 0; bool navigation = false; };
+    struct Result { size_t group = 0, channel = 0; };
+    enum Menu { Options, Groups, Pinned };
     jf::Client &m_client;
-    uint64_t m_seen=0;
-    std::string m_guide_requested;
     iptv_xtream::Credentials m_creds;
     iptv_categories::Store m_store;
-    bool m_connected=false;
-    bool m_category_focus=false;
-    using Group = iptv_navigation::Group;
-    iptv_navigation::Playlist m_groups=std::make_shared<const iptv_navigation::Groups>();
-    int m_row=0;
-    std::vector<int> m_columns;
-    int m_filter=0, m_index=0, m_category=0, m_scroll=0;
-    bool m_search=false;
-    int m_saved_index=0;
+    std::string m_scope;
+    iptv_navigation::Playlist m_groups = std::make_shared<const iptv_navigation::Groups>();
+    uint64_t m_seen = ~uint64_t(0), m_content_seen = ~uint64_t(0);
+    int m_row = 0, m_index = 0;
+    bool m_header = false, m_animating = true;
+    std::map<std::string, Position> m_positions;
     std::string m_query;
-    uint32_t m_hold_dir=0;
-    double m_hold_since=0, m_hold_last=0;
-    void refresh();
+    std::vector<Result> m_results;
+    ReturnPosition m_return;
+    Anim m_scroll, m_nav;
+    Lifts m_lifts;
+    std::map<std::string, Anim> m_row_scroll;
+    double m_guide_focus_since = 0;
+    std::string m_guide_focus, m_guide_requested;
+    ChoiceSheet m_menu;
+    Menu m_menu_mode = Options;
+    std::string m_pin_group;
+    std::vector<std::string> m_destinations;
+    std::shared_ptr<int> m_life = std::make_shared<int>(0);
+    uint32_t m_hold_dir = 0;
+    double m_hold_since = 0, m_hold_last = 0;
+    void synchronise();
     void build_groups(const iptv_live::Snapshot &snapshot);
-    std::vector<iptv_xtream::Channel> current() const;
-    void reload_store();
-    std::vector<iptv_xtream::Channel> visible(const iptv_xtream::Catalog &c) const;
-    void move_selection(int delta, bool allow_category=true);
+    void rebuild_search(const std::string &selected = {});
+    void clear_search();
+    void remember();
+    void select_group(int row, bool header);
+    void open_groups(Menu mode, const std::string &query = {});
+    const iptv_xtream::Channel *channel(int index) const;
+    int count() const;
+    void move(uint32_t p, Action *action);
+    static std::string key(const iptv_xtream::Channel &channel);
 };
-}
+} // namespace ui

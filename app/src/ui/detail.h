@@ -53,6 +53,7 @@ public:
         bool have_trailer = false;
     };
     Detail(jf::Client &client, const jf::Item &item);
+    void initial_season(const std::string &id) {m_requested_season=id;}
     const jf::Item &item() const { return m_view.item; }
 
     /* Loads an item's page data in the background so opening it is instant
@@ -71,6 +72,7 @@ public:
     bool modal() const override { return m_sheet.active() || m_menu.active() || m_trailer_qr.active() || m_read_more.active(); }
 
 private:
+    std::string m_requested_season;
     friend struct DetailRegressionAccess; // host regression access, no runtime hook
     enum Zone { Buttons, Seasons, Episodes, Extras, Cast, Similar, ZoneCount };
     enum Button { PlayButton, RestartButton, TrailerButton, TrailerQrButton, WatchedButton, FavouriteButton };

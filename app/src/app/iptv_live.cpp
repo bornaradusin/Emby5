@@ -3,6 +3,7 @@
 #include "app/io_worker.h"
 #include "app/xtream_fetch.h"
 #include <memory>
+#include <atomic>
 #include "app/iptv_m3u.h"
 #include "jf/jf_http.h"
 #include "evo_data_path.h"
@@ -40,7 +41,7 @@ std::string live_cache_path(const std::string &key) {
 }
 // Cache only channel identity and display metadata. Do not persist stream URLs,
 // M3U credentials or transient EPG entries.
-void save_live_cache(const std::string &key, const Snapshot &snap, uint64_t ticket) {
+void save_live_cache(const std::string &key, const Snapshot &snap, uint64_t ticket, const std::string &storage_key={}) {
     if(evo_mkdir(evo_data_dir())!=0 || evo_mkdir(evo_data_path("emby5"))!=0)return;
     cJSON *doc=cJSON_CreateObject();if(!doc)return;
     cJSON_AddNumberToObject(doc,"version",2);
@@ -60,7 +61,7 @@ void save_live_cache(const std::string &key, const Snapshot &snap, uint64_t tick
         cJSON_AddItemToArray(items,item);
     }
     char *data=cJSON_PrintUnformatted(doc);cJSON_Delete(doc);if(!data)return;
-    const auto path=live_cache_path(key),tmp=path+".tmp-"+std::to_string(ticket);
+    const auto path=live_cache_path(storage_key.empty()?key:storage_key),tmp=path+".tmp-"+std::to_string(ticket);
     FILE *f=std::fopen(tmp.c_str(),"wb");bool ok=false;
     if(f){size_t size=std::strlen(data);ok=std::fwrite(data,1,size,f)==size;ok=std::fclose(f)==0 && ok;}
     std::free(data);
@@ -206,11 +207,11 @@ Snapshot summary() {
     s.emby_count=cache.emby_count;s.xtream_count=cache.xtream_count;s.m3u_count=cache.m3u_count;
     s.loading=cache.loading;s.emby_loading=cache.emby_loading;s.xtream_loading=cache.xtream_loading;
     s.server=cache.server;s.xtream=cache.xtream;s.playlist=cache.playlist;
-    s.generation=cache.generation;s.emby_error=cache.emby_error;s.xtream_error=cache.xtream_error;s.m3u_error=cache.m3u_error;
+    s.generation=cache.generation;s.catalogue_generation=cache.catalogue_generation;s.emby_error=cache.emby_error;s.xtream_error=cache.xtream_error;s.m3u_error=cache.m3u_error;
     return s;
 }
 void refresh(jf::Client *client, bool force, bool retry_failed) {
-    if(!client)return;
+    if(!client||iptv_catalogue::playback_active())return;
     iptv_xtream::Credentials creds;const bool has_xtream=iptv_xtream::load_credentials(&creds);
     const auto m3u_url=iptv_m3u::playlist_url();
     const std::string key=std::string(client->server_type())+"|"+client->server()+"|"+client->user_id()+"|"+
@@ -219,9 +220,9 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
     {
         std::lock_guard<std::mutex> g(mu);
         if(key!=identity){identity=key;++epoch;const auto generation=cache.generation+1;
-            cache=Snapshot{};cache.generation=generation;read_disk=true;refreshing=false;last_refresh={};}
+            cache=Snapshot{};cache.generation=generation;cache.catalogue_generation=generation;read_disk=true;refreshing=false;last_refresh={};}
         if(refreshing)return;
-        if(!force&&last_refresh.time_since_epoch().count()) {
+        if(!force&&last_refresh.time_since_epoch().count()&&cache.xtream.error!="Refresh paused during playback") {
             const bool failed=!cache.emby_error.empty()||!cache.xtream_error.empty()||!cache.m3u_error.empty();
             if(std::chrono::steady_clock::now()-last_refresh<(failed?std::chrono::seconds(60):std::chrono::seconds(300)))return;
         }
@@ -247,8 +248,13 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
     const bool started=emby5::spawn_io([server,creds,has_xtream,m3u_url,key,ticket,read_disk,retry_failed,force]{
         if(read_disk){
             auto disk=load_live_cache(key);
+            if(has_xtream && !disk.xtream_count) {
+                const auto provider=load_live_cache("xtream|"+creds.server+"|"+creds.username+"|"+creds.password);
+                for(const auto &channel:provider.channels)if(channel.source=="Xtream")disk.channels.push_back(channel);
+                disk.xtream_count=provider.xtream_count;disk.xtream_scan=provider.xtream_scan;
+            }
             std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
-            cache.channels=std::move(disk.channels);cache.xtream_scan=std::move(disk.xtream_scan);
+            cache.channels=std::move(disk.channels);++cache.catalogue_generation;cache.xtream_scan=std::move(disk.xtream_scan);
             cache.xtream=iptv_catalogue::result_state(cache.xtream_scan,true);
             cache.xtream.configured=has_xtream;cache.xtream.loading=has_xtream;
             cache.server.cached=disk.emby_count!=0;update_status();
@@ -261,6 +267,7 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
                 cache.channels.erase(std::remove_if(cache.channels.begin(),cache.channels.end(),
                     [&](const iptv_xtream::Channel &c){return c.source==source;}),cache.channels.end());
                 cache.channels.insert(cache.channels.end(),std::make_move_iterator(channels.begin()),std::make_move_iterator(channels.end()));
+                ++cache.catalogue_generation;
             }
             if(source=="Xtream"){cache.xtream=std::move(state);if(scan)cache.xtream_scan=*scan;}
             else if(source=="M3U")cache.playlist=std::move(state);
@@ -314,15 +321,38 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
                     }
                 }
                 std::string error;
-                if(!iptv_xtream::authenticate(creds,&error)) {
-                    source_failure("Xtream",error.empty()?"Xtream authentication failed":error.c_str());return;
-                }
+                // Catalogue endpoints already authenticate the request. Do not
+                // block the whole list behind an extra account-info request.
                 const bool retry=retry_failed||(!force&&!cat.scan.complete);
                 auto progress=[&](const iptv_catalogue::Scan &scan){
                     std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
                     cache.xtream.done=scan.done;cache.xtream.total=scan.total;cache.xtream.failed=scan.failed.size();
+                    ++cache.generation;
                 };
-                const bool ok=iptv_xtream::load_catalog(creds,&cat,&error,120,cancelled,retry,progress);
+                auto last_saved=std::chrono::steady_clock::time_point{};
+                auto available=[&](const iptv_xtream::Catalog &partial) {
+                    if(cancelled())return;
+                    std::unordered_map<std::string,std::string> labels;
+                    for(const auto &category:partial.categories)labels[category.id]=category.name;
+                    auto channels=partial.channels;
+                    for(auto &channel:channels) {
+                        if(channel.category_key.empty())channel.category_key=channel.category_id;
+                        const auto name=labels.find(channel.category_key);
+                        if(name!=labels.end()&&!name->second.empty())channel.category_id=name->second;
+                        channel.source="Xtream";if(channel.id.rfind("xtream:",0)!=0)channel.id="xtream:"+channel.id;
+                    }
+                    auto state=iptv_catalogue::result_state(partial.scan,true);state.loading=true;
+                    publish("Xtream",std::move(channels),true,std::move(state),&partial.scan);
+                    const auto now=std::chrono::steady_clock::now();
+                    if(now-last_saved>=std::chrono::seconds(5)) {
+                        Snapshot saved;{std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;saved=cache;}
+                        save_live_cache(key,saved,ticket);
+                        saved.channels.erase(std::remove_if(saved.channels.begin(),saved.channels.end(),[](const auto &ch){return ch.source!="Xtream";}),saved.channels.end());
+                        save_live_cache(key,saved,ticket,"xtream|"+creds.server+"|"+creds.username+"|"+creds.password);
+                        last_saved=now;
+                    }
+                };
+                const bool ok=iptv_xtream::load_catalog(creds,&cat,&error,120,cancelled,retry,progress,available);
                 if(cancelled())return;
                 std::unordered_map<std::string,std::string> names;
                 for(const auto &c:cat.categories)names[c.id]=c.name;
@@ -361,6 +391,11 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
         Snapshot saved;
         {std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;saved=cache;}
         save_live_cache(key,saved,ticket);
+        if(has_xtream) {
+            Snapshot provider=saved;
+            provider.channels.erase(std::remove_if(provider.channels.begin(),provider.channels.end(),[](const auto &ch){return ch.source!="Xtream";}),provider.channels.end());
+            save_live_cache(key,provider,ticket,"xtream|"+creds.server+"|"+creds.username+"|"+creds.password);
+        }
         {
             std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
             refreshing=false;cache.server.loading=cache.xtream.loading=cache.playlist.loading=false;
@@ -385,8 +420,11 @@ void request_guide(jf::Client *client, const iptv_xtream::Channel &channel) {
     if (!client || channel.source != "Xtream") return;
     iptv_xtream::Credentials creds;
     if (!iptv_xtream::load_credentials(&creds)) return;
+    static std::atomic<bool> guide_busy{false};
+    bool expected=false;if(!guide_busy.compare_exchange_strong(expected,true))return;
     uint64_t ticket; {std::lock_guard<std::mutex> g(mu);ticket=epoch;}
-    emby5::spawn_io([ticket,creds,channel] {
+    if(!emby5::spawn_io([ticket,creds,channel] {
+        struct Release {~Release(){guide_busy.store(false);}} release;
         std::string url=iptv_xtream::api_url(creds,"get_short_epg")+"&stream_id="+channel.id.substr(7)+"&limit=8";
         jf::HttpResponse response=jf::http_request("GET",url,{},"",15);
         if (!response.ok()) return;
@@ -418,6 +456,6 @@ void request_guide(jf::Client *client, const iptv_xtream::Channel &channel) {
             ch.now=now; ch.next=next; ch.now_start=now_start; ch.now_end=now_end;
             ch.next_start=next_start; ch.next_end=next_end; ++cache.generation; break;
         }
-    });
+    }))guide_busy.store(false);
 }
 }

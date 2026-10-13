@@ -1,5 +1,6 @@
 /* Disk-indexed Xtream and M3U VOD catalogue. SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/iptv_vod.h"
+#include "app/stable_identity.h"
 #include "app/io_worker.h"
 #include "app/request_budget.h"
 #include "app/xtream_fetch.h"
@@ -25,11 +26,24 @@ extern "C" {
 #include <unordered_set>
 namespace iptv_vod {
 namespace {
-struct Ref { uint64_t offset; std::string name; };
-struct Index { std::vector<std::string> order; std::unordered_map<std::string,std::vector<Ref>> by_group; size_t count=0; std::string path; iptv_catalogue::Scan scan; };
+struct CachePath {std::string path;};
+struct Location {uint64_t offset;std::shared_ptr<CachePath> file;};
+struct Ref {uint64_t offset;std::string name,id,category;std::shared_ptr<CachePath> file;};
+struct Index {
+    std::unordered_map<std::string,Location> by_id;
+    std::vector<std::string> order;
+    std::unordered_map<std::string,std::vector<Ref>> by_group;
+    size_t count=0;std::string path;iptv_catalogue::Scan scan;
+    std::shared_ptr<CachePath> file;
+};
 std::mutex mu;
 Snapshot status;
 std::shared_ptr<Index> movies=std::make_shared<Index>(),shows=std::make_shared<Index>();
+std::shared_ptr<const Index> preview_movies,preview_shows;
+std::shared_ptr<const Index> visible_index(bool series) { // mu held
+    const auto &preview=series?preview_shows:preview_movies;
+    return preview?preview:(series?shows:movies);
+}
 std::vector<Item> m3u_movies;
 std::string identity;
 bool refreshing=false;
@@ -99,7 +113,7 @@ bool write_item(FILE *f,const Item &v,Index &index) {
     const bool ok=pos>=0&&write_json_line(f,obj.get());
     if(ok) {
         auto &refs=index.by_group[v.group];if(refs.empty())index.order.push_back(v.group);
-        refs.push_back({(uint64_t)pos,lower(v.name)});++index.count;
+        refs.push_back({(uint64_t)pos,lower(v.name),v.id,v.category_id,index.file});index.by_id[v.id]={(uint64_t)pos,index.file};++index.count;
     }
     return ok;
 }
@@ -123,11 +137,11 @@ bool parse_item(const cJSON *obj,Item &v) {
 bool read_item(FILE *f,Item &v) {auto r=read_record(f);return r.json&&parse_item(r.json.get(),v);}
 void add_ref(Index &index,const Item &v,long pos) {
     auto &refs=index.by_group[v.group];if(refs.empty())index.order.push_back(v.group);
-    refs.push_back({(uint64_t)pos,lower(v.name)});++index.count;
+    refs.push_back({(uint64_t)pos,lower(v.name),v.id,v.category_id,index.file});index.by_id[v.id]={(uint64_t)pos,index.file};++index.count;
 }
 bool load_cache(const std::string &path,Index &index,bool series) {
     std::unique_ptr<FILE,decltype(&std::fclose)> f(std::fopen(path.c_str(),"rb"),&std::fclose);if(!f)return false;
-    Index fresh;fresh.path=path;bool metadata=false;
+    Index fresh;fresh.path=path;fresh.file=std::make_shared<CachePath>(CachePath{path});bool metadata=false;
     for(;;) {
         const long pos=std::ftell(f.get());if(pos<0)return false;
         auto r=read_record(f.get());if(r.eof)break;if(!r.json)return false;
@@ -142,7 +156,7 @@ bool load_cache(const std::string &path,Index &index,bool series) {
 }
 void load_legacy(const std::string &path,Index &m,Index &s) {
     std::unique_ptr<FILE,decltype(&std::fclose)> f(std::fopen(path.c_str(),"rb"),&std::fclose);if(!f)return;
-    m.path=s.path=path;
+    m.path=s.path=path;m.file=s.file=std::make_shared<CachePath>(CachePath{path});
     for(;;) {
         const long pos=std::ftell(f.get());if(pos<0)break;auto r=read_record(f.get());
         if(r.eof)break;
@@ -153,7 +167,7 @@ void load_legacy(const std::string &path,Index &m,Index &s) {
 }
 void update_status(bool changed=true) { // caller holds mu
     status.m3u_count=m3u_movies.size();
-    status.movie_count=movies->count+status.m3u_count;status.show_count=shows->count;
+    status.movie_count=visible_index(false)->count+status.m3u_count;status.show_count=visible_index(true)->count;
     status.loading=refreshing;
     status.categories_done=status.movies.done+status.shows.done;
     status.categories_total=status.movies.total+status.shows.total;
@@ -175,7 +189,7 @@ std::string ext_of(const std::string &url) {
 Snapshot snapshot() {std::lock_guard<std::mutex> g(mu);return status;}
 std::vector<Group> groups(bool series,const std::string &search) {
     std::lock_guard<std::mutex> g(mu);
-    const Index &idx=*(series?shows:movies);std::vector<Group> result;std::string needle=lower(search);
+    const auto owned=visible_index(series);const Index &idx=*owned;std::vector<Group> result;std::string needle=lower(search);
     for(const auto &name:idx.order) {
         auto it=idx.by_group.find(name);if(it==idx.by_group.end())continue;
         size_t count=0;
@@ -191,29 +205,41 @@ std::vector<Group> groups(bool series,const std::string &search) {
     return result;
 }
 std::vector<Item> page(bool series,const std::string &group,size_t first,size_t limit,const std::string &search) {
-    std::lock_guard<std::mutex> g(mu);
-    std::vector<Item> result;if(limit==0||limit>32)limit=32;
-    const Index &idx=*(series?shows:movies);
-    auto it=idx.by_group.find(group);
-    FILE *f=std::fopen(idx.path.c_str(),"rb");
+    std::vector<Item> result,playlist;std::vector<Location> selected;
+    std::unordered_map<const CachePath*,std::shared_ptr<FILE>> handles;
+    if(limit==0||limit>32)limit=32;
     const auto needle=lower(search);size_t match=0;
-    iptv_xtream::Credentials creds;const bool has_creds=limit==1&&iptv_xtream::load_credentials(&creds);
-    if(it!=idx.by_group.end())for(const auto &ref:it->second) {
-        if(!needle.empty()&&ref.name.find(needle)==std::string::npos)continue;
-        if(match++<first)continue;
-        if(!f||std::fseek(f,(long)ref.offset,SEEK_SET)!=0)break;
-        Item v;if(read_item(f,v)) {
-            if(!v.series&&v.source=="Xtream"&&has_creds)v.url=movie_url(creds,v.id,v.extension);
-            result.push_back(std::move(v));
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        const auto index=visible_index(series);const auto found=index->by_group.find(group);
+        if(found!=index->by_group.end())for(const auto &ref:found->second) {
+            if(!needle.empty()&&ref.name.find(needle)==std::string::npos)continue;
+            if(match++<first)continue;
+            selected.push_back({ref.offset,ref.file});
+            if(!handles.count(ref.file.get())) {
+                FILE *file=ref.file?std::fopen(ref.file->path.c_str(),"rb"):nullptr;
+                handles.emplace(ref.file.get(),std::shared_ptr<FILE>(file,[](FILE *p){if(p)std::fclose(p);}));
+            }
+            if(selected.size()>=limit)break;
         }
-        if(result.size()>=limit)break;
+        if(!series&&selected.size()<limit)for(const auto &v:m3u_movies) {
+            if(v.group!=group||(!needle.empty()&&lower(v.name).find(needle)==std::string::npos))continue;
+            if(match++<first)continue;
+            auto copy=v;copy.id=emby5::playlist_item_key(v.url);playlist.push_back(std::move(copy));
+            if(selected.size()+playlist.size()>=limit)break;
+        }
     }
-    if(f)std::fclose(f);
-    if(!series&&result.size()<limit)for(const auto &v:m3u_movies){
-        if(v.group!=group||(!needle.empty()&&lower(v.name).find(needle)==std::string::npos))continue;
-        if(match++<first)continue;
-        result.push_back(v);if(result.size()>=limit)break;
+    // File handles bind offsets to the same inode before a refresh can rename
+    // a cache. Reads/parsing never hold the shared catalogue/status mutex.
+    iptv_xtream::Credentials creds;const bool has=limit==1&&iptv_xtream::load_credentials(&creds);
+    for(const auto &ref:selected) {
+        auto file=handles[ref.file.get()];Item item;
+        if(file&&std::fseek(file.get(),(long)ref.offset,SEEK_SET)==0&&read_item(file.get(),item)) {
+            if(!item.series&&item.source=="Xtream"&&has)item.url=movie_url(creds,item.id,item.extension);
+            result.push_back(std::move(item));
+        }
     }
+    result.insert(result.end(),std::make_move_iterator(playlist.begin()),std::make_move_iterator(playlist.end()));
     return result;
 }
 int refresh_interval_hours(){std::lock_guard<std::mutex> g(mu);return interval_impl();}
@@ -225,6 +251,7 @@ void set_refresh_interval_hours(int hours){
     if(f){std::fprintf(f,"%d\n",hours);std::fclose(f);}
 }
 void refresh(bool force,bool retry_failed){
+    if(iptv_catalogue::playback_active())return;
     iptv_xtream::Credentials c;const bool xtream=iptv_xtream::load_credentials(&c);
     const std::string m3u=iptv_m3u::playlist_url();
     const std::string key=(xtream?c.server+"|"+c.username+"|"+c.password:"")+"|"+m3u;
@@ -232,12 +259,13 @@ void refresh(bool force,bool retry_failed){
     {
         std::lock_guard<std::mutex> g(mu);
         if(identity!=key){
-            identity=key;movies=std::make_shared<Index>();shows=std::make_shared<Index>();m3u_movies.clear();
+            identity=key;movies=std::make_shared<Index>();shows=std::make_shared<Index>();preview_movies.reset();preview_shows.reset();m3u_movies.clear();
             const auto generation=status.generation+1;
             status=Snapshot{};status.generation=generation;++epoch;last={};cache_loaded=false;refreshing=false;
         }
         if(refreshing)return;
-        if(!force&&last.time_since_epoch().count()) {
+        const bool resume_paused=status.movies.error=="Refresh paused during playback"||status.shows.error=="Refresh paused during playback";
+        if(!force&&!resume_paused&&last.time_since_epoch().count()) {
             // Partial catalogues retry the missing sections after a short cooldown,
             // not a full download every Settings/Home frame or a 24-hour wait.
             const auto wait=status.error.empty()?std::chrono::seconds(300):std::chrono::seconds(60);
@@ -254,6 +282,7 @@ void refresh(bool force,bool retry_failed){
         for(auto *s:{&status.movies,&status.shows,&status.playlist})if(s->loading) {
             s->loading=false;s->error="Catalogue worker failed";s->cached=true;
         }
+        preview_movies.reset();preview_shows.reset();
         refreshing=false;last=std::chrono::steady_clock::now();update_status();
     };
     const bool started=emby5::spawn_io([key,c,xtream,m3u,force,retry_failed,ticket,need_cache] {
@@ -301,7 +330,9 @@ void refresh(bool force,bool retry_failed){
                 }
                 if(skip) {
                     std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
-                    auto &s=series?status.shows:status.movies;s.loading=false;s.cached=true;update_status();return;
+                    auto &s=series?status.shows:status.movies;s.loading=false;s.cached=true;
+                    if(s.error=="Refresh paused during playback")s.error.clear();
+                    update_status();return;
                 }
                 emby5::RequestBudget budget(300,cancelled);
                 evo_mkdir(evo_data_dir());evo_mkdir(evo_data_path("emby5"));
@@ -311,7 +342,29 @@ void refresh(bool force,bool retry_failed){
                     ~TempFile(){if(f)std::fclose(f);std::remove(path.c_str());}
                 } file{tmp,std::fopen(tmp.c_str(),"wb")};
                 if(!file.f)throw std::runtime_error("cache write");
-                auto next=std::make_shared<Index>();next->path=path;
+                auto next=std::make_shared<Index>();next->path=tmp;next->file=std::make_shared<CachePath>(CachePath{tmp});
+                size_t published=0;auto published_at=std::chrono::steady_clock::time_point{};
+                auto publish_preview=[&](const iptv_catalogue::Scan &scan) {
+                    if(cancelled()||next->count==published)return;
+                    const auto now=std::chrono::steady_clock::now();
+                    if(published && next->count-published<8192 &&
+                       (next->count-published<512||now-published_at<std::chrono::seconds(2)))return;
+                    if(std::fflush(file.f)!=0)throw std::runtime_error("cache flush");
+                    // The preview owns an immutable index over flushed records;
+                    // the worker continues writing only to its private index.
+                    auto view=std::make_shared<Index>(*next);
+                    for(const auto &group:old->order) {
+                        const auto found=old->by_group.find(group);if(found==old->by_group.end())continue;
+                        for(const auto &ref:found->second) {
+                            if(view->by_id.count(ref.id)||scan.completed.count(ref.category))continue;
+                            auto &refs=view->by_group[group];if(refs.empty())view->order.push_back(group);
+                            refs.push_back(ref);view->by_id[ref.id]={ref.offset,ref.file};++view->count;
+                        }
+                    }
+                    {std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                        (series?preview_shows:preview_movies)=std::move(view);update_status();}
+                    published=next->count;published_at=now;
+                };
                 std::unordered_set<std::string> seen;
                 auto collect=[&](const cJSON *array,const std::string &category,const std::vector<iptv_catalogue::Category> &categories) {
                     std::unordered_map<std::string,std::string> labels;
@@ -328,6 +381,7 @@ void refresh(bool force,bool retry_failed){
                     }
                 };
                 auto progress=[&](const iptv_catalogue::Scan &scan) {
+                    publish_preview(scan);
                     std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
                     auto &s=series?status.shows:status.movies;
                     s.done=scan.done;s.total=scan.total;s.failed=scan.failed.size();update_status(false);
@@ -337,6 +391,15 @@ void refresh(bool force,bool retry_failed){
                     series?"get_series":"get_vod_streams",series?"series_id":"stream_id",budget,collect,false,
                     retry?&old->scan:nullptr,progress);
                 if(cancelled())return;
+                if(!next->scan.changed&&!next->scan.complete) {
+                    // Nothing new was accepted: do not read/rewrite hundreds of
+                    // thousands of cached records or change their freshness.
+                    std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
+                    (series?preview_shows:preview_movies).reset();
+                    auto &state=series?status.shows:status.movies;
+                    state=iptv_catalogue::result_state(next->scan,old->count!=0);
+                    update_status();return;
+                }
                 bool retained=false;
                 if(!next->scan.whole&&(!next->scan.complete||next->scan.incremental)&&!old->path.empty()) {
                     std::unique_ptr<FILE,decltype(&std::fclose)> f(std::fopen(old->path.c_str(),"rb"),&std::fclose);
@@ -352,7 +415,7 @@ void refresh(bool force,bool retry_failed){
                         // rows are replaced on full success; a partial refresh
                         // conservatively keeps them rather than guessing identity.
                         if(!item.category_id.empty()&&next->scan.completed.count(item.category_id))continue;
-                        if(next->scan.complete&&item.category_id.empty())continue;
+                        if(next->scan.complete&&(item.category_id.empty()||std::none_of(next->scan.categories.begin(),next->scan.categories.end(),[&](const auto &cat){return cat.id==item.category_id;})))continue;
                         if(cancelled())return;
                         if(!write_item(file.f,item,*next))throw std::runtime_error("cache write");
                         seen.insert(item.id);retained=true;
@@ -366,6 +429,8 @@ void refresh(bool force,bool retry_failed){
                 if(!saved)throw std::runtime_error("cache flush");
                 std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
                 if(std::rename(tmp.c_str(),path.c_str())!=0)throw std::runtime_error("cache publish");
+                next->path=path;next->file->path=path;
+                (series?preview_shows:preview_movies).reset();
                 (series?shows:movies)=std::move(next);
                 auto &s=series?status.shows:status.movies;
                 s=iptv_catalogue::result_state((series?shows:movies)->scan,retained);
@@ -374,6 +439,7 @@ void refresh(bool force,bool retry_failed){
                 std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
                 auto &s=series?status.shows:status.movies;
                 s.loading=false;s.cached=(series?shows:movies)->count!=0;
+                (series?preview_shows:preview_movies).reset();
                 s.error="Catalogue cache/worker failed; previous titles kept";update_status();
             }
         };
@@ -428,4 +494,6 @@ std::vector<Episode> episodes(const Item &series,std::string *error){
     std::sort(result.begin(),result.end(),[](const Episode &a,const Episode &b){return a.season!=b.season?a.season<b.season:a.number<b.number;});
     return result;
 }
+#include "iptv_vod_view.inc"
+
 }

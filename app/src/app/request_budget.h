@@ -7,9 +7,12 @@ namespace emby5 {
 class RequestBudget {
     std::chrono::steady_clock::time_point end;
     std::function<bool()> cancelled;
+    int span_seconds;
 public:
     explicit RequestBudget(int seconds, std::function<bool()> stop = {})
-        : end(std::chrono::steady_clock::now()+std::chrono::seconds(std::max(0,seconds))), cancelled(std::move(stop)) {}
+        : end(std::chrono::steady_clock::now()+std::chrono::seconds(std::max(0,seconds))), cancelled(std::move(stop)), span_seconds(std::max(0,seconds)) {}
+    bool stopped() const { return cancelled && cancelled(); }
+    void progress() { end=std::chrono::steady_clock::now()+std::chrono::seconds(span_seconds); }
     bool expired() const { return (cancelled && cancelled()) || std::chrono::steady_clock::now()>=end; }
     int timeout(int maximum=25) const {
         if(expired())return 0;

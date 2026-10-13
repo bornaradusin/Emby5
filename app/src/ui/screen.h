@@ -37,6 +37,13 @@ struct UserDataChange {
     bool resume_cleared = false;
 };
 
+// Describes the already selected library/view. Search never chooses another source.
+struct SearchContext {
+    std::string title, types, parent, filter;
+    bool discover = false;
+    bool valid() const { return discover || !types.empty(); }
+};
+
 struct Action {
     enum Kind {
         None,
@@ -52,10 +59,17 @@ struct Action {
         SwitchUser, /* to "Hvem ser på?" */
         SignOut,    /* forget this account's sign-in */
         Changed,    /* change: write it, then refresh the home rows */
+        Search, RetryHome, ViewCollection, Trailer, OpenVOD,
     } kind = None;
     jf::Item item;
+    SearchContext search_context;
     std::string iptv_url, iptv_title;
     bool iptv_is_vod=false;
+    int collection=-1;
+    std::string collection_parent, collection_title;
+    std::string vod_source, vod_id, vod_parent, vod_scope;
+    bool vod_episode=false, vod_series=false;
+    double vod_position=0;
     UserDataChange change;
     std::vector<jf::Item> queue;   /* Play: a queue to play from queue_start (a playlist) */
     size_t queue_start = 0;
@@ -72,6 +86,9 @@ public:
         if (m_refresh_needed) { m_refresh_needed = false; refresh_user_data(); }
     }
     virtual void reconcile_user_data(const jf::Item &) {}
+    // Triangle from a top-level tab (including when its navigation has focus).
+    // Default is no action: in particular Home and Settings do not search.
+    virtual Action search(bool from_navigation = false) { return {}; }
     virtual Action input(uint32_t pressed) = 0;
     virtual void draw(double now, float dt) = 0;
     virtual bool animating() const = 0;
@@ -88,6 +105,9 @@ public:
     };
     virtual bool focused_card(Card *) const { return false; }
     /* The last press ran into an edge (a row's end): a soft bump on the controller. */
+    // Keyboard callbacks can hand focus to local filtered results, or restore
+    // the top navigation when a query is cleared. Consumed by the shell thread.
+    int take_search_focus() { const int request = m_search_focus; m_search_focus = 0; return request; }
     bool take_bump()
     {
         const bool b = m_bump;
@@ -104,6 +124,7 @@ public:
     virtual bool modal() const { return false; }
 
 protected:
+    int m_search_focus = 0;
     bool m_refresh_needed = false;
     bool m_bump = false;
     bool m_focused = true;

@@ -13,6 +13,11 @@ public:
     bool erase(const std::string &id);
     bool move(const std::string &id, int direction);
     bool assign(const std::string &id, const std::string &channel_id, bool included);
+    // One atomic save for a snapshot import; duplicate legacy/raw Xtream IDs
+    // are treated as the same channel as their source-prefixed identity.
+    bool add_channels(const std::string &id, const std::vector<std::string> &channels, size_t *added = nullptr);
+    static std::string channel_key(const std::string &id);
+    bool contains(const std::string &id, const std::string &channel) const;
     bool move_channel(const std::string &id, const std::string &channel_id, int direction);
     const std::vector<Category> &categories() const { return categories_; }
 private:

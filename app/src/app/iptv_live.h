@@ -9,7 +9,7 @@ struct Snapshot {
     unsigned emby_count=0, xtream_count=0, m3u_count=0;
     bool loading=false, emby_loading=false, xtream_loading=false;
     std::string emby_error,xtream_error,m3u_error;
-    uint64_t generation=0;
+    uint64_t generation=0, catalogue_generation=0;
     iptv_catalogue::State server, xtream, playlist;
     iptv_catalogue::Scan xtream_scan; // Metadata only; no credential-bearing URLs.
 };

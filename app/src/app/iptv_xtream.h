@@ -18,7 +18,8 @@ std::string api_url(const Credentials &credentials, const std::string &action);
 std::string live_url(const Credentials &credentials, const Channel &channel);
 bool authenticate(const Credentials &credentials, std::string *error);
 bool load_catalog(const Credentials &credentials, Catalog *catalog, std::string *error, int budget_seconds=120, std::function<bool()> cancelled={}, bool retry_failed=false,
-                  std::function<void(const iptv_catalogue::Scan &)> progress={});
+                  std::function<void(const iptv_catalogue::Scan &)> progress={},
+                  std::function<void(const Catalog &)> available={});
 bool save_credentials(const Credentials &credentials);
 bool load_credentials(Credentials *credentials);
 }

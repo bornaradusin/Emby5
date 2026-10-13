@@ -77,7 +77,8 @@ bool authenticate(const Credentials &c, std::string *error) {
 }
 bool load_catalog(const Credentials &c, Catalog *catalog, std::string *error,
                   int budget_seconds, std::function<bool()> cancelled, bool retry_failed,
-                  std::function<void(const iptv_catalogue::Scan &)> progress) {
+                  std::function<void(const iptv_catalogue::Scan &)> progress,
+                  std::function<void(const Catalog &)> available) {
     if(error)error->clear();
     if(!catalog || !valid(c)) {if(error)*error="Enter an HTTP(S) server URL, username and password";return false;}
     emby5::RequestBudget budget(budget_seconds,cancelled);
@@ -91,8 +92,23 @@ bool load_catalog(const Credentials &c, Catalog *catalog, std::string *error,
             if(seen.insert(ch.id).second)fresh.push_back(std::move(ch));
         }
     };
+    size_t published=0;auto published_at=std::chrono::steady_clock::time_point{};
+    const auto report=[&](const iptv_catalogue::Scan &state) {
+        if(progress)progress(state);
+        if(!available || (cancelled&&cancelled()) || fresh.size()==published)return;
+        const auto now=std::chrono::steady_clock::now();
+        if(published&&fresh.size()-published<4096&&now-published_at<std::chrono::milliseconds(500))return;
+        Catalog partial;partial.categories=state.categories;partial.scan=state;
+        partial.scan.complete=false;partial.scan.error.clear();partial.channels=fresh;
+        // Keep missing entries until a category has completed successfully.
+        for(const auto &old:catalog->channels) {
+            const auto &group=old.category_key.empty()?old.category_id:old.category_key;
+            if(!seen.count(old.id)&&!state.completed.count(group))partial.channels.push_back(old);
+        }
+        available(partial);published=fresh.size();published_at=now;
+    };
     auto scan=iptv_catalogue::fetch(c,"get_live_categories","get_live_streams","stream_id",budget,
-                                   collect,true,retry_failed?&catalog->scan:nullptr,std::move(progress));
+                                   collect,false,retry_failed?&catalog->scan:nullptr,report);
     // Session/provider changes discard the result, including partial responses.
     if(cancelled&&cancelled()) {if(error)*error="Channel refresh cancelled";return false;}
     if(!scan.whole && (!scan.complete || scan.incremental)) {

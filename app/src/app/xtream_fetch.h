@@ -2,7 +2,8 @@
 #pragma once
 #include "app/iptv_xtream.h"
 #include "app/request_budget.h"
-#include "jf/jf_http.h"
+#include "jf/jf_catalogue_http.h"
+#include "app/catalogue_request_queue.h"
 extern "C" {
 #include "cJSON.h"
 }
@@ -25,33 +26,29 @@ inline std::string encode(const std::string &s) {
     }
     return out;
 }
-inline Json read_array(const std::string &url, emby5::RequestBudget &budget, std::string &error) {
-    const int seconds=budget.timeout();
-    if(!seconds){error="Refresh deadline reached or cancelled";return Json(nullptr,cJSON_Delete);}
-    // Do not put raw URLs, tokens, passwords or transport exception text in UI/logs.
-    try {
-        auto r=jf::http_request("GET",url,{},"",seconds);
-        if(!r.ok()||!r.error.empty()) {
-            error=(!r.ok()&&r.status)?"HTTP "+std::to_string(r.status):"Connection failed, incomplete or timed out";
-            return Json(nullptr,cJSON_Delete);
-        }
-        if(r.body.size()>(32u<<20)){error="Catalogue response too large";return Json(nullptr,cJSON_Delete);}
-        Json j(cJSON_ParseWithOpts(r.body.c_str(),nullptr,1),cJSON_Delete);
-        if(!cJSON_IsArray(j.get())){error="Invalid catalogue JSON";return Json(nullptr,cJSON_Delete);}
-        if(budget.expired()){error="Refresh deadline reached or cancelled";return Json(nullptr,cJSON_Delete);}
-        return j;
-    } catch(...) {error="Catalogue request failed";return Json(nullptr,cJSON_Delete);}
-}
 using Consume=std::function<void(const cJSON *,const std::string &,const std::vector<Category> &)>;
-// Consume is transactional at category granularity: validate the entire array
-// before invoking it. A storage exception propagates to the owner; no partial
-// file/index is published. A valid empty array IS an authoritative empty result.
+// Valid objects are emitted in bounded batches. Failed or interrupted categories
+// remain incomplete; callers merge them with previous data, never erase it.
 inline Scan fetch(const iptv_xtream::Credentials &creds, const std::string &category_action,
                   const std::string &item_action,const char *id_field,
                   emby5::RequestBudget &budget,const Consume &consume,bool prefer_whole,
                   const Scan *retry=nullptr,std::function<void(const Scan &)> progress={}) {
-    Scan out;std::string error;std::vector<std::string> ids;
-    bool resuming=retry && retry->list_ok && !retry->categories.empty() && !retry->failed.empty();
+    (void)prefer_whole; // Always prefer smaller categories when the provider has them.
+    Scan out;std::vector<std::string> ids;std::string error;
+    const auto cancelled=[&]{return budget.stopped();};
+    const auto key=creds.server+"\n"+creds.username;
+    const auto notify=[&]{if(progress)progress(out);};
+    auto transfer=[&](const std::string &url,const std::function<bool(const std::string&)> &accept) {
+        const auto stop=[&]{return cancelled()||playback_active();};
+        RequestTurn turn(key,stop);
+        if(!turn){jf::CatalogueHttpResult r;r.cancelled=true;r.error=playback_active()?"Refresh paused during playback":"Catalogue request cancelled";return r;}
+        // Waiting for another section is not network inactivity for this request.
+        budget.progress();
+        auto r=jf::http_catalogue_array(url,accept,stop,[&](uint64_t){budget.progress();},90);
+        if(r.cancelled&&playback_active())r.error="Refresh paused during playback";
+        return r;
+    };
+    bool resuming=retry&&retry->list_ok&&!retry->categories.empty()&&!retry->failed.empty();
     if(resuming) {
         std::unordered_set<std::string> known;
         for(const auto &cat:retry->categories)known.insert(cat.id);
@@ -62,49 +59,71 @@ inline Scan fetch(const iptv_xtream::Credentials &creds, const std::string &cate
         out.categories=retry->categories;out.list_ok=true;ids=retry->failed;
         out.total=out.categories.size();out.done=out.total>=ids.size()?out.total-ids.size():0;
     } else {
-        auto cats=read_array(iptv_xtream::api_url(creds,category_action),budget,error);
-        out.list_ok=cJSON_IsArray(cats.get());std::unordered_set<std::string> seen;
-        const cJSON *cat;
-        if(out.list_ok)cJSON_ArrayForEach(cat,cats.get()) {
-            Category v{field(cat,"category_id"),field(cat,"category_name")};
-            if(v.id.empty()){out.list_ok=false;continue;}
-            if(seen.insert(v.id).second)out.categories.push_back(std::move(v));
+        std::unordered_set<std::string> seen;
+        auto cats=transfer(iptv_xtream::api_url(creds,category_action),[&](const std::string &object) {
+            Json j(cJSON_ParseWithOpts(object.c_str(),nullptr,1),cJSON_Delete);
+            Category c{field(j.get(),"category_id"),field(j.get(),"category_name")};
+            if(!cJSON_IsObject(j.get())||c.id.empty())return false;
+            if(seen.insert(c.id).second)out.categories.push_back(std::move(c));
+            return out.categories.size()<=10000;
+        });
+        out.list_ok=cats.complete;
+        if(!out.list_ok) {
+            out.categories.clear();error=cats.error;
+            // A rejected connection or credential does not justify downloading
+            // an even larger whole-catalogue endpoint next.
+            if(cats.transport_error||cats.cancelled||cats.status==401||cats.status==403) {
+                out.total=1;out.failed={""};out.error=error;notify();return out;
+            }
         }
-        if(!out.list_ok)out.categories.clear();
         for(const auto &cat:out.categories)ids.push_back(cat.id);
         out.total=ids.size();
     }
-    const auto notify=[&]{if(progress)progress(out);};notify();
-    auto part=[&](const std::string &id)->bool {
+    if(ids.empty()){ids.push_back("");out.total=1;}
+    // Unvisited categories stay in failed until their COMPLETE response arrives.
+    // A progressive snapshot can therefore never masquerade as a full refresh.
+    out.failed=ids;notify();unsigned consecutive_transport_failures=0;
+    for(const auto &id:ids) {
+        if(cancelled()){error="Catalogue request cancelled";break;}
         auto url=iptv_xtream::api_url(creds,item_action);
         if(!id.empty())url+="&category_id="+encode(id);
-        auto arr=read_array(url,budget,error);if(!arr)return false;
-        size_t checked=0;const cJSON *v;
-        cJSON_ArrayForEach(v,arr.get()) {
-            if(field(v,id_field).empty()||field(v,"name").empty()) {
-                error="Invalid catalogue item";return false;
-            }
-            if((++checked%256)==0&&budget.expired()) {error="Refresh deadline reached or cancelled";return false;}
+        Json batch(cJSON_CreateArray(),cJSON_Delete);if(!batch)throw std::bad_alloc();
+        size_t pending=0;
+        auto flush=[&] {
+            if(!pending)return;
+            if(cancelled())return;
+            consume(batch.get(),id,out.categories);
+            batch.reset(cJSON_CreateArray());if(!batch)throw std::bad_alloc();
+            pending=0;out.changed=true;notify();
+        };
+        auto response=transfer(url,[&](const std::string &object) {
+            Json item(cJSON_ParseWithOpts(object.c_str(),nullptr,1),cJSON_Delete);
+            if(!cJSON_IsObject(item.get())||field(item.get(),id_field).empty()||field(item.get(),"name").empty())return false;
+            // Keep the provider's category metadata where supplied. Some
+            // catalogues return multi-category items; valid entries must not
+            // be rejected merely because their primary category differs.
+            cJSON_AddItemToArray(batch.get(),item.release());
+            if(++pending>=256)flush();
+            return !cancelled();
+        });
+        if(cancelled()){error="Catalogue request cancelled";break;}
+        flush(); // verified complete objects remain usable after a truncated reply
+        if(response.complete) {
+            // A valid empty array authoritatively clears just this category.
+            if(!response.items)consume(batch.get(),id,out.categories);
+            out.changed=true;out.completed.insert(id);++out.done;
+            out.failed.erase(std::remove(out.failed.begin(),out.failed.end(),id),out.failed.end());
+            if(id.empty())out.whole=true;
+            consecutive_transport_failures=0;
+        } else {
+            error=response.error;
+            if(response.transport_error)++consecutive_transport_failures;else consecutive_transport_failures=0;
         }
-        if(budget.expired()){error="Refresh deadline reached or cancelled";return false;}
-        consume(arr.get(),id,out.categories);out.changed=true;return true;
-    };
-    if(!resuming && (prefer_whole||ids.empty())) {
-        if(part("")) {
-            out.whole=out.complete=true;out.done=out.total?out.total:1;out.total=out.done;
-            out.error.clear();notify();return out;
-        }
-        if(ids.empty()) {
-            out.total=1;out.failed.push_back("");out.error=error;notify();return out;
-        }
+        budget.progress();out.error=error;notify();
+        if(response.cancelled||response.status==401||response.status==403||consecutive_transport_failures>=3)break;
     }
-    for(const auto &id:ids) {
-        if(part(id)){out.completed.insert(id);++out.done;}
-        else out.failed.push_back(id);
-        notify();
-    }
-    out.complete=out.list_ok&&out.failed.empty();
-    if(!out.complete)out.error=error.empty()?"Catalogue refresh incomplete":error;
+    out.complete=out.failed.empty()&&(out.list_ok||out.whole);
+    out.error=out.complete?"":error.empty()?"Catalogue refresh incomplete":error;
     notify();return out;
 }
 // Footer metadata travels atomically with a VOD cache; Live keeps it in its JSON.

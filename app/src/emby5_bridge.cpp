@@ -7,6 +7,7 @@
  * progress and final result to the Emby playback reporting instead.
  */
 #include "emby5_playback.h"
+#include "app/browse_state.h"
 #include "nuvio_bridge.h"
 #include "nuvio_control.h"
 
@@ -25,13 +26,14 @@ int nuvio_control_quit_requested(void) { return 0; }
 void nuvio_control_report(const char *, double position, double duration)
 {
     nuvio_control_beats++;
+    browse_state::report_playback(position,duration);
     emby5_playback_progress(position, duration);
 }
 
 int nuvio_service_up(void) { return 1; }
 int nuvio_bridge_next(char **json) { *json = nullptr; return 0; }
 void nuvio_bridge_state(const char *, const char *, double, double, const char *) {}
-void nuvio_bridge_state_json(const char *json) { emby5_playback_finished(json); }
+void nuvio_bridge_state_json(const char *json) { browse_state::finish_playback(json); emby5_playback_finished(json); }
 
 int nuvio_bridge_get(const char *, char **body)
 {

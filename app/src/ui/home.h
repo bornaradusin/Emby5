@@ -36,11 +36,13 @@ struct HomeRow {
     int shelf = -1;         /* Seerr's tab: which of its lists, for the next page (-1: none) */
     int page = 1;           /* the pages loaded so far */
     bool more = true;       /* the list may go on */
+    std::string parent;     /* parent library for the full-row grid */
 };
 
 struct HomeModel {
     std::vector<jf::Item> hero;
     std::vector<HomeRow> rows;
+    std::vector<std::string> failed_sections;
 };
 
 class Home : public Screen {
@@ -60,6 +62,15 @@ public:
 
     void activate() override;
     void reconcile_user_data(const jf::Item &fresh) override;
+    Action search(bool = false) override {
+        Action a;
+        if (m_discover && !modal()) {
+            a.kind = Action::Search;
+            a.search_context.title = "Discover";
+            a.search_context.discover = true;
+        }
+        return a;
+    }
     Action input(uint32_t pressed) override;
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating; }
@@ -86,6 +97,7 @@ private:
     void draw_card_art(const jf::Item &it, const gfx::Rect &r, float radius, float opacity) const;
 
     jf::Client &m_client;
+    bool m_activated = false, m_interacted = false;
     bool m_discover = false;            /* Seerr's tab */
     HomeModel m_model;
 

@@ -412,6 +412,8 @@ void Detail::select_episodes(bool preserve_selection)
     m_eps.clear();
     if (m_view.seasons.empty())
         return;
+    if(!m_requested_season.empty())for(size_t i=0;i<m_view.seasons.size();++i)if(m_view.seasons[i].id==m_requested_season){
+        m_season=(int)i;m_season_picked=true;m_zone=Seasons;m_requested_season.clear();break;}
     m_season = std::max(0, std::min(m_season, (int)m_view.seasons.size() - 1));
     const jf::Item &season = m_view.seasons[m_season];
     for (const jf::Item &e : m_view.all_episodes)
@@ -611,6 +613,9 @@ Action Detail::input(uint32_t p)
             const Button btn = b[std::max(0, std::min(m_button, (int)b.size() - 1))];
             if (btn == FavouriteButton || btn == WatchedButton) {
                 if (m_view.item.id.empty()) break;
+                if(btn==WatchedButton&&(m_view.item.type=="Series"||m_view.item.type=="Season")){
+                    m_menu_zone=m_zone;m_menu.confirm_played(m_view.item);break;
+                }
                 /* Ask the app to write and reconcile this state with Emby. */
                 UserDataChange &ch = a.change;
                 ch.id = m_view.item.id;

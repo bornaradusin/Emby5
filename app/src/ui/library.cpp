@@ -13,6 +13,7 @@
 #include "nuvio_input.h"
 
 #include <algorithm>
+#include <set>
 #include <cctype>
 #include <cstdio>
 #include <thread>
@@ -44,10 +45,12 @@ enum FilterRow { FUnplayed, FFavorites, FGenre, FDecade, FReset, FRowCount };
 } // namespace
 
 Library::Library(jf::Client &client, std::string title, std::string types, std::string view_id, bool pushed,
-                 std::string filter)
+                 std::string filter, int collection)
     : m_client(client), m_title(std::move(title)), m_pushed(pushed)
 {
     m_sources.push_back({m_title, std::move(view_id), std::move(types), std::move(filter)});
+    m_collection=collection;m_scope=browse_state::scope(client);
+    load_preferences();
     m_nav.snap(1.f);
 }
 
@@ -56,6 +59,40 @@ Library::~Library()
     std::lock_guard<std::mutex> g(m_data->lock);
     m_data->alive = false;
     ++m_data->generation;
+    for(auto &entry:m_source_cache)if(entry.second.data!=m_data){
+        std::lock_guard<std::mutex> other(entry.second.data->lock);
+        entry.second.data->alive=false;++entry.second.data->generation;
+    }
+}
+
+std::string Library::preference_key() const {
+    const auto &s=source();return s.view+"\n"+s.types+"\n"+s.filter+"\n"+std::to_string(m_collection);
+}
+void Library::load_preferences(){
+    if(m_collection>=0)return;
+    const auto p=browse_state::library(m_scope,preference_key());
+    m_sort=std::clamp(p.sort,0,kNumSorts-1);m_filters.unplayed=p.unplayed;
+    m_filters.favorites=p.favorites;m_filters.decade=std::clamp(p.decade,0,kNumDecades-1);
+    m_saved_genre=p.genre;
+}
+void Library::save_preferences(){
+    if(m_collection>=0)return;
+    browse_state::LibraryPrefs p;p.sort=m_sort;p.unplayed=m_filters.unplayed;
+    p.favorites=m_filters.favorites;p.decade=m_filters.decade;
+    {std::lock_guard<std::mutex> g(m_data->lock);
+        if(m_filters.genre>0&&m_filters.genre<=(int)m_data->genres.size())m_saved_genre=m_data->genres[m_filters.genre-1];}
+    p.genre=m_saved_genre;browse_state::save_library(m_scope,preference_key(),p);
+}
+void Library::sync_selection(){
+    std::lock_guard<std::mutex> g(m_data->lock);
+    if(!m_data->published)m_data->publish_items();
+    if(m_snapshot!=m_data->published){
+        m_snapshot=m_data->published;
+        if(!m_anchor.empty())for(size_t i=0;i<m_snapshot->size();++i)
+            if((*m_snapshot)[i].id==m_anchor){m_index=(int)i;break;}
+        m_index=std::clamp(m_index,0,std::max(0,(int)m_snapshot->size()-1));
+    }
+    m_anchor=m_index<(int)m_snapshot->size()?(*m_snapshot)[m_index].id:std::string();
 }
 
 bool Library::needs_redraw() const
@@ -120,32 +157,19 @@ void Library::request_visible_artwork(const std::vector<jf::Item> &visible)
 
 void Library::set_sources(std::vector<Source> sources)
 {
-    if (sources.empty())
-        return;
-    bool same = sources.size() == m_sources.size();
-    for (size_t i = 0; same && i < sources.size(); i++)
-        same = sources[i].view == m_sources[i].view && sources[i].types == m_sources[i].types &&
-               sources[i].label == m_sources[i].label && sources[i].filter == m_sources[i].filter;
-    if (same)
-        return;
-    /* Stay on the chosen library where it is still there. */
-    const Source was = source();
-    m_sources = std::move(sources);
-    m_source = 0;
-    for (size_t i = 0; i < m_sources.size(); i++)
-        if (m_sources[i].view == was.view && m_sources[i].types == was.types)
-            m_source = (int)i;
-    bool used;
-    {
-        std::lock_guard<std::mutex> g(m_data->lock);
-        used = m_data->total >= 0 || m_data->loading;
-    }
-    if (used) {   /* on screen before: show the new sources now */
-        reload();
-    } else {      /* not opened yet: activate() loads it */
-        std::lock_guard<std::mutex> g(m_data->lock);
-        m_data->generation++;
-    }
+    if(sources.empty())return;
+    const Source was=source();bool same=sources.size()==m_sources.size();
+    for(size_t i=0;same&&i<sources.size();++i)same=sources[i].view==m_sources[i].view&&sources[i].types==m_sources[i].types&&sources[i].filter==m_sources[i].filter&&sources[i].label==m_sources[i].label;
+    if(same)return;
+    m_sources=std::move(sources);m_source=0;m_source_at=-1;
+    for(size_t i=0;i<m_sources.size();++i)if(m_sources[i].view==was.view&&m_sources[i].types==was.types&&m_sources[i].filter==was.filter){m_source=(int)i;break;}
+    m_pill=m_sources.size()>1?m_source:0;
+    if(source().view==was.view&&source().types==was.types&&source().filter==was.filter)return;
+    bool used;{std::lock_guard<std::mutex> g(m_data->lock);used=m_data->loading||m_data->total>=0;m_data->alive=false;++m_data->generation;}
+    for(auto &v:m_source_cache)if(v.second.data!=m_data){std::lock_guard<std::mutex> g(v.second.data->lock);v.second.data->alive=false;++v.second.data->generation;}
+    m_source_cache.clear();m_data=std::make_shared<Data>();m_snapshot.reset();m_anchor.clear();m_index=0;m_scroll.snap(0);
+    m_filters={};m_sort=0;m_saved_genre.clear();load_preferences();
+    if(used)load_more();
 }
 
 bool Library::square() const
@@ -156,10 +180,11 @@ bool Library::square() const
 
 int Library::pill_count() const { return (m_sources.size() > 1 ? (int)m_sources.size() : 0) + 1; }   /* + the sort & filter button */
 
-bool Library::by_name() const { return m_sort == kSortByName && source().types != "MusicArtist"; }
+bool Library::by_name() const { return m_collection<0 && m_sort == kSortByName && source().types != "MusicArtist"; }
 
 std::string Library::filter_query() const
 {
+    if(m_collection>=0)return {};
     std::string q, f;
     if (m_filters.unplayed)
         f = "IsUnplayed";
@@ -169,8 +194,9 @@ std::string Library::filter_query() const
         q += "&Filters=" + f;
     {
         std::lock_guard<std::mutex> g(m_data->lock);
-        if (m_filters.genre > 0 && m_filters.genre <= (int)m_data->genres.size())
-            q += "&Genres=" + jf::Client::escape(m_data->genres[m_filters.genre - 1]);
+        const std::string genre=m_filters.genre>0&&m_filters.genre<=(int)m_data->genres.size()
+            ?m_data->genres[m_filters.genre-1]:m_saved_genre;
+        if(!genre.empty())q += "&Genres=" + jf::Client::escape(genre);
     }
     if (m_filters.decade > 0 && m_filters.decade < kNumDecades) {
         q += "&Years=";
@@ -182,7 +208,7 @@ std::string Library::filter_query() const
 
 int Library::active_filters() const
 {
-    return (int)m_filters.unplayed + (int)m_filters.favorites + (m_filters.genre > 0) + (m_filters.decade > 0);
+    return (int)m_filters.unplayed + (int)m_filters.favorites + (m_filters.genre > 0 || !m_saved_genre.empty()) + (m_filters.decade > 0);
 }
 
 std::string Library::types_for(const std::string &collection_type)
@@ -199,9 +225,13 @@ std::string Library::types_for(const std::string &collection_type)
 
 void Library::reconcile_user_data(const jf::Item &fresh)
 {
-    std::lock_guard<std::mutex> g(m_data->lock);
-    for (auto &it : m_data->items) emby5::reconcile_user_data(it, fresh);
-    ++m_data->revision;
+    std::set<Data*> seen;
+    auto reconcile=[&](const std::shared_ptr<Data> &data){if(!seen.insert(data.get()).second)return;
+        std::lock_guard<std::mutex> g(data->lock);
+        for(auto &it:data->items)emby5::reconcile_user_data(it,fresh);
+        data->publish_items();++data->revision;
+    };
+    reconcile(m_data);for(auto &entry:m_source_cache)reconcile(entry.second.data);
 }
 
 void Library::activate()
@@ -223,6 +253,7 @@ void Library::activate()
 
 void Library::refresh_user_data()
 {
+    for(auto &entry:m_source_cache)if(entry.second.data!=m_data){std::lock_guard<std::mutex> g(entry.second.data->lock);entry.second.data->stale=true;}
     auto d = m_data;
     unsigned generation;
     int limit;
@@ -232,19 +263,30 @@ void Library::refresh_user_data()
         generation = ++d->generation;
         ++d->revision;
         limit = std::max(kPage, (int)d->items.size());
-        d->loading = true;
+        d->loading = true;d->stale=false;
     }
     jf::Client *c = &m_client;
     const Source src = source();
     const Sort sort = kSorts[m_sort];
     const std::string filter = filter_query();
-    if (!emby5::spawn_io([d, c, src, sort, filter, generation, limit] {
-        const jf::Page p = src.types == "MusicArtist"
-            ? c->album_artists(src.view, sort.by, sort.desc, 0, limit)
-            : c->library(src.view, src.types, sort.by, sort.desc, 0, limit, src.filter + filter);
+    const int collection=m_collection;
+    if (!emby5::spawn_io([d, c, src, sort, filter, generation, limit,collection] {
+        jf::Page p;
+        if(collection>=0){
+            p.ok=true;
+            for(int start=0;start<limit;){
+                auto part=c->collection_page((jf::Client::Collection)collection,src.view,start,std::min(120,limit-start));
+                if(!part.ok){p.ok=false;break;}
+                p.total=part.total;p.items.insert(p.items.end(),part.items.begin(),part.items.end());
+                start+=(int)part.items.size();if(part.items.empty()||start>=part.total)break;
+                {std::lock_guard<std::mutex> g(d->lock);if(!d->alive||generation!=d->generation)return;}
+            }
+        }else p=src.types=="MusicArtist"?c->album_artists(src.view,sort.by,sort.desc,0,limit)
+             :c->library(src.view,src.types,sort.by,sort.desc,0,limit,src.filter+filter);
         std::lock_guard<std::mutex> g(d->lock);
         if (!d->alive || generation != d->generation) return;
-        if (p.ok) { d->items = p.items; d->total = std::max(p.total,(int)d->items.size()); }
+        if (p.ok) { d->items = p.items; d->total = std::max(p.total,(int)d->items.size());d->publish_items(); }
+        d->failed=!p.ok;
         d->loading = false;
         ++d->revision;
     }, [d, generation] {
@@ -260,15 +302,15 @@ void Library::reload()
 {
     {
         std::lock_guard<std::mutex> g(m_data->lock);
-        m_data->items.clear();
+        m_data->items.clear();m_data->publish_items();m_data->failed=false;m_data->retry_at=0;
         m_data->total = -1;
         m_data->loading = false;
         m_data->generation++;
         ++m_data->revision;
     }
-    m_index = 0;
+    m_index = 0;m_anchor.clear();m_snapshot.reset();
     m_scroll.snap(0);
-    load_more();
+    save_preferences();load_more();
 }
 
 void Library::load_more()
@@ -278,7 +320,7 @@ void Library::load_more()
     unsigned gen;
     {
         std::lock_guard<std::mutex> g(d->lock);
-        if (d->loading || (d->total >= 0 && (int)d->items.size() >= d->total))
+        if (d->loading || (d->failed && music_art_now()<d->retry_at) || (d->total >= 0 && (int)d->items.size() >= d->total))
             return;
         d->loading = true;
         start = (int)d->items.size();
@@ -290,31 +332,55 @@ void Library::load_more()
     const std::string fq = filter_query();
     auto failed=[d,gen] {
         std::lock_guard<std::mutex> g(d->lock);
-        if(d->alive && gen==d->generation) {d->loading=false; ++d->revision;}
+        if(d->alive && gen==d->generation) {d->loading=false;d->failed=true;d->retry_at=music_art_now()+5; ++d->revision;}
     };
-    if(!emby5::spawn_io([d, c, src, s, start, gen, fq] {
-        const auto page = src.types == "MusicArtist" ? c->album_artists(src.view, s.by, s.desc, start, kPage)
+    const int collection=m_collection;
+    if(!emby5::spawn_io([d, c, src, s, start, gen, fq,collection] {
+        const auto page = collection>=0?c->collection_page((jf::Client::Collection)collection,src.view,start,kPage):src.types == "MusicArtist" ? c->album_artists(src.view, s.by, s.desc, start, kPage)
             : c->library(src.view, src.types, s.by, s.desc, start, kPage, src.filter + fq);
         std::lock_guard<std::mutex> g(d->lock);
         if(!d->alive || gen!=d->generation) return;
         if(page.ok) {
-            d->items.insert(d->items.end(),page.items.begin(),page.items.end());
-            d->total=page.items.empty() ? (int)d->items.size() : std::max(page.total,(int)d->items.size());
+            std::set<std::string> ids;for(const auto &v:d->items)ids.insert(v.id);
+            const size_t before=d->items.size();for(const auto &v:page.items)if(ids.insert(v.id).second)d->items.push_back(v);
+            d->total=d->items.size()==before ? (int)d->items.size() : std::max(page.total,(int)d->items.size());
+            d->publish_items();
         }
+        d->failed=!page.ok;d->retry_at=page.ok?0:music_art_now()+5;
         d->loading=false;
         ++d->revision;
     },failed)) failed();
 }
 
-Action Library::input(uint32_t p)
+Action Library::search(bool)
 {
     Action a;
+    if (modal() || m_sources.empty() || m_collection >= 0) return a;
+    const auto &src = source();
+    a.kind = Action::Search;
+    a.search_context = {m_sources.size() > 1 ? src.label : m_title,
+                        src.types, src.view, src.filter, false};
+    return a;
+}
+
+Action Library::input(uint32_t p)
+{
+    sync_selection();
+    struct Remember{Library *self;~Remember(){
+        if(self->m_snapshot&&self->m_index>=0&&self->m_index<(int)self->m_snapshot->size())self->m_anchor=(*self->m_snapshot)[self->m_index].id;
+        self->sync_selection();}} remember{this};
+    Action a;
+    if ((p & NUVIO_BTN_TRIANGLE) && !modal()) return search();
     int count;
     bool more;   /* pages still to come: the last row loaded is not the end */
     {
         std::lock_guard<std::mutex> g(m_data->lock);
         count = (int)m_data->items.size();
         more = m_data->total < 0 ? m_data->loading : count < m_data->total;
+    }
+    if(count==0&&(p&NUVIO_BTN_CROSS)){
+        bool retry=false;{std::lock_guard<std::mutex> g(m_data->lock);retry=m_data->failed&&!m_data->loading;if(retry){m_data->retry_at=0;m_data->total=-1;}}
+        if(retry){load_more();return a;}
     }
     if (m_filter_open) {
         filter_input(p);
@@ -324,15 +390,15 @@ Action Library::input(uint32_t p)
         m_menu.input(p, &a);
         return a;
     }
-    if ((p & NUVIO_BTN_OPTIONS) && !m_in_pills) {
+    if (p & NUVIO_BTN_OPTIONS) {
         std::lock_guard<std::mutex> g(m_data->lock);
-        if (m_index < (int)m_data->items.size())
-            m_menu.open(m_data->items[m_index], false);
+        if (m_index >= 0 && m_index < (int)m_data->items.size())
+            m_menu.open(m_data->items[m_index],m_collection==jf::Client::ResumeCollection);
         return a;
     }
     /* The pill row: the sources (when there is a choice), then the sorts. */
     const int ns = m_sources.size() > 1 ? (int)m_sources.size() : 0;
-    if ((p & NUVIO_BTN_SQUARE) && !m_menu.active()) {   /* □: sort & filter, from anywhere here */
+    if ((p & NUVIO_BTN_SQUARE) && m_collection<0 && !m_menu.active()) {   /* □: sort & filter, from anywhere here */
         open_sheet();
         return a;
     }
@@ -352,7 +418,7 @@ Action Library::input(uint32_t p)
                 switch_source(m_pill);   /* going down: the library under the focus, now */
             if (count > 0 || m_source_at < 0) {
                 m_in_pills = false;
-                m_index = 0;             /* the first title, leftmost */
+                m_index = std::clamp(m_index,0,std::max(0,count-1));
             }
         } else if (p & NUVIO_BTN_CIRCLE) {
             a.kind = m_pushed ? Action::Back : Action::ToNav;
@@ -388,11 +454,13 @@ Action Library::input(uint32_t p)
     } else if (p & NUVIO_BTN_UP) {
         if (row > 0)
             m_index -= kCols;
+        else if(m_pushed&&m_collection>=0){a.kind=Action::Back;}
         else {   /* up to the nearest pills: the left half to the libraries, the right to the sorts */
             m_in_pills = true;
             m_pill = ns > 0 && col < kCols / 2 ? m_source : ns;
         }
     } else if (p & NUVIO_BTN_CIRCLE) {
+        if(m_pushed&&m_collection>=0){a.kind=Action::Back;return a;}
         /* Back: to the top of the grid, then to the sort row. */
         if (m_index >= kCols)
             m_index = col;
@@ -403,7 +471,7 @@ Action Library::input(uint32_t p)
     } else if (p & NUVIO_BTN_CROSS) {
         std::lock_guard<std::mutex> g(m_data->lock);
         if (m_index < (int)m_data->items.size()) {
-            a.kind = Action::Open;   /* the detail page first, as everywhere */
+            a.kind = (m_collection==jf::Client::ResumeCollection||m_collection==jf::Client::NextUpCollection)?Action::Play:Action::Open;
             a.item = m_data->items[m_index];
         }
     }
@@ -415,28 +483,32 @@ Action Library::input(uint32_t p)
 void Library::enter_from_top()
 {
     const int ns = m_sources.size() > 1 ? (int)m_sources.size() : 0;
-    m_in_pills = true;   /* the header row is always on the way down */
+    if(m_snapshot&&!m_snapshot->empty()) {m_in_pills=false;return;}
+    m_in_pills = m_collection<0;
     m_pill = ns > 0 ? m_source : ns;
     m_source_at = -1;
 }
 
 void Library::switch_source(int i)
 {
-    m_source_at = -1;
-    if (i == m_source || i < 0 || i >= (int)m_sources.size())
-        return;
-    m_source = i;
-    m_filters.genre = 0;   /* the genres are the library's own */
-    {
-        std::lock_guard<std::mutex> g(m_data->lock);
-        m_data->genres.clear();
-        m_data->genres_loaded = false;
+    m_source_at=-1;if(i==m_source||i<0||i>=(int)m_sources.size())return;
+    save_preferences();
+    m_source_cache[preference_key()]={m_data,m_index,m_sort,m_filters,m_scroll.value,m_anchor,m_saved_genre};
+    m_source=i;m_snapshot.reset();
+    const auto found=m_source_cache.find(preference_key());
+    if(found!=m_source_cache.end()){
+        const auto &v=found->second;m_data=v.data;m_index=v.index;m_sort=v.sort;m_filters=v.filters;
+        m_scroll.snap(v.scroll);m_anchor=v.anchor;m_saved_genre=v.genre;
+    }else{
+        m_data=std::make_shared<Data>();m_index=0;m_sort=0;m_filters={};m_anchor.clear();m_saved_genre.clear();m_scroll.snap(0);load_preferences();
     }
-    reload();
+    bool stale;{std::lock_guard<std::mutex> g(m_data->lock);stale=m_data->stale;}
+    if(stale)refresh_user_data();else load_more();
 }
 
 void Library::open_sheet()
 {
+    if(m_collection>=0)return;
     m_filter_open = true;
     m_filter_row = m_sort;
     m_filter_a.to(1.f);
@@ -498,20 +570,24 @@ void Library::filter_input(uint32_t p)
     const int dir = (p & NUVIO_BTN_LEFT) ? -1 : (p & (NUVIO_BTN_RIGHT | NUVIO_BTN_CROSS)) ? 1 : 0;
     if (!dir)
         return;
+    if(!m_saved_genre.empty()&&m_filters.genre==0){std::lock_guard<std::mutex> g(m_data->lock);
+        auto it=std::find(m_data->genres.begin(),m_data->genres.end(),m_saved_genre);
+        if(it!=m_data->genres.end())m_filters.genre=(int)(it-m_data->genres.begin())+1;}
     const Filters was = m_filters;
+    const std::string was_genre=m_saved_genre;
     auto cycle = [dir](int i, int n) { return n > 0 ? ((i + dir) % n + n) % n : 0; };
     switch (m_filter_row - kNumSorts) {
     case FUnplayed: m_filters.unplayed = !m_filters.unplayed; break;
     case FFavorites: m_filters.favorites = !m_filters.favorites; break;
-    case FGenre: m_filters.genre = cycle(m_filters.genre, ngenres + 1); break;
+    case FGenre: m_filters.genre = cycle(m_filters.genre, ngenres + 1);m_saved_genre.clear(); break;
     case FDecade: m_filters.decade = cycle(m_filters.decade, kNumDecades); break;
     case FReset:
         if (p & NUVIO_BTN_CROSS)
-            m_filters = Filters();
+            {m_filters = Filters();m_saved_genre.clear();}
         break;
     }
     if (m_filters.unplayed != was.unplayed || m_filters.favorites != was.favorites || m_filters.genre != was.genre ||
-        m_filters.decade != was.decade)
+        m_filters.decade != was.decade || was_genre!=m_saved_genre)
         reload();
 }
 
@@ -554,7 +630,7 @@ void Library::draw_filters(float dt)
             case FGenre:
                 label = T("Sjanger");
                 value = m_filters.genre > 0 && m_filters.genre <= (int)genres.size() ? genres[m_filters.genre - 1]
-                                                                                      : std::string(T("Alle"));
+                                                                                      : m_saved_genre.empty()?std::string(T("Alle")):m_saved_genre;
                 break;
             case FDecade: {
                 label = T("Tiår");
@@ -616,7 +692,7 @@ void Library::jump_letter(int dir)
     }
     auto failed=[d,gen] {
         std::lock_guard<std::mutex> g(d->lock);
-        if(d->alive && gen==d->generation) {d->loading=false; ++d->revision;}
+        if(d->alive && gen==d->generation) {d->loading=false;d->failed=true;d->retry_at=music_art_now()+5; ++d->revision;}
     };
     if(!emby5::spawn_io([d, c, src, s, fq, dir, cur, at, total, gen] {
         auto letter = [](int i) { return std::string(1, (char)('A' + i)); };
@@ -658,6 +734,7 @@ void Library::jump_letter(int dir)
         ++d->revision;
         if(page.ok) d->items.insert(d->items.end(), page.items.begin(), page.items.end());
         if (target >= 0 && target < (int)d->items.size()) {
+            d->publish_items();
             d->jump_to = target;
             d->jump_letter = shown;
         }
@@ -667,10 +744,13 @@ void Library::jump_letter(int dir)
 void Library::draw(double now, float dt)
 {
     m_animating = false;
-    std::vector<jf::Item> items;
+    if(m_source_at>=0&&now>=m_source_at&&m_in_pills)switch_source(m_pill);
+    sync_selection();
+    const auto snapshot=m_snapshot;
+    const auto &items=*snapshot;
     std::unordered_map<std::string,MusicArtwork> artwork;
     int total;
-    bool loading;
+    bool loading, failed;
     m_now = now;
     if (m_source_at >= 0) {   /* a library pill rested on long enough: show that library */
         m_animating = true;
@@ -686,11 +766,10 @@ void Library::draw(double now, float dt)
             m_letter_at = now;
             m_data->jump_to = -1;
         }
-        items = m_data->items;
-        artwork = m_data->artwork;
+
         m_seen_revision = m_data->revision;
         total = m_data->total;
-        loading = m_data->loading;
+        loading = m_data->loading;failed=m_data->failed;
     }
     if (loading)
         m_animating = true;
@@ -743,6 +822,7 @@ void Library::draw(double now, float dt)
         }
         /* Sorting and filters behind one round glass button on the right (an icon:
          * tapering lines), what is in force written small beside it. */
+        if(m_collection<0){
         const int nf = active_filters();
         const float bd = 66, bx = gfx::W - kPad - bd, by = hy - 44;
         const gfx::Rect btn{bx, by, bd, bd};
@@ -771,27 +851,30 @@ void Library::draw(double now, float dt)
         if (by_name() && !m_in_pills) {   /* A-Å: the letter jump, shown where it works */
             draw_pad_hints(bx - 18 - sw, hy + 44, {{PadButton::L2, ""}, {PadButton::R2, T("Hopp til bokstav")}}, 0, 22, ha);
         }
+        }
     }
 
     /* The grid, clipped below the header. */
     const float top = kGridTop - m_scroll.value;
     gfx::push_scissor({0, (kGridTop - 60) * ha, gfx::W, gfx::H});
+    const int first=std::max(0,(int)std::floor((-tile_h-60-top)/pitch))*kCols;
+    const int last=std::min((int)items.size(),std::max(0,(int)std::ceil((gfx::H+20-top)/pitch)+1)*kCols);
+    std::vector<jf::Item> display;
+    if(first<last)display.assign(items.begin()+first,items.begin()+last);
     std::vector<jf::Item> visible_albums;
-    for(int i=0;i<(int)items.size();++i) {
-        const float y=top+(i/kCols)*pitch;
-        if(items[i].type!="MusicAlbum" || y>gfx::H+20 || y+tile_h+60<0) continue;
-        if(i==m_index) visible_albums.insert(visible_albums.begin(),items[i]);
-        else visible_albums.push_back(items[i]);
-        const auto found=artwork.find(items[i].id);
-        // Normalize even the first draw: an untagged album listing can contain
-        // ParentId for the music folder, which is not the album's cover owner.
-        items[i]=music_display_item(m_client,items[i],
-            found!=artwork.end()?found->second:MusicArtwork{},art::failed);
+    {std::lock_guard<std::mutex> g(m_data->lock);
+        for(const auto &item:display)if(item.type=="MusicAlbum"){
+            auto i=m_data->artwork.find(item.id);if(i!=m_data->artwork.end())artwork.emplace(i->first,i->second);}}
+    for(size_t j=0;j<display.size();++j){
+        auto &item=display[j];if(item.type!="MusicAlbum")continue;
+        if((int)j+first==m_index)visible_albums.insert(visible_albums.begin(),item);else visible_albums.push_back(item);
+        const auto found=artwork.find(item.id);
+        item=music_display_item(m_client,item,found!=artwork.end()?found->second:MusicArtwork{},art::failed);
     }
     request_visible_artwork(visible_albums);
     int focus_i = -1;
     for (int pass = 0; pass < 2; pass++) {
-        for (int i = 0; i < (int)items.size(); i++) {
+        for (int i = first; i < last; i++) {
             const int r = i / kCols, c = i % kCols;
             const float y = top + r * pitch;
             if (y > gfx::H + 20 || y + tile_h + 60 < 0)
@@ -801,13 +884,13 @@ void Library::draw(double now, float dt)
                 focus_i = i;
             if ((pass == 0) == f)
                 continue;   /* focused poster last, over its neighbours */
-            const float lift = m_lifts.step(items[i].id, f, dt, &m_animating);
+            const float lift = m_lifts.step(display[(size_t)(i-first)].id, f, dt, &m_animating);
             const gfx::Rect tile{kPad + c * (kPosterW + kColGap), y, kPosterW, tile_h};
-            draw_poster(m_client, items[i], tile, lift, 1.f);
+            draw_poster(m_client, display[(size_t)(i-first)], tile, lift, 1.f);
             if (f) {
                 const float k = 1.f + 0.1f * theme_poster_lift(lift);
                 m_card = {{tile.x - tile.w * (k - 1) / 2, tile.y - tile.h * (k - 1) / 2, tile.w * k, tile.h * k},
-                          poster_url(m_client, items[i], 480), items[i].primary_blurhash, 14 * k};
+                          poster_url(m_client, display[(size_t)(i-first)], 480), display[(size_t)(i-first)].primary_blurhash, 14 * k};
                 m_has_card = true;
             }
         }
@@ -816,7 +899,7 @@ void Library::draw(double now, float dt)
     (void)focus_i;
 
     if (items.empty())
-        gfx::text(gfx::W / 2, 560, loading || total < 0 ? T("Henter \xE2\x80\xA6")
+        gfx::text(gfx::W / 2, 560, failed?"Could not load this list. Press X to retry.":loading || total < 0 ? T("Henter \xE2\x80\xA6")
                   : active_filters() > 0 ? T("Ingen titler passer filteret") : T("Ingenting her ennå"),
                   {gfx::Medium, 30}, kText2, 1);
     m_menu.draw(dt, &m_animating);

@@ -16,6 +16,7 @@
 #include "app/iptv_categories.h"
 #include "app/appearance.h"
 #include "ui/hold_navigation.h"
+#include "ui/choice_sheet.h"
 #include <memory>
 #include <mutex>
 
@@ -53,7 +54,7 @@ public:
     void draw(double now, float dt) override;
     bool animating() const override { return m_animating || m_iptv_page!=IPTVRows; }
     void update_hold(uint32_t held, double now);
-    bool accelerating(double now) const {return m_iptv_page==IPTVChannels && m_channel_hold.accelerating(now);}
+    bool accelerating(double now) const {return (m_iptv_page==IPTVChannels || m_iptv_page==IPTVProviderGroups) && m_channel_hold.accelerating(now);}
     bool modal() const override { return m_iptv_page != IPTVRows || m_tiles || m_notes_open || m_appearance.active; }
     float nav_alpha() const override { return m_scroll.value < 1.f ? 1.f : 0.f; }
 
@@ -85,7 +86,19 @@ private:
         std::string error;
         bool loading = false;
     };
-    enum IPTVPage { IPTVRows, IPTVCategoryList, IPTVChannels };
+    enum IPTVPage { IPTVRows, IPTVCategoryList, IPTVChannels, IPTVProviderGroups };
+    uint64_t m_iptv_generation=~uint64_t(0),m_iptv_content_generation=~uint64_t(0);
+    struct ProviderGroup {std::string id,name;std::vector<std::string> channels;bool partial=false;};
+    std::vector<ProviderGroup> m_provider_groups;
+    std::vector<size_t> m_provider_filtered;
+    std::string m_provider_query,m_group_note,m_import_destination;
+    int m_provider_index=0;
+    std::vector<std::string> m_import_channels;
+    ChoiceSheet m_group_menu;
+    bool m_import_confirm=false;
+    uint64_t m_import_generation=0;
+    void iptv_filter_groups();
+    void iptv_open_group_actions();
     IPTVPage m_iptv_page = IPTVRows;
     iptv_xtream::Credentials m_iptv_creds;
     iptv_categories::Store m_iptv_store;

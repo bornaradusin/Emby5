@@ -1,586 +1,198 @@
-/*
- * Emby5 — Emby for PS5
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+/* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ui/search.h"
-#include "app/spawn.h"
+#include "ui/browse_grid.h"
+#include "ui/search_text.h"
 #include "app/io_worker.h"
-#include "app/i18n.h"
+#include "app/browse_state.h"
 #include "app/seerr_service.h"
-
-#include "nuvio_input.h"
-
+#include "app/user_data_update.h"
+#include "platform/ime.h"
+#include "gfx/art.h"
 #include <algorithm>
-#include <cctype>
-#include <cmath>
-#include <utility>
-#include <cstdio>
 #include <set>
-#include <thread>
 
 namespace ui {
 namespace {
-
-/* a-z, æ ø å, 0-9 (UTF-8), then the two wide keys. */
-const char *const kKeys[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n",
-                             "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "\xC3\xA6",
-                             "\xC3\xB8", "\xC3\xA5", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0"};
-constexpr int kLetters = 39;
-constexpr int kSpace = 39, kDelete = 40, kNumKeys = 41;
-constexpr int kKbCols = 7;
-constexpr float kKbX = 120, kKbY = 300, kKeyW = 72, kKeyH = 66, kKeyGap = 10;
-constexpr int kResCols = 4;
-constexpr float kResX = 790, kResY = 260, kPosterW = 240, kPosterH = 360, kResGap = 40, kResPitch = 440;
-constexpr float kSeerrHead = 70;      /* Seerr's heading, between the library's rows and its own */
-constexpr float kNoneH = 80;          /* "no results" in the library, above Seerr's */
-
-/* Grid position of a key: the wide keys take three columns each. */
-void key_cell(int k, int *row, int *col, int *span)
-{
-    if (k < kLetters) {
-        *row = k / kKbCols;
-        *col = k % kKbCols;
-        *span = 1;
-    } else if (k == kSpace) {                            /* after "0", to the row's end */
-        *row = kLetters / kKbCols;
-        *col = kLetters % kKbCols;
-        *span = kKbCols - *col;
-    } else {                                             /* delete: a row of its own */
-        *row = kLetters / kKbCols + 1;
-        *col = 0;
-        *span = 3;
-    }
+bool accepts_type(const std::string &types, const std::string &type) {
+    return ("," + types + ",").find("," + type + ",") != std::string::npos;
 }
-
-int key_at(int row, int col)
-{
-    for (int k = 0; k < kNumKeys; k++) {
-        int r, c, s;
-        key_cell(k, &r, &c, &s);
-        if (r == row && col >= c && col < c + s)
-            return k;
-    }
-    return -1;
 }
-
-/* Emby ids with or without their dashes, in any case. */
-std::string id_key(const std::string &id)
-{
-    std::string out;
-    for (char c : id)
-        if (c != '-')
-            out += (char)std::tolower((unsigned char)c);
-    return out;
+Search::Search(jf::Client &client, SearchContext context, std::string query, bool from_nav)
+    : m_client(client), m_context(std::move(context)), m_account(browse_state::scope(client)),
+      m_query(search_text(std::move(query))), m_from_nav(from_nav) {}
+Search::~Search() {
+    std::lock_guard<std::mutex> lock(m_data->lock);
+    m_data->alive = false; ++m_data->generation;
 }
-
-std::string lower_name(std::string name)
-{
-    for (char &c : name)
-        c = (char)std::tolower((unsigned char)c);
-    return name;
+void Search::activate() { if (!m_started) { m_started = true; start(false); } }
+bool Search::needs_redraw() const {
+    std::lock_guard<std::mutex> lock(m_data->lock);
+    return m_revision != m_data->revision || m_data->query_ready;
 }
-
-} // namespace
-
-int Search::Grid::row_of(int i) const { return i < library ? i / kResCols : library_rows() + (i - library) / kResCols; }
-
-int Search::Grid::col_of(int i) const { return (i < library ? i : i - library) % kResCols; }
-
-int Search::Grid::row_length(int row) const
-{
-    if (row < library_rows())
-        return std::min(kResCols, library - row * kResCols);
-    return std::max(0, std::min(kResCols, seerr - (row - library_rows()) * kResCols));
+void Search::refresh_user_data() { if (m_started) start(false, true); }
+void Search::reconcile_user_data(const jf::Item &fresh) {
+    std::lock_guard<std::mutex> lock(m_data->lock);
+    auto copy = std::make_shared<std::vector<jf::Item>>(*m_data->items);
+    for (auto &item : *copy) emby5::reconcile_user_data(item, fresh);
+    m_data->items = std::move(copy); ++m_data->revision;
 }
-
-int Search::Grid::index_at(int row, int col) const
-{
-    const int n = row_length(row);
-    if (n <= 0)
-        return -1;
-    col = std::min(col, n - 1);
-    return row < library_rows() ? row * kResCols + col : library + (row - library_rows()) * kResCols + col;
-}
-
-Search::Search(jf::Client &client) : m_client(client) {}
-
-void Search::activate()
-{
-    m_in_results = false;   /* arriving (by △ or the tab): straight onto the keyboard */
-    load_iptv_catalog();
-    if (!m_suggested) {
-        m_suggested = true;
-        start_search();
-    }
-}
-
-void Search::load_iptv_catalog()
-{
-    iptv_xtream::Credentials creds;
-    if (!iptv_xtream::load_credentials(&creds)) {
-        std::lock_guard<std::mutex> g(m_data->lock);
-        m_data->iptv.clear();
-        m_data->iptv_catalog = {};
-        m_data->iptv_account.clear();
-        m_data->iptv_loaded = false;
-        return;
-    }
-    /* Credentials are only used in the worker; don't store the password in search results. */
-    const std::string account = creds.server + "|" + creds.username + "|" + creds.password;
-    auto d = m_data;
-    {
-        std::lock_guard<std::mutex> g(d->lock);
-        if (d->iptv_account == account && (d->iptv_loaded || d->iptv_loading))
-            return;
-        if(d->iptv_account!=account)d->iptv_catalog={};
-        d->iptv_account = account;
-        d->iptv_loading = true;
-        d->iptv_loaded = false;
-        d->iptv.clear();
-    }
-    auto failed=[d,account]{std::lock_guard<std::mutex> g(d->lock);
-        if(d->iptv_account==account)d->iptv_loading=false;};
-    if (!emby5::spawn_io([d, creds, account] {
-        iptv_xtream::Catalog catalog;std::string error;
-        const bool ok=iptv_xtream::load_catalog(creds,&catalog,&error,120,[d,account]{
-            std::lock_guard<std::mutex> g(d->lock);return d->iptv_account!=account;});
-        std::lock_guard<std::mutex> g(d->lock);
-        if(d->iptv_account!=account)return;
-        if(ok||catalog.scan.changed||!catalog.channels.empty())d->iptv_catalog=std::move(catalog);
-        d->iptv_loaded=ok;d->iptv_loading=false;++d->iptv_generation;
-    },failed))failed();
-}
-
-void Search::type(const std::string &key)
-{
-    if (key == "\b") {
-        if (m_query.empty())
-            return;
-        /* Drop one UTF-8 character. */
-        size_t n = m_query.size() - 1;
-        while (n > 0 && ((unsigned char)m_query[n] & 0xC0) == 0x80)
-            n--;
-        m_query.erase(n);
-    } else {
-        if (m_query.size() > 60)
-            return;
-        m_query += key;
-    }
-    m_changed = m_now;
-    m_pending = true;
-}
-
-/* Seerr's results for the query the library's answer, without the titles the
- * library shows already (the same item, or the same TMDB film or series). */
-void Search::merge(Data &d)
-{
-    d.seerr_shown.clear();
-    if (d.for_seerr != d.for_query || d.for_query.empty())
-        return;
-    std::set<std::string> ids, tmdb;
-    for (const jf::Item &it : d.items) {
-        ids.insert(id_key(it.id));
-        if (!it.tmdb_id.empty())
-            tmdb.insert((it.type == "Series" ? "tv:" : "movie:") + it.tmdb_id);
-    }
-    for (const jf::Item &s : d.seerr) {
-        if (!s.ext.jellyfin_id.empty() && ids.count(id_key(s.ext.jellyfin_id)))
-            continue;
-        if (tmdb.count((s.type == "Series" ? "tv:" : "movie:") + s.tmdb_id))
-            continue;
-        d.seerr_shown.push_back(s);
-    }
-}
-
-Search::Grid Search::grid()
-{
-    std::lock_guard<std::mutex> g(m_data->lock);
-    return {(int)(m_data->items.size() + m_data->iptv.size()), (int)m_data->seerr_shown.size()};
-}
-
-void Search::more_seerr()
-{
-    std::shared_ptr<Data> d = m_data;
-    std::string q;
-    unsigned seq;
-    int page;
-    {
-        std::lock_guard<std::mutex> g(d->lock);
-        const int library = (int)(d->items.size() + d->iptv.size()), shown = (int)d->seerr_shown.size();
-        if (d->seerr_more_failed) {   /* the last page failed: asked again in five seconds */
-            d->seerr_more_failed = false;
-            d->seerr_more_retry_at = m_now + 5.0;
-        }
-        if (!m_in_results || m_result < library || m_result < library + shown - 8 || !d->seerr_more ||
-            d->seerr_more_loading || d->seerr_pending || d->for_seerr != d->for_query || d->for_seerr.empty() ||
-            m_now < d->seerr_more_retry_at)
-            return;
-        d->seerr_more_loading = true;
-        q = d->for_seerr;
-        seq = d->seq;
-        page = d->seerr_page + 1;
-    }
-    std::shared_ptr<seerr::Client> sc = seerr_service::client();
-    if (!sc) {
-        std::lock_guard<std::mutex> g(d->lock);
-        d->seerr_more_loading = false;
-        return;
-    }
-    const bool started = emby5::spawn([d, sc, q, seq, page] {
-        int pages = 0;
-        const std::vector<seerr::Title> found = sc->search(q, page, &pages);
-        const int status = sc->last_status();
-        std::lock_guard<std::mutex> g(d->lock);
-        d->seerr_more_loading = false;
-        if (seq != d->seq)
-            return;   /* the query moved on */
-        std::set<std::string> have;
-        for (const jf::Item &it : d->seerr)
-            have.insert(it.type + std::to_string(it.ext.tmdb_id));
-        size_t added = 0;
-        for (const seerr::Title &t : found) {
-            jf::Item it = seerr_service::to_item(t);
-            if (have.insert(it.type + std::to_string(it.ext.tmdb_id)).second) {
-                d->seerr.push_back(std::move(it));
-                added++;
-            }
-        }
-        (void)added;
-        if (status < 200 || status >= 300) {   /* failed: the render thread sets when to ask again */
-            d->seerr_more_failed = true;
-            return;
-        }
-        d->seerr_page = page;
-        d->seerr_more = page < pages;   /* Seerr's total (a page of only people still has a next) */
-        merge(*d);
-    });
-    if (!started) {   /* no thread: a later frame asks again */
-        std::lock_guard<std::mutex> g(d->lock);
-        d->seerr_more_loading = false;
-    }
-}
-
-void Search::start_search()
-{
-    std::shared_ptr<Data> d = m_data;
-    jf::Client *c = &m_client;
-    const std::string q = m_query;
-    /* Seerr alongside the library (on its own thread: the library's results never wait for it). */
-    std::shared_ptr<seerr::Client> sc = q.empty() ? nullptr : seerr_service::client();
-    unsigned seq;
-    {
-        std::lock_guard<std::mutex> g(d->lock);
-        seq = ++d->seq;
-        d->seerr_pending = sc != nullptr;
-        d->iptv.clear();
-        d->seerr_failed = false;
-        d->seerr_page = 1;
-        d->seerr_more = true;
-        d->seerr_more_failed = false;
-        d->seerr_more_retry_at = 0;
-    }
-    if (sc) {
-        const bool started = emby5::spawn([d, sc, q, seq] {
-            std::vector<jf::Item> found;
-            for (const seerr::Title &t : sc->search(q))
-                found.push_back(seerr_service::to_item(t));
-            const int status = sc->last_status();
-            if (status == 401 || status == 403)
-                seerr_service::session_lost();
-            std::lock_guard<std::mutex> g(d->lock);
-            if (seq != d->seq)
-                return;   /* the query moved on */
-            d->seerr = std::move(found);
-            d->for_seerr = q;
-            d->seerr_pending = false;
-            d->seerr_failed = status < 200 || status >= 300;
-            merge(*d);
+void Search::edit_query() {
+    const auto data = m_data;
+    ime::request(ime::Kind::Search, "Search " + m_context.title, m_query,
+        [data](const std::string &q) {
+            std::lock_guard<std::mutex> lock(data->lock);
+            if (data->alive) { data->query = search_text(q); data->query_ready = true; ++data->revision; }
         });
-        if (!started) {   /* no thread: Seerr's part says it failed; the library's still comes */
-            std::lock_guard<std::mutex> g(d->lock);
-            d->seerr_pending = false;
-            d->seerr_failed = true;
-            d->for_seerr = q;
-        }
-    }
-    emby5::spawn([d, c, q, seq] {   /* no thread: the next keystroke searches again */
-        std::vector<jf::Item> r;
-        bool valid = false;
-        if (q.empty()) {
-            auto page = c->library("", "Movie,Series", "Random", false, 0, 16);
-            valid = page.ok;
-            r = std::move(page.items);
-        } else {
-            /* Titles and people side by side (people take the server longer); shown
-             * titles first, then people and episodes. */
-            std::vector<jf::Item> people, found;
-            bool people_ok = false, found_ok = false;
-            emby5::run_all({[&] { people = c->search(q, "Person", 12, &people_ok); },
-                             [&] { found = c->search(q, "Movie,Series,Episode", 60, &found_ok); }});
-            valid = people_ok && found_ok;
-            for (const char *type : {"Movie|Series", "Person", "Episode"}) {
-                const std::string t = type;
-                for (const jf::Item &it : t == "Person" ? people : found)
-                    if (t.find(it.type) != std::string::npos)
-                        r.push_back(it);
-            }
-        }
-        std::lock_guard<std::mutex> g(d->lock);
-        if (seq != d->seq || (!valid && d->for_query == q))
-            return;   /* old query, or keep last-good results on a failed refresh */
-        d->items = std::move(r);
-        d->for_query = q;
-        if ((d->iptv_loaded || !d->iptv_catalog.channels.empty()) && !q.empty()) {
-            const std::string needle = lower_name(q);
-            for (const auto &ch : d->iptv_catalog.channels) {
-                if (lower_name(ch.name).find(needle) != std::string::npos) {
-                    d->iptv.push_back(ch);
-                    if (d->iptv.size() >= 100) break;
-                }
-            }
-        }
-        merge(*d);
-    });
 }
-
-Action Search::input(uint32_t p)
-{
-    Action a;
-    const Grid gr = grid();
-    const int count = gr.count();
-    if (p & NUVIO_BTN_SQUARE) {
-        type("\b");
-        return a;
-    }
-    if (m_in_results && count == 0)
-        m_in_results = false;   /* the results went while the focus was on them */
-    if (m_in_results) {
-        m_result = std::min(m_result, count - 1);
-        const int row = gr.row_of(m_result), col = gr.col_of(m_result);
-        if (p & NUVIO_BTN_RIGHT) {
-            if (col + 1 < gr.row_length(row))
-                m_result++;
-        } else if (p & NUVIO_BTN_LEFT) {
-            if (col > 0)
-                m_result--;
-            else
-                m_in_results = false;
-        } else if (p & NUVIO_BTN_DOWN) {
-            if (row + 1 < gr.rows())
-                m_result = gr.index_at(row + 1, col);
-        } else if (p & NUVIO_BTN_UP) {
-            if (row > 0)
-                m_result = gr.index_at(row - 1, col);
-            else
-                a.kind = Action::ToNav;
-        } else if (p & NUVIO_BTN_CIRCLE) {
-            m_in_results = false;
-        } else if (p & NUVIO_BTN_CROSS) {
-            std::lock_guard<std::mutex> g(m_data->lock);
-            const int n = (int)m_data->items.size();
-            if (m_result < n) {
-                a.item = m_data->items[m_result];
-                a.kind = Action::Open;
-            } else if (m_result - n < (int)m_data->iptv.size()) {
-                const auto ch = m_data->iptv[(size_t)(m_result - n)];
-                iptv_xtream::Credentials creds;
-                if (iptv_xtream::load_credentials(&creds)) {
-                    a.kind = Action::PlayIPTV;
-                    a.iptv_title = ch.name;
-                    a.iptv_url = iptv_xtream::live_url(creds, ch);
-                }
-            } else if (m_result - n - (int)m_data->iptv.size() < (int)m_data->seerr_shown.size()) {
-                a.kind = Action::Open;
-                a.item = m_data->seerr_shown[m_result - n - (int)m_data->iptv.size()];
-            }
+void Search::consume_query() {
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> lock(m_data->lock);
+        if (m_data->query_ready) {
+            m_query = std::move(m_data->query); m_data->query_ready = false; ready = true;
         }
-        return a;
     }
-    int row, col, span;
-    key_cell(m_key, &row, &col, &span);
-    if (p & NUVIO_BTN_RIGHT) {
-        const int k = key_at(row, col + span);
-        if (k >= 0)
-            m_key = k;
-        else if (count > 0) {
-            m_in_results = true;
-            m_result = std::max(0, gr.index_at(std::min(row, gr.rows() - 1), 0));
-        }
-    } else if (p & NUVIO_BTN_LEFT) {
-        const int k = key_at(row, col - 1);
-        if (k >= 0)
-            m_key = k;
-    } else if (p & NUVIO_BTN_DOWN) {
-        int k = key_at(row + 1, col);
-        if (k < 0)
-            k = key_at(row + 1, 0);
-        if (k >= 0)
-            m_key = k;
-    } else if (p & NUVIO_BTN_UP) {
-        const int k = key_at(row - 1, col);
-        if (k >= 0)
-            m_key = k;
-        else
-            a.kind = Action::ToNav;
-    } else if (p & NUVIO_BTN_CIRCLE) {
-        a.kind = Action::ToNav;
-    } else if (p & NUVIO_BTN_CROSS) {
-        type(m_key == kSpace ? " " : m_key == kDelete ? "\b" : kKeys[m_key]);
-    }
-    return a;
+    if (ready) { m_index = 0; m_anchor.clear(); m_scroll.snap(0); start(false); }
 }
-
-void Search::draw(double now, float dt)
-{
-    m_now = now;
-    if (m_pending && now - m_changed > 0.3) {
-        m_pending = false;
-        start_search();
+void Search::sync() {
+    std::lock_guard<std::mutex> lock(m_data->lock);
+    m_revision = m_data->revision;
+    if (m_items != m_data->items) {
+        m_items = m_data->items;
+        if (!m_anchor.empty()) for (size_t i = 0; i < m_items->size(); ++i)
+            if ((*m_items)[i].id == m_anchor) { m_index = (int)i; break; }
+        m_index = std::clamp(m_index, 0, std::max(0, grid_count(m_items->size()) - 1));
     }
-    more_seerr();
+    m_anchor = m_index < (int)m_items->size() ? (*m_items)[m_index].id : std::string();
+}
+void Search::start(bool more, bool retain) {
+    const auto data = m_data;
+    const auto query = m_query;
+    const auto context = m_context;
+    const auto account = m_account;
+    auto *client = &m_client;
+    const auto seerr = context.discover ? seerr_service::client() : nullptr;
+    const auto seerr_generation = seerr_service::generation();
+    int offset, limit = 60;
     unsigned generation;
     {
-        std::lock_guard<std::mutex> g(m_data->lock);
-        generation = m_data->iptv_generation;
-    }
-    if (generation != m_iptv_seen_generation) {
-        m_iptv_seen_generation = generation;
-        if (!m_pending) start_search();
-    }
-    std::vector<jf::Item> items, seerr;
-    std::vector<iptv_xtream::Channel> iptv;
-    std::string for_query;
-    bool seerr_pending, seerr_failed, seerr_asked;
-    {
-        std::lock_guard<std::mutex> g(m_data->lock);
-        items = m_data->items;
-        iptv = m_data->iptv;
-        seerr = m_data->seerr_shown;
-        for_query = m_data->for_query;
-        seerr_pending = m_data->seerr_pending;
-        seerr_asked = m_data->for_seerr == for_query;
-        seerr_failed = m_data->seerr_failed && seerr_asked;
-    }
-    /* Seerr came up (signed in) after this query was typed: ask it too. */
-    if (!for_query.empty() && for_query == m_query && !m_pending && !seerr_pending && !seerr_asked &&
-        m_seerr_retried != for_query && seerr_service::ready()) {
-        m_seerr_retried = for_query;
-        start_search();
-    }
-    for (const auto &ch : iptv) {
-        jf::Item it;
-        it.id = ch.id;
-        it.name = ch.name;
-        it.type = "IPTVChannel";
-        items.push_back(std::move(it));
-    }
-    const Grid gr{(int)items.size(), (int)seerr.size()};
-    m_result = std::min(m_result, std::max(0, gr.count() - 1));
-    if (gr.count() == 0)
-        m_in_results = false;
-    auto item_at = [&](int i) -> const jf::Item & { return i < gr.library ? items[i] : seerr[i - gr.library]; };
-    const jf::Item *f = m_in_results && gr.count() ? &item_at(m_result) : nullptr;
-    if (f)
-        m_ambient.set(f->backdrop_blurhash.empty() ? f->primary_blurhash : f->backdrop_blurhash, now);
-    else if (!items.empty())
-        m_ambient.set(items[0].backdrop_blurhash.empty() ? items[0].primary_blurhash : items[0].backdrop_blurhash, now);
-    bool anim = false;
-    m_ambient.draw(dt, 0.7f, &anim);
-
-    /* The query line with a blinking caret. */
-    const float qy = 236;
-    float qx = kKbX;
-    if (m_query.empty())
-        gfx::text(kKbX, qy, T("Movies, TV, artists, albums, songs, IPTV"), {gfx::Medium, 36, 640}, kText3);
-    else
-        qx += gfx::text(kKbX, qy, m_query, {gfx::Bold, 52, 600}, kText);
-    if (std::fmod(now, 1.0) < 0.55)
-        gfx::fill({qx + 6, qy - 44, 3, 52}, 0xff00a4dcu);
-    gfx::fill({kKbX, qy + 22, 7 * (kKeyW + kKeyGap) - kKeyGap, 2}, 0x33ffffffu);
-
-    /* Keyboard (tvOS): the letters on the page itself, no panel and no key boxes;
-     * the focus drop on the key, then the labels. */
-    for (int pass = 0; pass < 2; pass++)
-        for (int k = 0; k < kNumKeys; k++) {
-            int r, c, s;
-            key_cell(k, &r, &c, &s);
-            const bool focus = m_focused && !m_in_results && k == m_key;
-            const float w = s * kKeyW + (s - 1) * kKeyGap;
-            const gfx::Rect rr{kKbX + c * (kKeyW + kKeyGap), kKbY + r * (kKeyH + kKeyGap), w, kKeyH};
-            if (pass == 0) {
-                if (focus)
-                    m_drop.to(rr, k);
-                if (k + 1 == kNumKeys) {
-                    if (m_in_results || !m_focused)
-                        m_drop.hide();
-                    m_drop.draw(dt, 1.f, &anim, 12);
-                }
-                continue;
-            }
-            const char *label = k == kSpace ? T("mellomrom") : k == kDelete ? T("\xE2\x8C\xAB slett") : kKeys[k];
-            gfx::text(rr.x + rr.w / 2, rr.y + rr.h / 2 + 9, label,
-                      {focus ? gfx::Bold : gfx::SemiBold, s > 1 ? 22.f : 26.f}, focus ? kText : kText2, 1);
+        std::lock_guard<std::mutex> lock(data->lock);
+        if (!data->alive || (more && (data->loading || !data->more || data->failed))) return;
+        if (!more) {
+            ++data->generation; data->next = 0; data->more = false;
+            if (retain && !context.discover) limit = std::max(limit, std::min(120, grid_count(data->items->size())));
+            if (!retain) data->items = std::make_shared<const std::vector<jf::Item>>();
         }
-    draw_pad_hints(kKbX, kKbY + 7 * (kKeyH + kKeyGap) + 22, {{PadButton::Square, T("Slett")}}, 0, 26);
-
-    /* Results: the library's, then Seerr's under its own heading (when it is on). */
-    std::string heading = T("Forslag");
-    if (!for_query.empty()) {   /* each language its own quotation marks */
-        char b[256];
-        std::snprintf(b, sizeof b, T("Treff for \xC2\xAB%s\xC2\xBB"), for_query.c_str());
-        heading = b;
+        generation = data->generation; offset = data->next;
+        data->failed = false; data->loading = !query.empty(); ++data->revision;
+        if (query.empty()) return;
     }
-    gfx::text(kResX, 236, heading, {gfx::Bold, 26, 1000}, kText2);
-    const seerr_service::State seerr_state = seerr_service::snapshot().state;
-    const bool seerr_on = !for_query.empty() && seerr_state != seerr_service::State::Off;
-    const float library_h = gr.library ? gr.library_rows() * kResPitch : for_query.empty() ? 0.f : kNoneH;
-    auto row_top = [&](int row) {   /* within the results, before scrolling */
-        return row < gr.library_rows() ? row * kResPitch : library_h + kSeerrHead + (row - gr.library_rows()) * kResPitch;
+    const auto fail = [data, generation] {
+        std::lock_guard<std::mutex> lock(data->lock);
+        if (data->alive && generation == data->generation) {
+            data->failed = true; data->loading = false; ++data->revision;
+        }
     };
-    const int row = m_in_results ? gr.row_of(m_result) : 0;
-    /* The focused row up at the top of the results, whole (Seerr's first with its heading). */
-    m_scroll.to(row > 0 ? row_top(row) - (row == gr.library_rows() ? kSeerrHead : 0.f) - 14.f : 0.f);
-    if (m_scroll.step(dt, 11.f))
-        anim = true;
-    gfx::push_scissor({kResX - 40, 256, gfx::W - kResX + 40, gfx::H - 256});
-    for (int pass = 0; pass < 2; pass++)
-        for (int i = 0; i < gr.count(); i++) {
-            const bool focus = m_in_results && i == m_result;
-            if ((pass == 0) == focus)
-                continue;
-            const float y = kResY + 26 + row_top(gr.row_of(i)) - m_scroll.value;
-            if (y > gfx::H || y + kPosterH + 60 < 200)
-                continue;
-            const jf::Item &it = item_at(i);
-            const float lift = m_lifts.step(it.id, focus, dt, &anim);
-            if (it.type == "IPTVChannel") {
-                const gfx::Rect tile{kResX + gr.col_of(i) * (kPosterW + kResGap), y, kPosterW, kPosterH};
-                glass_panel(tile, 18, 1.f, false);
-                gfx::text(tile.x + 16, tile.y + 65, "LIVE IPTV", {gfx::SemiBold, 23}, kText2);
-                gfx::text(tile.x + 16, tile.y + 150, it.name, {gfx::SemiBold, 23, kPosterW - 32}, focus ? kText : kText2);
-            } else {
-                draw_poster(m_client, it, {kResX + gr.col_of(i) * (kPosterW + kResGap), y, kPosterW, kPosterH}, lift, 1.f);
+    if (!emby5::spawn_io([data, client, query, context, account, seerr, seerr_generation, generation, offset, limit, more] {
+        std::vector<jf::Item> found;
+        bool ok = false, has_more = false;
+        int next = offset;
+        if (context.discover) {
+            if (seerr) {
+                int pages = 0;
+                const int page = offset + 1;
+                for (const auto &title : seerr->search(query, page, &pages))
+                    found.push_back(seerr_service::to_item(title));
+                ok = seerr->last_status() >= 200 && seerr->last_status() < 300;
+                next = page; has_more = page < pages;
             }
+        } else if (!context.types.empty()) {
+            const auto page = context.types == "MusicArtist"
+                ? client->album_artists(context.parent, "SortName", false, offset, limit, query)
+                : client->library(context.parent, context.types, "SortName", false, offset, limit,
+                                  context.filter + "&SearchTerm=" + jf::Client::escape(query));
+            ok = page.ok;
+            for (const auto &item : page.items)
+                if (accepts_type(context.types, item.type)) found.push_back(item);
+            next += grid_count(page.items.size());
+            has_more = next < page.total && !page.items.empty();
         }
-    if (seerr_on) {
-        const float hy = kResY + 26 + library_h - m_scroll.value;   /* the top of Seerr's block */
-        gfx::text(kResX, hy + 40, T("Fra Seerr"), {gfx::Bold, 26}, kText2);
-        std::string note;
-        if (seerr_state == seerr_service::State::Unreachable || (seerr_failed && seerr.empty()))
-            note = T("Seerr svarer ikke");
-        else if (seerr_state == seerr_service::State::SignedOut)
-            note = T("Ikke pålogget Seerr \xE2\x80\x93 se Innstillinger");
-        else if (seerr_state == seerr_service::State::Connecting || seerr_pending)
-            note = T("S\xC3\xB8ker \xE2\x80\xA6");
-        else if (seerr.empty())
-            note = T("Ingenting mer p\xC3\xA5 Seerr");   /* all it found is in the library */
-        if (!note.empty())
-            gfx::text(kResX, hy + kSeerrHead + 40, note, {gfx::Medium, 24}, kText3);
-    }
-    if (items.empty() && !for_query.empty())
-        gfx::text(kResX, kResY + 60 - m_scroll.value, T("Ingen treff"), {gfx::Medium, 26}, kText3);
-    gfx::pop_scissor();
-    (void)anim;
+        if (account != browse_state::scope(*client) ||
+            (context.discover && seerr_generation != seerr_service::generation())) ok = false;
+        std::lock_guard<std::mutex> lock(data->lock);
+        if (!data->alive || generation != data->generation) return;
+        if (ok) {
+            auto values = std::make_shared<std::vector<jf::Item>>();
+            if (more) *values = *data->items;
+            std::set<std::string> ids;
+            for (const auto &item : *values) ids.insert(item.id);
+            const auto previous = values->size();
+            for (auto &item : found) if (ids.insert(item.id).second) values->push_back(std::move(item));
+            data->items = std::move(values); data->next = next;
+            data->more = has_more && (!more || data->items->size() > previous);
+        }
+        data->failed = !ok; data->loading = false; ++data->revision;
+    }, fail)) fail();
 }
-
+Action Search::input(uint32_t p) {
+    Action action;
+    if (ime::active()) return action;
+    consume_query(); sync();
+    if (m_menu.active()) { m_menu.input(p, &action); return action; }
+    if (p & NUVIO_BTN_CIRCLE) { action.kind = Action::Back; return action; }
+    if (p & NUVIO_BTN_TRIANGLE) { edit_query(); return action; }
+    if (m_items->empty()) {
+        if (p & NUVIO_BTN_CROSS) { if (m_query.empty()) edit_query(); else start(false); }
+        return action;
+    }
+    const bool square = m_context.types == "MusicArtist" || m_context.types == "MusicAlbum" || m_context.types == "Playlist";
+    const BrowseGridGeometry layout(square ? 1.f : 2.f/3.f);
+    bool header = false;
+    const auto moved = move_browse_grid(p, grid_count(m_items->size()), layout.cols, m_index, header);
+    if (header) m_index = std::min(m_index, layout.cols - 1); // no source-selection row in search
+    m_bump |= moved.bump;
+    m_anchor = (*m_items)[m_index].id;
+    if ((p & NUVIO_BTN_OPTIONS) && !m_context.discover) m_menu.open((*m_items)[m_index], (*m_items)[m_index].position_ticks > 0);
+    if (p & NUVIO_BTN_CROSS) { action.kind = Action::Open; action.item = (*m_items)[m_index]; }
+    if (m_index > grid_count(m_items->size()) - 24) start(true);
+    return action;
+}
+void Search::draw(double, float dt) {
+    consume_query(); sync(); m_animating = false; m_has_card = false;
+    gfx::fill({0,0,gfx::W,gfx::H}, kBg);
+    gfx::text(kPad, 140, "Search " + m_context.title, {gfx::Bold, 50, 1400}, kText);
+    gfx::text(kPad, 206, m_query.empty() ? "Triangle: enter a search" : m_query, {gfx::Medium, 28, 1500}, kText2);
+    bool loading, failed;
+    { std::lock_guard<std::mutex> lock(m_data->lock); loading = m_data->loading; failed = m_data->failed; }
+    const bool square = m_context.types == "MusicArtist" || m_context.types == "MusicAlbum" || m_context.types == "Playlist";
+    const BrowseGridGeometry layout(square ? 1.f : 2.f/3.f);
+    // Unlike the tab grid, the search title remains visible: first card stays at 290.
+    m_scroll.to((m_index / layout.cols) * layout.pitch);
+    m_animating |= m_scroll.step(dt, 11.f);
+    const float top = 290.f - m_scroll.value, bottom = gfx::H - 88.f;
+    const auto range = layout.visible(grid_count(m_items->size()), top, 240, bottom);
+    gfx::push_scissor({0,240,gfx::W,bottom-240});
+    for (int pass = 0; pass != 2; ++pass) for (int i = range.first; i < range.second; ++i) {
+        const bool focus = m_focused && !m_menu.active() && !ime::active() && i == m_index;
+        if ((pass == 0) == focus) continue;
+        const auto &item = (*m_items)[i];
+        const float lift = m_lifts.step(item.id, focus, dt, &m_animating);
+        const auto rect = layout.tile(i, top);
+        draw_poster(m_client, item, rect, lift, 1.f);
+        if (focus) {
+            m_card = {browse_lifted_rect(rect, lift), poster_url(m_client, item, 480), item.primary_blurhash, 14};
+            m_has_card = true;
+        }
+    }
+    gfx::pop_scissor();
+    if (m_items->empty()) gfx::text(kPad, 350,
+        failed ? "Could not search. X: retry, Triangle: edit." : loading ? "Searching..." : m_query.empty() ? "Enter a search to see results." : "No results in this section.",
+        {gfx::Medium,28,1500}, kText2);
+    else if (failed) gfx::text(kPad, gfx::H-70, "Refresh failed. Triangle: edit or retry this search.", {gfx::Medium,20,1500}, kText2);
+    else if (loading) gfx::text(kPad, gfx::H-70, "Searching...", {gfx::Medium,20}, kText2);
+    draw_pad_hints(kPad, gfx::H-32,
+        {{PadButton::Triangle,"Edit search"},{PadButton::Cross,"Open"},{PadButton::Circle,"Back"}}, 0, 24);
+    m_menu.draw(dt, &m_animating);
+    m_animating |= loading || art::animating() || ime::active();
+}
 } // namespace ui

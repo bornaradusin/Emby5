@@ -34,9 +34,11 @@ inline std::string describe(const State &s, size_t count, const char *unit) {
         text+=count?" - refreshing":" - loading";
         if(s.total)text+=" ("+std::to_string(s.done)+"/"+std::to_string(s.total)+")";
     } else if(!s.error.empty()) {
-        text+=s.partial?" - partial":((s.cached&&count)?" - cached":" - failed");
+        const auto state=s.partial?"partial":((s.cached&&count)?"cached":"failed");
+        // Put the actionable failure before long cached counts in narrow rows.
+        text=s.error+"; "+text+" "+state;
         if(s.failed)text+="; "+std::to_string(s.failed)+" failed/skipped";
-        text+=" ("+s.error+"); X to retry";
+        text+="; X to retry";
     } else text+=s.cached?" - cached":" - ready";
     return text;
 }

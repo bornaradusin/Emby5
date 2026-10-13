@@ -238,7 +238,7 @@ public:
                  bool descending, int start, int limit, const std::string &filter = std::string());
     /* A music library's album artists (Emby's "Album Artists"), paged like library(). */
     Page album_artists(const std::string &parent_id, const std::string &sort_by, bool descending, int start,
-                       int limit);
+                       int limit, const std::string &search_term = std::string());
     /* The genres in one library (for its filter). */
     std::vector<std::string> genres_in(const std::string &parent_id, const std::string &types);
     /* How many titles of a library (with its filter) sort before `letter` by name:
@@ -251,7 +251,7 @@ public:
     /* The home screen's sections as the user ordered them in Emby (Settings ->
      * Home: "resume", "nextup", "latestmedia", "smalllibrarytiles", "none" ...),
      * empty when they kept the default. */
-    std::vector<std::string> home_sections();
+    std::vector<std::string> home_sections(bool *ok=nullptr);
     /* The user's display settings for libraries (from /Users/Me): ids of libraries
      * left out of "Nylig lagt til". */
     const std::vector<std::string> &latest_excludes() const { return latest_excludes_; }
@@ -290,6 +290,9 @@ public:
     bool clear_position(const std::string &id);
     /* Min liste: the user's favourite movies, series and collections, newest first. */
     std::vector<Item> favorites(int limit, bool *ok = nullptr);
+    enum Collection { ResumeCollection, NextUpCollection, FavoritesCollection, LatestCollection };
+    Page collection_page(Collection kind,const std::string &parent,int start,int limit);
+    Page search_page(const std::string &query,int start,int limit);
     /* A folder's or collection's direct children, e.g. sort_by "PremiereDate,SortName". */
     std::vector<Item> children(const std::string &parent_id, const std::string &sort_by, int limit, bool *ok = nullptr);
     std::vector<Segment> segments(const std::string &item_id);
