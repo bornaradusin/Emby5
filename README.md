@@ -2,7 +2,7 @@
 
 # Emby5 for PS5
 
-**A native Emby and Jellyfin media client for homebrew-enabled PlayStation 5 consoles.**
+**A native Emby and Jellyfin media client for homebrew enabled PlayStation 5 consoles.**
 
 **Emby & Jellyfin Libraries · Native PS5 Playback · Live TV · M3U/Xtream · VOD · 32 Visual Themes**
 
