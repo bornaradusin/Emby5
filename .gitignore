@@ -9,3 +9,31 @@ toolkit/.deps/
 # Not published: the working notes for Claude Code, and anything kept private
 CLAUDE.md
 private/
+
+# Local files excluded from public source
+/refs/
+/toolchain/
+/build/
+/app/build/
+/app/build-assets.mk
+/toolkit/.deps/
+.env
+.env.*
+__pycache__/
+*.py[cod]
+*.log
+*.dmp
+*.core
+*.tmp
+*.backup-*
+/Emby5-*.zip
+/tests/
+/app/tests/
+/private/
+/CLAUDE.md
+/AGENTS.md
+/*_1.2.*.md
+/docs/*-validation.md
+/scripts/build-ct*.sh
+/scripts/log.sh
+/scripts/deploy.py

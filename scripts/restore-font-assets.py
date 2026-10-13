@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reuse unchanged font assets from the user's existing 1.2.3 source archive.
+"""Validate existing font assets or restore them from an explicitly supplied archive.
 
 The source distribution contains a checksum manifest, not font binaries.
 No network access, settings changes or source-archive writes are performed.
@@ -20,8 +20,8 @@ def digest(data: bytes) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', default=os.environ.get('EMBY5_ASSET_SOURCE',
-        '/mnt/media/builder/archives/Emby5/Emby5-PS5-source-1.2.3.zip'))
+    parser.add_argument('--source', default=os.environ.get('EMBY5_ASSET_SOURCE'),
+        help='Asset-source ZIP; optional when the local assets already match the manifest')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     manifest = json.loads((root / 'app/assets/font-assets.json').read_text())
@@ -42,10 +42,11 @@ def main() -> None:
     if not missing:
         print('PASS: Existing font assets match the source manifest')
         return
+    if not args.source:
+        raise SystemExit('ERROR: Required assets are missing. Supply --source or EMBY5_ASSET_SOURCE explicitly.')
     source = Path(args.source)
     if not source.is_file():
-        raise SystemExit('ERROR: Keep the original Emby5-PS5-source-1.2.3.zip in Archives.\n'
-            f'Expected: {source}\nOr set EMBY5_ASSET_SOURCE to its location. This source reuses its unchanged fonts.')
+        raise SystemExit(f'ERROR: Asset-source ZIP does not exist: {source}')
     with zipfile.ZipFile(source) as archive:
         # Read only the exact manifest entries, never arbitrary archive paths.
         values = []

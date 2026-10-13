@@ -77,32 +77,11 @@ TFLAGS=(-fno-plt -fno-stack-protector -ffunction-sections -fdata-sections)
 
 BUILD="${APP_ROOT}/build"
 PARAM="${APP_ROOT}/sce_sys/param.json"
-# EMBY5_PROBE=1: build tests/probe_main.c alone as "Emby5 Probe" (PPSA99506),
-# to tell toolchain/loader problems from the app's own start-up.
-if [[ -n "${EMBY5_PROBE:-}" ]]; then
-    mkdir -p "${BUILD}"
-    python3 - "${PARAM}" "${BUILD}/probe-param.json" <<'PY'
-import json, sys
-j = json.load(open(sys.argv[1]))
-import os
-if os.environ.get("EMBY5_PROBE") == "media":   # Media category, no extra attribute
-    j["titleId"] = "PPSA99507"; j["conceptId"] = "99507"
-    j["contentId"] = "UP9000-PPSA99507_00-EMBY5MPROBE00000"
-    j["applicationCategoryType"] = 65536; j["attribute"] = 0
-    j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Media Probe"}}
-else:
-    j["titleId"] = "PPSA99506"; j["conceptId"] = "99506"
-    j["contentId"] = "UP9000-PPSA99506_00-EMBY5PROBE000000"
-    j["localizedParameters"] = {"defaultLanguage": "en-US", "en-US": {"titleName": "Emby5 Probe"}}
-json.dump(j, open(sys.argv[2], "w"), indent=2)
-PY
-    PARAM="${BUILD}/probe-param.json"
-fi
 TITLE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["titleId"])' "${PARAM}")"
 APPDIR="${BUILD}/app/${TITLE_ID}"
 mkdir -p "${BUILD}/obj" "${BUILD}/host" "${BUILD}/stubs"
 
-# Reuse fonts from the original archive; fail before compiling if assets are missing.
+# Verify local assets before compiling; an explicit archive can restore missing assets.
 python3 "${NUVIO_ROOT}/scripts/restore-font-assets.py"
 
 # --- Host converter + runtime shim ---------------------------------------------
@@ -151,11 +130,6 @@ make -C "${APP_ROOT}" -j"$(nproc)" objects \
     CC="${TCC}" CXX="${TCXX}" TFLAGS="${TFLAGS[*]}" HB="${HB}" EMBY5_DEFS="${EMBY5_DEFS}" \
     > "${BUILD}/compile.log" 2>&1 || { tail -40 "${BUILD}/compile.log"; die "compile failed"; }
 mapfile -t OBJS < <(make -C "${APP_ROOT}" -s print-objects | tr ' ' '\n' | grep -E '\.o$')
-if [[ -n "${EMBY5_PROBE:-}" ]]; then
-    # shellcheck disable=SC2086
-    eval "${TCC} -std=gnu11 -O2 ${TFLAGS[*]} ${EMBY5_DEFS} -c '${APP_ROOT}/tests/probe_main.c' -o '${BUILD}/obj/probe_main.o'"
-    OBJS=("${BUILD}/obj/probe_main.o")
-fi
 ok "compiled ${#OBJS[@]} objects"
 
 # Runtime pieces from EVO's native-app kit: CRT, C++ allocation runtime, the
