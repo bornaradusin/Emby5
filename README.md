@@ -29,7 +29,9 @@ Emby5 provides a native, GPU-rendered interface designed for navigating your Emb
 - Themes and other appearance options are available through the **Settings > System > Appearance** page.
 
 **Browsing and navigation**
-- Home screen with featured content, Continue Watching, Next Up, and Recently Added.
+- Home screen with featured content, Continue Watching, Next Up, and Recently Added. The existing Home layout is retained.
+- Home sections load independently and keep usable content when another request fails. **Options > Retry Home sections** retries without restarting.
+- **Options > View all in this row** opens a paged collection for supported Home rows. Recently Added opens a date-sorted library listing.
 - Recommendations and genre browsing.
 - Movies, TV shows, seasons, and episodes.
 - Music libraries, artists, albums, and playlists.
@@ -37,12 +39,19 @@ Emby5 provides a native, GPU-rendered interface designed for navigating your Emb
 - **Trailer QR** on movie and series details when a suitable remote trailer link is supplied by the server; no Seerr connection is required.
 - Upcoming episodes appear in TV Show season details.
 - Main navigation: **Home · Movies · TV Shows · Live TV · VOD · Music · Discover**, with content-dependent tabs.
-- Dedicated search within Live TV and VOD; the standalone main Search tab has been removed.
+- **Triangle** searches the current section: Movies, TV Shows, the selected Music view, Discover, Live TV or the selected VOD type. **Triangle does nothing on Home.** There is no separate Search tab or multi-source search menu.
 - Library sorting, filtering, favourites, and watched/unwatched status, synchronised with the connected server.
+- Library sort and filter choices are remembered per account and library.
+- Browsing restores the selected item and position when returning from details or other tabs, and retains selection across refreshes where the item still exists.
+- Large-library drawing limits work to visible cards and reduces repeated copying of loaded metadata.
 - A–Z library navigation.
 - Artwork and backdrop loading, including placeholder rendering.
 - Tile-based Settings screen for Accounts & Servers, Playback, Discover/Seerr, Live TV (including VOD settings), and System.
 - Local storage for saved accounts and application settings.
+
+**Item actions**
+
+Press **Options** for applicable shortcuts such as **Play/Resume**, **Play from beginning**, **Go to series**, **Go to season** and **Trailer QR**. Whole-season and whole-series watched/unwatched changes require confirmation. Trailer actions appear only when a suitable link is available.
 
 **Note:** Some artwork may be unavailable or fail to load for particular items or libraries, depending on the connected server and image-handling behavior.
 
@@ -210,10 +219,17 @@ Emby5 has a **Home-style Live TV screen**. Channels are displayed as horizontal 
 
 Source-specific status and retry controls are in **Settings > Live TV**. Successful Xtream categories remain usable if another category fails; previous cached data is retained for failed requests. A complete successful refresh replaces obsolete entries.
 
+**Large catalogues:** Xtream requests process categories and publish validated channel batches before the complete refresh finishes. An inactivity timeout distinguishes stalled transfers from downloads still making progress. Bulk catalogue requests share provider access and yield during playback, then can resume afterward. Safety limits and provider availability still apply.
+
+**Import a provider group:** In **Settings > Live TV > Manage IPTV categories**, select a custom group, press **Options**, then choose **Add channels from a provider group**. Confirm to copy its available channels. Existing assignments keep their order; duplicates are skipped and new channels are appended in provider order. This is a one-time membership copy, not an automatically synchronised link. The original provider group stays intact.
+
 **Guide and navigation**
 - Now Playing and Up Next programme information, times and progress are shown when the source provides EPG data.
 - Programme details are also available in the player overlay when controls are visible.
 - Navigate **Left/Right** across channels in a row and **Up/Down** between rows.
+- Focused cards use the theme-coloured ring and enlargement from library browsing, respecting focus strength, enlargement and reduced-motion preferences.
+- Returning from playback or search restores the previous row and selected channel where available.
+- **Options > Jump to group** opens a searchable group selector. **Pinned groups** and **Pin / unpin current group** provide shortcuts without changing the group order used during playback.
 - Press **X** to play the focused channel and **Triangle** to search loaded Live TV channels by name; **Circle** exits search.
 - Custom category creation, channel assignments and ordering are managed from the **Live TV** Settings tile. Hold Up/Down to accelerate through the assignment list; assigning channels remains a separate action.
 - EPG availability and stream compatibility depend on the provider; there is no complete interactive EPG grid.
@@ -225,10 +241,14 @@ Source-specific status and retry controls are in **Settings > Live TV**. Success
 Emby5 has a dedicated **VOD** section for supported Xtream catalogues and compatible standalone video entries from M3U playlists.
 
 - Separate **Movies** and **TV Shows** areas with artwork, group/category rows and title browsing.
-- Xtream series browsing includes seasons, episodes and episode playback when provider metadata is available.
-- **Triangle** opens a VOD title search; search covers titles indexed in the locally stored catalogue, not just the currently visible cards.
-- Progressive catalogue discovery and disk-backed metadata caching, with visible content read in bounded pages instead of copying an entire large catalogue into the UI.
-- Previously cached items can appear on launch while catalogue refresh runs; newly discovered batches become available progressively.
+- Movie detail pages show available artwork, descriptions and runtime, with explicit Play/Resume actions.
+- Xtream series details include a season selector, episodes and episode playback when provider metadata is available.
+- **Options > Continue Watching (local)** opens saved VOD progress. Details offer **Resume**, **Play from beginning** and **Options > Remove local resume point** when applicable. Local VOD progress is separate from Emby/Jellyfin watched history and is stored for the relevant user/account/provider context.
+- Focused posters use theme-coloured rings and enlargement, respecting appearance preferences. Returning from details or playback restores the previous category and title where available.
+- **Triangle** searches the selected VOD type (Movies or TV Shows) across categories in the locally indexed catalogue, not just the visible cards. Triangle edits the query; Circle clears or closes search.
+- Large Xtream catalogues are processed category by category; validated movie and series batches become usable before the whole refresh completes.
+- Progressing transfers use inactivity-based timeout handling. Bulk refreshes yield to playback and can resume afterward. Cached titles remain available during refresh.
+- Disk-backed metadata and bounded page reads avoid copying the entire catalogue into the interface.
 - VOD is shown in main navigation only when at least one movie or series is available. Movies-only or TV-shows-only providers show the relevant area.
 - **Settings > Live TV > VOD (at the bottom)** displays catalogue status and loaded title counts, offers manual refresh, and controls the automatic refresh interval: **Manual only, 12 hours, 24 hours (default), 48 hours, or 7 days**.
 - Cached catalogue metadata reduces repeated downloads; a live provider connection may still be required to start playback.
@@ -360,13 +380,13 @@ Emby5 is designed for navigation using the DualSense controller.
 | **D-pad** | Navigate | Full-screen Live TV: Up/Down groups, Left/Right channels; visible menus and non-live playback retain normal navigation/seek controls |
 | **L1 / R1** | Previous / next tab | Seek backward / forward |
 | **L2 / R2** | Previous / next A–Z letter | Adaptive rewind / fast-forward |
-| **Triangle** | Search in Live TV/VOD where available | Episodes |
+| **Triangle** | Search the current Movies, TV Shows, Music, Discover, Live TV or VOD section; no action on Home | Episodes |
 | **Square** | Sort/filter; detail pages: Read more or reveal protected episode details | Audio and subtitle selection |
-| **Options** | Item options | Playback controls |
+| **Options** | Context actions: item shortcuts, Home-row View all/retry, Live TV group shortcuts or VOD local resume | Playback controls |
 | **Touchpad** | Now Playing while music plays | Playback controls |
 | **L3** | — | Playback information |
 
-Live TV uses Left/Right to browse channels within a group and Up/Down to move between group rows. During full-screen Live TV playback with controls hidden, **Up** plays the first channel of the previous group and **Down** the first channel of the next group; **Left/Right** plays the previous/next channel within the current group. The order follows the displayed groups (saved custom groups first). Empty groups are skipped; groups and channels wrap at the ends. One fresh press makes one switch; held/repeated input does not skip multiple streams. **Options** opens playback controls; **Circle** hides them, and visible menus keep normal directional navigation. Switching completes the old player and server stop/stream cleanup before opening the next stream. Triangle opens Live TV or VOD search when supported. Some buttons have additional functions in custom-group management.
+Live TV uses Left/Right to browse channels within a group and Up/Down to move between group rows. During full-screen Live TV playback with controls hidden, **Up** plays the first channel of the previous group and **Down** the first channel of the next group; **Left/Right** plays the previous/next channel within the current group. The order follows the displayed groups (saved custom groups first). Empty groups are skipped; groups and channels wrap at the ends. One fresh press makes one switch; held/repeated input does not skip multiple streams. **Options** opens playback controls; **Circle** hides them, and visible menus keep normal directional navigation. Switching completes the old player and server stop/stream cleanup before opening the next stream. Triangle opens or edits search for the current section: the selected Movies/TV Shows library, the selected Music view, the configured Seerr service in Discover, loaded Live TV channels across groups, or the selected VOD type across categories. Circle clears or closes search and returns to the previous browsing view. Triangle has no action on Home. Some buttons have additional functions in custom-group management.
 
 ---
 
