@@ -435,15 +435,11 @@ Emby5 builds upon and draws inspiration from the work of developers throughout t
 
 Full credit for the original projects and components belongs to their respective developers and contributors.
 
-### Jelly5 — Original Application Foundation
+### Jelly5 — Original Application Inspiration
 
 **[02dnot — Jelly5](https://github.com/02dnot/Jelly5)**
 
-Emby5 is based on and derived from Jelly5.
-
-Jelly5 provided the original PS5-native application foundation, including major portions of the UI, playback architecture, rendering, controller integration, media handling, and platform-specific functionality.
-
-Emby5 adapts this foundation for Emby-specific authentication, API integration, user management, libraries, branding, and additional features.
+Credit for initial idea and work.
 
 ### Nuvio PS5 — Application and Playback Foundations
 
