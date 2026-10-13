@@ -6,7 +6,6 @@
 
 **Emby & Jellyfin Libraries · Native PS5 Playback · Live TV · M3U/Xtream · VOD · 32 Visual Themes**
 
-Emby5 is an unofficial native Emby and Jellyfin client for homebrew-capable PlayStation 5 consoles, derived from [Jelly5 by 02dnot](https://github.com/02dnot/Jelly5).
 
 ---
 
