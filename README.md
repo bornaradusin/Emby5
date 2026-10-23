@@ -5,12 +5,17 @@
 **A native Emby and Jellyfin media client for homebrew enabled PlayStation 5 consoles.**
 
 **Emby & Jellyfin Libraries · Native PS5 Playback · Live TV · M3U/Xtream · VOD · 32 Visual Themes**
-
+<p align="right">
+  <a href="https://www.buymeacoffee.com/bornaradusin">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+         alt="Buy Me a Coffee"
+         width="140">
+  </a>
+</p>
 
 ---
 
 **Contents:** [Downloads](https://github.com/bornaradusin/Emby5/releases) · [Features](#features) · [Live TV](#live-tv--emby-xtream-and-m3um3u8) · [VOD](#video-on-demand-vod) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
-
 
 
 ---
