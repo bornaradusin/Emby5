@@ -12,7 +12,6 @@
          width="140">
   </a>
 </p>
-
 ---
 
 **Contents:** [Downloads](https://github.com/bornaradusin/Emby5/releases) · [Features](#features) · [Live TV](#live-tv--emby-xtream-and-m3um3u8) · [VOD](#video-on-demand-vod) · [HDMI Bitstream](#hdmi-audio-bitstream) · [Known Limitations](#known-limitations) · [Controls](#controls) · [Installation](#installation) · [Updating](#updating) · [Credits](#credits--acknowledgements) · [Licence](#licence) · [Disclaimer](#disclaimer-and-trademarks)
