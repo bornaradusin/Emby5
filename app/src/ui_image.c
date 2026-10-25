@@ -452,6 +452,89 @@ static void cache_init(void)
 
 /* ---- fetching ------------------------------------------------------------------ */
 
+/* ---- Emby5: the servers' credentials for their artwork ------------------------
+ *
+ * Emby and Jellyfin can refuse an image request that does not say who is
+ * asking: always when the image has no tag in the URL, and for every image
+ * when the server (or a reverse proxy in front of it) requires sign-in. The
+ * API calls send the session's headers; image requests send the same ones,
+ * published per server by jf::Client. A URL gets them only when it is under a
+ * published base and on an image route, so nothing goes to another host. */
+
+#define AUTH_SERVERS 8
+#define AUTH_BASE 512
+#define AUTH_HEADERS 2048
+
+typedef struct server_auth {
+    char base[AUTH_BASE];
+    char headers[AUTH_HEADERS];
+    unsigned seq;          /* publish order: the oldest gives way when all are taken */
+} server_auth;
+
+static server_auth s_auth[AUTH_SERVERS];
+static unsigned s_auth_seq;
+static pthread_mutex_t s_auth_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void ui_image_set_auth(const char *base, const char *headers)
+{
+    if (!base || !*base || strlen(base) >= AUTH_BASE)
+        return;
+    const int forget = !headers || !*headers;
+    if (!forget && strlen(headers) >= AUTH_HEADERS)
+        return;
+    pthread_mutex_lock(&s_auth_lock);
+    int at = -1, free_at = -1, oldest = 0;
+    for (int i = 0; i < AUTH_SERVERS; i++) {
+        if (s_auth[i].base[0] && !strcmp(s_auth[i].base, base))
+            at = i;
+        else if (!s_auth[i].base[0] && free_at < 0)
+            free_at = i;
+        if (s_auth[i].seq < s_auth[oldest].seq)
+            oldest = i;
+    }
+    if (forget) {
+        if (at >= 0)
+            memset(&s_auth[at], 0, sizeof(s_auth[at]));
+    } else {
+        if (at < 0)
+            at = free_at >= 0 ? free_at : oldest;
+        snprintf(s_auth[at].base, sizeof(s_auth[at].base), "%s", base);
+        snprintf(s_auth[at].headers, sizeof(s_auth[at].headers), "%s", headers);
+        s_auth[at].seq = ++s_auth_seq;
+    }
+    pthread_mutex_unlock(&s_auth_lock);
+}
+
+/* An Emby or Jellyfin image route: .../Images/... or Jellyfin's /UserImage. */
+static int image_route(const char *path)
+{
+    const char *end = strchr(path, '?');
+    const size_t n = end ? (size_t)(end - path) : strlen(path);
+    for (size_t i = 0; i + 8 <= n; i++)
+        if (!memcmp(path + i, "/Images/", 8))
+            return 1;
+    return (n >= 10 && !memcmp(path, "/UserImage", 10)) ||
+           (n >= 15 && !memcmp(path, "/emby/UserImage", 15));
+}
+
+/* The headers for url into out; 0 when it gets none. The longest base wins. */
+static int auth_headers_for(const char *url, char *out, size_t cap)
+{
+    size_t best = 0;
+    pthread_mutex_lock(&s_auth_lock);
+    for (int i = 0; i < AUTH_SERVERS; i++) {
+        const size_t n = strlen(s_auth[i].base);
+        if (!n || n <= best || strncmp(url, s_auth[i].base, n) || url[n] != '/' || !image_route(url + n))
+            continue;
+        if (strlen(s_auth[i].headers) >= cap)
+            continue;
+        snprintf(out, cap, "%s", s_auth[i].headers);
+        best = n;
+    }
+    pthread_mutex_unlock(&s_auth_lock);
+    return best > 0;
+}
+
 static uint8_t *fetch_network(const char *url, size_t *len);
 
 static uint8_t *fetch(const char *url, size_t *len)
@@ -477,9 +560,12 @@ static uint8_t *fetch_network(const char *url, size_t *len)
     uint8_t *buf = NULL;
     size_t got = 0, cap = 0;
 
+    char auth[AUTH_HEADERS];
     *len = 0;
     av_dict_set(&opts, "rw_timeout", "10000000", 0);
     av_dict_set(&opts, "user_agent", "Mozilla/5.0 (PlayStation 5) NuvioPS5", 0);
+    if (auth_headers_for(url, auth, sizeof(auth)))
+        av_dict_set(&opts, "headers", auth, 0);
     if (avio_open2(&io, url, AVIO_FLAG_READ, NULL, &opts) < 0) {
         av_dict_free(&opts);
         return NULL;

@@ -17,6 +17,8 @@
 namespace i18n {
 
 enum class Lang { English, Japanese, FrenchFrance, FrenchCanada, SpanishSpain, SpanishLatam, German, Italian, PortuguesePortugal, PortugueseBrazil, Dutch, Russian, Korean, ChineseSimplified, ChineseTraditional, Polish, Danish, Swedish, Norwegian, Finnish, Turkish, Arabic, Czech, Greek, Hungarian, Romanian, Thai, Indonesian, Vietnamese, Ukrainian, Croatian, SerbianCyrillic };
+/* How many languages there are: tables indexed by Lang have exactly this many entries. */
+constexpr int kLangCount = (int)Lang::SerbianCyrillic + 1;
 /* Called once after system services initialize. No manual override exists. */
 void use_ps5_system_language();
 Lang lang();

@@ -280,6 +280,8 @@ const char *T(const char *nb)
     case i18n::Lang::Italian: own = &i18n::italian_table(); break;
     case i18n::Lang::PortuguesePortugal: own = &i18n::portuguese_table(); break;
     case i18n::Lang::PortugueseBrazil: own = &i18n::portuguese_table(); break;
+    case i18n::Lang::ChineseSimplified: own = &i18n::chinese_simplified_table(); break;
+    case i18n::Lang::ChineseTraditional: own = &i18n::chinese_traditional_table(); break;
     default: own = &i18n::extra_table((int)l); break;
     }
     if (own) {

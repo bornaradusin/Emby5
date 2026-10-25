@@ -345,6 +345,9 @@ public:
     bool post_json(const std::string &path, const std::string &json, std::string *body);
 
 private:
+    /* Hands this session's headers to the image loader for this server's artwork
+     * (ui_image_set_auth): image URLs carry no token. */
+    void publish_image_auth() const;
     bool send_playback(const char *path, const std::string &body);
     std::vector<Item> items_of(const std::string &body, bool *ok = nullptr);
 

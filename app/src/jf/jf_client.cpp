@@ -5,6 +5,7 @@
 #include "jf_client.h"
 
 #include "jf_http.h"
+#include "ui_image.h"
 
 #include <algorithm>
 #include <cmath>
@@ -38,7 +39,7 @@ HttpResponse tracked_request(const std::string &method, const std::string &url,
 }
 
 constexpr int kTimeout = 15;
-constexpr const char *kVersion = "1.2.6";
+constexpr const char *kVersion = "1.2.7";
 constexpr const char *kFields = "Overview,Genres";            /* rows: what the UI shows */
 constexpr const char *kItemFields =
     "Overview,Genres,MediaStreams,Taglines,People,Studios,ChildCount,ProductionLocations,SpecialFeatureCount,"
@@ -288,6 +289,19 @@ void Client::set_session(std::string token, std::string user_id, std::string use
     token_ = std::move(token);
     user_id_ = std::move(user_id);
     user_name_ = std::move(user_name);
+    publish_image_auth();
+}
+
+void Client::publish_image_auth() const
+{
+    if (server_.empty() || token_.empty()) return;
+    // The API's own headers, without its Accept: an image request then says
+    // who is asking exactly as the API calls do, on Emby and on Jellyfin.
+    std::string headers;
+    for (const std::string &line : request_headers())
+        if (line.compare(0, 7, "Accept:") != 0)
+            headers += line + "\r\n";
+    ui_image_set_auth(server_.c_str(), headers.c_str());
 }
 
 std::string Client::auth_header() const
@@ -383,6 +397,7 @@ bool Client::public_info(std::string *name, std::string *version, std::string *i
         // The client becomes immutable once its session is published to playback/UI workers.
         kind_ = detected;
         server_id_ = sid;
+        publish_image_auth();   // Emby and Jellyfin sign requests differently
         if (name) *name = str_of(j, "ServerName");
         if (version) *version = ver;
         if (id) *id = sid;

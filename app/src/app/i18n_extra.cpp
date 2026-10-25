@@ -1,9 +1,10 @@
+#include "app/i18n.h"
 #include "app/i18n_tables.h"
 namespace i18n {
 const std::unordered_map<std::string, const char *> &extra_table(int language) {
+ /* One table per i18n::Lang, in its order: tables[(int)lang] is that language's. */
  static const std::unordered_map<std::string, const char *> tables[] = {
-    {},
-    {},
+    {}, /* English: i18n.cpp */
     {{"Hjem", "ホーム"}, {"Filmer", "映画"}, {"Serier", "テレビ番組"}, {"Musikk", "音楽"}, {"Søk", "検索"}, {"Innstillinger", "設定"}, {"Spill av", "再生"}, {"Fortsett", "続ける"}, {"Tilbake", "戻る"}, {"Språk", "言語"}, {"Undertekster", "字幕"}, {"Lyd", "音声"}, {"Laster …", "読み込み中…"}},
     {},
     {},
@@ -16,8 +17,8 @@ const std::unordered_map<std::string, const char *> &extra_table(int language) {
     {{"Hjem", "Start"}, {"Filmer", "Films"}, {"Serier", "Series"}, {"Musikk", "Muziek"}, {"Søk", "Zoeken"}, {"Innstillinger", "Instellingen"}, {"Spill av", "Afspelen"}, {"Fortsett", "Doorgaan"}, {"Tilbake", "Terug"}, {"Språk", "Taal"}, {"Undertekster", "Ondertitels"}, {"Lyd", "Audio"}, {"Laster …", "Laden…"}},
     {{"Hjem", "Главная"}, {"Filmer", "Фильмы"}, {"Serier", "Сериалы"}, {"Musikk", "Музыка"}, {"Søk", "Поиск"}, {"Innstillinger", "Настройки"}, {"Spill av", "Воспроизвести"}, {"Fortsett", "Продолжить"}, {"Tilbake", "Назад"}, {"Språk", "Язык"}, {"Undertekster", "Субтитры"}, {"Lyd", "Аудио"}, {"Laster …", "Загрузка…"}},
     {{"Hjem", "홈"}, {"Filmer", "영화"}, {"Serier", "TV 프로그램"}, {"Musikk", "음악"}, {"Søk", "검색"}, {"Innstillinger", "설정"}, {"Spill av", "재생"}, {"Fortsett", "계속"}, {"Tilbake", "뒤로"}, {"Språk", "언어"}, {"Undertekster", "자막"}, {"Lyd", "오디오"}, {"Laster …", "로딩 중…"}},
-    {{"Hjem", "主页"}, {"Filmer", "电影"}, {"Serier", "电视剧"}, {"Musikk", "音乐"}, {"Søk", "搜索"}, {"Innstillinger", "设置"}, {"Spill av", "播放"}, {"Fortsett", "继续"}, {"Tilbake", "返回"}, {"Språk", "语言"}, {"Undertekster", "字幕"}, {"Lyd", "音频"}, {"Laster …", "加载中…"}},
-    {{"Hjem", "首頁"}, {"Filmer", "電影"}, {"Serier", "電視節目"}, {"Musikk", "音樂"}, {"Søk", "搜尋"}, {"Innstillinger", "設定"}, {"Spill av", "播放"}, {"Fortsett", "繼續"}, {"Tilbake", "返回"}, {"Språk", "語言"}, {"Undertekster", "字幕"}, {"Lyd", "音訊"}, {"Laster …", "載入中…"}},
+    {}, /* Chinese (Simplified): i18n_zh.cpp */
+    {}, /* Chinese (Traditional): i18n_zh.cpp */
     {{"Hjem", "Strona główna"}, {"Filmer", "Filmy"}, {"Serier", "Seriale"}, {"Musikk", "Muzyka"}, {"Søk", "Szukaj"}, {"Innstillinger", "Ustawienia"}, {"Spill av", "Odtwórz"}, {"Fortsett", "Kontynuuj"}, {"Tilbake", "Wstecz"}, {"Språk", "Język"}, {"Undertekster", "Napisy"}, {"Lyd", "Dźwięk"}, {"Laster …", "Ładowanie…"}},
     {{"Hjem", "Hjem"}, {"Filmer", "Film"}, {"Serier", "Serier"}, {"Musikk", "Musik"}, {"Søk", "Søg"}, {"Innstillinger", "Indstillinger"}, {"Spill av", "Afspil"}, {"Fortsett", "Fortsæt"}, {"Tilbake", "Tilbage"}, {"Språk", "Sprog"}, {"Undertekster", "Undertekster"}, {"Lyd", "Lyd"}, {"Laster …", "Indlæser…"}},
     {{"Hjem", "Hem"}, {"Filmer", "Filmer"}, {"Serier", "Serier"}, {"Musikk", "Musik"}, {"Søk", "Sök"}, {"Innstillinger", "Inställningar"}, {"Spill av", "Spela upp"}, {"Fortsett", "Fortsätt"}, {"Tilbake", "Tillbaka"}, {"Språk", "Språk"}, {"Undertekster", "Undertexter"}, {"Lyd", "Ljud"}, {"Laster …", "Läser in…"}},
@@ -36,6 +37,7 @@ const std::unordered_map<std::string, const char *> &extra_table(int language) {
     {{"Hjem", "Početna"}, {"Filmer", "Filmovi"}, {"Serier", "Serije"}, {"Musikk", "Glazba"}, {"Søk", "Pretraži"}, {"Innstillinger", "Postavke"}, {"Spill av", "Reproduciraj"}, {"Fortsett", "Nastavi"}, {"Tilbake", "Natrag"}, {"Språk", "Jezik"}, {"Undertekster", "Titlovi"}, {"Lyd", "Zvuk"}, {"Laster …", "Učitavanje…"}},
     {{"Hjem", "Почетна"}, {"Filmer", "Филмови"}, {"Serier", "Серије"}, {"Musikk", "Музика"}, {"Søk", "Претрага"}, {"Innstillinger", "Подешавања"}, {"Spill av", "Пусти"}, {"Fortsett", "Настави"}, {"Tilbake", "Назад"}, {"Språk", "Језик"}, {"Undertekster", "Титлови"}, {"Lyd", "Звук"}, {"Laster …", "Учитавање…"}},
  };
+ static_assert(sizeof(tables) / sizeof(tables[0]) == kLangCount, "one table per i18n::Lang");
  static const std::unordered_map<std::string, const char *> empty;
  return language >= 0 && language < (int)(sizeof(tables)/sizeof(tables[0])) ? tables[language] : empty;
 }

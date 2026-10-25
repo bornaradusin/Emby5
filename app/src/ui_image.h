@@ -38,6 +38,13 @@ int ui_image_decode(const uint8_t *data, size_t size, int max_w, int max_h, ui_i
 /* Drops every image (between playbacks). */
 void ui_image_clear(void);
 
+/* Emby5: a signed-in server's credentials for its artwork. Artwork URLs carry
+ * no token, so the disk cache can keep them; a request for a URL under base
+ * (the server's address, with any reverse-proxy path) on one of its image
+ * routes sends these header lines instead, each ending in CRLF. Requests to
+ * any other address never get them. NULL or "" headers forget base. */
+void ui_image_set_auth(const char *base, const char *headers);
+
 #ifdef __cplusplus
 }
 #endif
