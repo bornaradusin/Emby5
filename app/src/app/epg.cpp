@@ -61,7 +61,10 @@ std::mutex mu;
 std::unordered_map<std::string, Entry> rows;   /* channel id -> its guide (Emby, Jellyfin, Xtream) */
 M3U m3u;
 std::deque<iptv_xtream::Channel> pending;     /* what to fetch, nearest first */
-jf::Client *pending_client = nullptr;
+/* The worker's own copy of the session: it never touches the screen's client,
+ * which signing out or switching user changes on the UI thread. */
+std::shared_ptr<jf::Client> pending_client;
+std::string pending_identity;
 bool worker = false;
 std::unordered_set<std::string> in_flight;    /* being fetched right now */
 std::string s_url;                             /* iptv_m3u::guide_url(), read every few seconds */
@@ -300,16 +303,17 @@ void load_m3u(const std::string &url, uint64_t epoch)
             lists[p.channel].push_back(std::move(q));
             kept++;
         });
-    bool reader_ok = true;
+    bool reader_ok = true, stopped = false;
     const auto result = jf::http_stream(
         url,
         [&](const char *data, size_t n) { return (reader_ok = reader.feed(data, n)); },
         [&] {
             std::lock_guard<std::mutex> g(mu);
-            return epoch != s_epoch || iptv_catalogue::playback_active();
+            return (stopped = epoch != s_epoch || iptv_catalogue::playback_active());
         },
         {}, 60, 1ull << 30);
-    if (reader_ok && (result.complete || kept > 0)) reader_ok = reader.finish();
+    if (reader_ok && result.complete) reader_ok = reader.finish();
+    const bool complete = result.complete && reader_ok;   /* the whole file, read */
     size_t total = 0;
     for (auto &l : lists) {
         List t = tidy(std::move(l.second));
@@ -323,16 +327,26 @@ void load_m3u(const std::string &url, uint64_t epoch)
     m3u.loading = false;
     if (total == 0) {
         m3u.failed_at = now_s();
-        m3u.error = !result.complete && result.cancelled ? std::string()
+        m3u.error = stopped ? std::string()
                     : !reader_ok ? std::string(N_("The TV guide address isn't an XMLTV guide"))
                     : !result.complete ? std::string(N_("The TV guide couldn't be downloaded"))
                                        : std::string(N_("The TV guide has nothing for these channels"));
-        if (!result.complete && result.cancelled) m3u.failed_at = 0;   /* paused for playback: try again later */
+        if (stopped) m3u.failed_at = 0;   /* paused for playback: try again afterwards */
         evo_bt("epg: M3U guide failed (%s; %s)", result.error.c_str(), reader.error().c_str());
         bump();
         return;
     }
     fresh.tried_disk = true;
+    if (!complete) {
+        /* Cut off (playback started, the connection dropped): show what came,
+         * but don't keep it as the day's guide - it is fetched again. */
+        fresh.fetched = 0;
+        fresh.failed_at = stopped ? 0 : now_s();
+        m3u = std::move(fresh);
+        bump();
+        evo_bt("epg: M3U guide cut off after %zu programmes (%s)", m3u.programmes, result.error.c_str());
+        return;
+    }
     m3u = std::move(fresh);
     bump();
     evo_bt("epg: M3U guide, %zu programmes for %zu channels", m3u.programmes, m3u.by_id.size());
@@ -447,7 +461,7 @@ void work()
             return;
         }
         const uint64_t epoch = s_epoch;
-        jf::Client *client = pending_client;
+        const std::shared_ptr<jf::Client> client = pending_client;
         const iptv_xtream::Channel first = pending.front();
         if (is_server(first)) {
             std::vector<iptv_xtream::Channel> batch;
@@ -459,7 +473,7 @@ void work()
                     ++it;
             for (const auto &c : batch) in_flight.insert(c.id);
             g.unlock();
-            fetch_server(client, batch, epoch);
+            fetch_server(client.get(), batch, epoch);
             g.lock();
             for (const auto &c : batch) in_flight.erase(c.id);
         } else {
@@ -536,7 +550,20 @@ void want(jf::Client *client, const std::vector<iptv_xtream::Channel> &channels)
             if (!kept) rows[c.id].loading = false;
         }
         pending.swap(next);
-        pending_client = client;
+        if (client) {   /* a copy of the session for the worker, made again when it changes */
+            const std::string identity = client->server() + "\n" + client->user_id() + "\n" + client->token();
+            if (!pending_client || identity != pending_identity) {
+                try {
+                    auto copy = std::make_shared<jf::Client>(client->server(), client->device_id(), client->device_name(),
+                                                             client->server_kind());
+                    copy->set_session(client->token(), client->user_id(), client->user_name());
+                    pending_client = std::move(copy);
+                    pending_identity = identity;
+                } catch (...) {
+                    pending_client.reset();
+                }
+            }
+        }
         if (!worker) {
             worker = true;
             if (!emby5::spawn_io(work)) {
@@ -554,7 +581,7 @@ void want(jf::Client *client, const std::vector<iptv_xtream::Channel> &channels)
         if (!url.empty() && (other || stale) && !waiting) {
             if (other) {   /* another address: start over, the disk copy may be it */
                 m3u = M3U();
-                m3u.url.clear();
+                m3u.url = url;   /* a failure then waits kRetry before the next try */
             }
             m3u.loading = true;
             m3u.error.clear();
@@ -606,6 +633,8 @@ void reset()
     ++s_epoch;
     rows.clear();
     pending.clear();
+    pending_client.reset();
+    pending_identity.clear();
     m3u = M3U();
     bump();
 }

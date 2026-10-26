@@ -453,10 +453,16 @@ static volatile int s_night = 0;
 static volatile float s_boost = 1.0f;
 static float s_env = 0.0f;   /* the mix's mean square, smoothed */
 static float s_peak = 0.0f;  /* the boosted mix's peak, for the limiter */
+static int s_peak_hold = 0;  /* samples the peak is held before it releases */
 
 void evo_audio_set_gain(float g) { s_gain_target = g < 0.f ? 0.f : g > 1.f ? 1.f : g; }
 void evo_audio_set_night(int on) { s_night = on; }
-void evo_audio_set_boost(float b) { s_boost = b < 1.f ? 1.f : b > 4.f ? 4.f : b; }
+void evo_audio_set_boost(float b)
+{
+    s_boost = b < 1.f ? 1.f : b > 4.f ? 4.f : b;
+    s_peak = 0.f;   /* the next playback starts clean */
+    s_peak_hold = 0;
+}
 
 static float soft_limit(float x)
 {
@@ -504,7 +510,16 @@ static void emby5_dsp(float *s, int frames, int ch)
             float peak = 0.f;
             for (int c = 0; c < ch; c++)
                 peak = fmaxf(peak, fabsf(f[c] * g));
-            s_peak = peak > s_peak ? peak : s_peak + peak_release * (peak - s_peak);
+            if (!(peak < 1e30f))
+                peak = 0.f;   /* inf or NaN: a broken sample must not stop the limiter for good */
+            if (peak >= s_peak) {   /* instant attack, then held ~10 ms so bass doesn't ripple */
+                s_peak = peak;
+                s_peak_hold = PROSPERO_AUDIO_OUTPUT_RATE / 100;
+            } else if (s_peak_hold > 0) {
+                s_peak_hold--;
+            } else {
+                s_peak += peak_release * (peak - s_peak);
+            }
             if (s_peak > ceiling)
                 g *= ceiling / s_peak;
         }

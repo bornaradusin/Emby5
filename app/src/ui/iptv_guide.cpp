@@ -74,8 +74,10 @@ void IPTV::close_guide()
 {
     m_guide = false;
     m_header = false;
-    select_group(m_row, false);   /* back on the cards, on the same channel */
-    remember();
+    if (m_query.empty()) {   /* back on the cards, on the same channel (search results keep their place) */
+        select_group(m_row, false);
+        remember();
+    }
     m_animating = true;
 }
 
@@ -188,8 +190,11 @@ void IPTV::draw_guide(double now_d, float dt)
     m_animating |= m_guide_x.step(dt, 10.f);
     const int n = count();
     m_index = std::clamp(m_index, 0, std::max(0, n - 1));
-    const float left = (float)m_guide_base + m_guide_x.value;   /* the time at the grid's left edge */
-    auto x_of = [&](int64_t t) { return kGridX + ((float)t - left) * kPxPerSec; };
+    /* Times as seconds from when the guide opened: a Unix time in a float is
+     * only good to 128 s, which would make the grid jump. */
+    const double left_d = (double)m_guide_base + (double)m_guide_x.value;   /* the time at the grid's left edge */
+    const int64_t left = (int64_t)std::floor(left_d);
+    auto x_of = [&](int64_t t) { return kGridX + (float)((double)(t - m_guide_base) - (double)m_guide_x.value) * kPxPerSec; };
     const auto &pal = theme_palette();
     const uint32_t accent = theme_focus_colour();
 
@@ -226,7 +231,7 @@ void IPTV::draw_guide(double now_d, float dt)
             const epg::Programme &p = (*focus_row.programmes)[focus];
             gfx::text(kPad, kInfoTop + 92, p.title, {gfx::Bold, 44, kGridR - kPad}, kText);
             std::string when = clock(p.start) + " \xE2\x80\x93 " + clock(p.end);
-            if (!same_day(p.start, now)) when = std::string(T("Tomorrow")) + " " + when;
+            if (p.start > now && !same_day(p.start, now)) when = std::string(T("Tomorrow")) + " " + when;
             when += "  \xC2\xB7  " + focus_ch->name;
             if (p.start <= now && now < p.end)
                 when += "  \xC2\xB7  " + std::to_string((p.end - now + 59) / 60) + T(" min left");
@@ -249,7 +254,7 @@ void IPTV::draw_guide(double now_d, float dt)
 
     /* The time across, on the half hours. */
     gfx::push_scissor({kGridX, kTimeY - 30, kGridR - kGridX, 40});
-    for (int64_t t = half_hour((int64_t)left); t < (int64_t)left + kSpan + kHalf; t += kHalf)
+    for (int64_t t = half_hour(left); t < left + kSpan + kHalf; t += kHalf)
         gfx::text(x_of(t) + 8, kTimeY, clock(t), {gfx::SemiBold, 20}, t % 3600 ? kText3 : kText2);
     gfx::pop_scissor();
     gfx::fill({kGridX, kTimeY + 8, kGridR - kGridX, 1}, alpha(kText3, .4f));
@@ -283,7 +288,7 @@ void IPTV::draw_guide(double now_d, float dt)
         if (row.programmes)
             for (size_t k = 0; k < row.programmes->size(); k++) {
                 const epg::Programme &p = (*row.programmes)[k];
-                if (p.end <= (int64_t)left || p.start >= (int64_t)left + kSpan + kHalf) continue;
+                if (p.end <= left || p.start >= left + kSpan + kHalf) continue;
                 const float x0 = std::max(kGridX, x_of(p.start)) + 2, x1 = std::min(kGridR, x_of(p.end)) - 2;
                 if (x1 - x0 < 4) continue;
                 any = true;
