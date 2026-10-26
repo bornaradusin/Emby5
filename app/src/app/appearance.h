@@ -1,6 +1,7 @@
 /* Emby5 - GPL-3.0-or-later. Pure appearance/editor policy shared with tests. */
 #pragma once
 #include "app/settings.h"
+#include "app/i18n.h"
 #include <algorithm>
 namespace settings {
 inline Appearance normalize_appearance(Appearance a) {
@@ -66,7 +67,7 @@ public:
     void restore(){draft=original;}
     void choose_preset(int id){draft=preset_defaults(id);}
     void remember(){auto &s=slots[selected_slot];s.valid=true;s.appearance=normalize_appearance(draft);
-        if(s.name.empty())s.name="Custom theme "+std::to_string(selected_slot+1);sync_legacy();}
+        if(s.name.empty())s.name=TF("Custom theme {number}",{{"number",std::to_string(selected_slot+1)}});sync_legacy();}
     void recall(){if(slots[selected_slot].valid)draft=slots[selected_slot].appearance;sync_legacy();}
     void rename(const std::string &name){slots[selected_slot].name=theme_slot_name(name);}
     bool dirty() const {
@@ -75,8 +76,8 @@ public:
         return false;
     }
     std::string status() const {
-        for(const auto &s:slots)if(s.valid && same_appearance(draft,s.appearance))return "Saved custom theme: "+s.name;
-        return appearance_modified(draft)?"Modified":"Preset defaults";
+        for(const auto &s:slots)if(s.valid && same_appearance(draft,s.appearance))return TF("Saved custom theme: {name}",{{"name",s.name}});
+        return appearance_modified(draft)?T("Modified"):T("Preset defaults");
     }
     Local apply_to(Local current) const {
         static_cast<Appearance&>(current)=normalize_appearance(draft);

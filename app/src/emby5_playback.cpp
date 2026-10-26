@@ -109,11 +109,11 @@ std::string lower(std::string s)
 std::string runtime_label(int64_t runtime_ticks)
 {
     const int min = (int)(runtime_ticks / jf::kTicksPerSecond / 60);
-    char b[32];
+    char b[64];
     if (min >= 60)
         std::snprintf(b, sizeof b, T("%d t %d min"), min / 60, min % 60);
     else
-        std::snprintf(b, sizeof b, "%d min", min);
+        std::snprintf(b, sizeof b, T("%d min"), min);
     return min > 0 ? b : "";
 }
 
@@ -457,7 +457,7 @@ std::string request_json(jf::Client &c, const jf::Item &it, const jf::Playback &
         {"advanced_hint", T("Forsinkelse, størrelse, posisjon \xE2\x80\xA6")},
         {"audio", T("Lyd")}, {"background", T("Bakgrunn")}, {"bold", T("Fet skrift")}, {"built_in", T("Innebygd")},
         {"default", T("Standard")}, {"delay", T("Forsinkelse")}, {"ends_at", T("Slutter kl. %1$s")},
-        {"episode", "Episode"}, {"forced", T("Tvungen")}, {"go_back", T("Tilbake")}, {"language", T("Språk")},
+        {"episode", T("Episode")}, {"forced", T("Tvungen")}, {"go_back", T("Tilbake")}, {"language", T("Språk")},
         {"loading", T("Laster \xE2\x80\xA6")}, {"next_episode", T("Neste episode")}, {"connection_lost", T("Mistet kontakten med serveren \xE2\x80\x93 pr\xC3\xB8ver igjen \xE2\x80\xA6")},
         {"connection_gone", T("Fikk ikke kontakt med serveren igjen.")}, {"next_in", T("Spilles om %1$s")},
         {"no_audio_tracks", T("Ingen andre lydspor")}, {"no_subtitles", T("Ingen undertekster for denne strømmen")},
@@ -893,8 +893,8 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
                 stopped = client.report_stopped(pb, ticks(pos));
             }
             if (!stopped || !reporting || !s_session.start_reported) {
-                *error = !stopped || !s_session.start_reported ? "The server could not confirm the final playback position. Check the connection."
-                                 : "Playback progress reporting could not start; only the final position was sent.";
+                *error = !stopped || !s_session.start_reported ? T("The server could not confirm the final playback position. Check the connection.")
+                                 : T("Playback progress reporting could not start; only the final position was sent.");
             }
             s_reports--;
         }

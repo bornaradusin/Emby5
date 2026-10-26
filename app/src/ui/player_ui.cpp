@@ -54,35 +54,14 @@ std::string clock_at(double seconds_from_now)
     return b;
 }
 
-/* Language names in the interface's language: Norwegian from the list below,
- * English (and anything not listed) from the player's own names. */
+/* Language names in the interface's language: the player's own (English)
+ * names, translated. */
 std::string language_name(const std::string &code)
 {
-    if (i18n::english()) {
-        const std::string n = nuvio_language_name(code);
-        return n.empty() ? T("Ukjent språk") : n;
-    }
-    struct L {
-        const char *codes, *name;
-    };
-    static const L names[] = {{"nor nob no nb", "Norsk"},   {"nno nn", "Nynorsk"},  {"eng en", "Engelsk"},
-                              {"swe sv", "Svensk"},        {"dan da", "Dansk"},     {"fin fi", "Finsk"},
-                              {"ger deu de", "Tysk"},      {"fre fra fr", "Fransk"}, {"spa es", "Spansk"},
-                              {"ita it", "Italiensk"},     {"jpn ja", "Japansk"},   {"kor ko", "Koreansk"},
-                              {"chi zho zh", "Kinesisk"},  {"por pt", "Portugisisk"}, {"rus ru", "Russisk"},
-                              {"dut nld nl", "Nederlandsk"}, {"pol pl", "Polsk"},   {"ice isl is", "Islandsk"}};
     if (code.empty() || code == "und")
         return T("Ukjent språk");
-    std::string lc = code;
-    for (char &c : lc)
-        c = (char)std::tolower((unsigned char)c);
-    for (const L &l : names) {
-        const std::string list = std::string(" ") + l.codes + " ";
-        if (list.find(" " + lc + " ") != std::string::npos)
-            return l.name;
-    }
     const std::string n = nuvio_language_name(code);
-    return n.empty() ? code : n;
+    return n.empty() ? std::string(T("Ukjent språk")) : std::string(T(n.c_str()));
 }
 
 void play_glyph(float x, float cy, float size, uint32_t c)
@@ -140,7 +119,7 @@ void PlayerUi::draw_live_epg(float opacity)
 {
     if (m_live_channel_id.empty() || opacity<=0.01f) return;
     if(m_req && !m_req->live_navigation_token.empty())
-        gfx::text(94.f,308.f,"Hide controls: Circle. Up/Down: groups. Left/Right: channels.",
+        gfx::text(94.f,308.f,T("Hide controls: Circle. Up/Down: groups. Left/Right: channels."),
                   {gfx::Medium,20,1150},alpha(0xfff5fff6u,opacity));
     iptv_xtream::Channel ch;
     if (iptv_live::channel_by_id(m_live_channel_id,&ch)) {
@@ -148,10 +127,10 @@ void PlayerUi::draw_live_epg(float opacity)
         gfx::fill({x,y,w,h},alpha(0xc9000000u,opacity),20);
         gfx::text(x+24,y+38,ch.name,{gfx::Bold,27,w-48},alpha(0xfff5fff6u,opacity));
         if (ch.now.empty() && ch.next.empty()) {
-            gfx::text(x+24,y+85,"Programme guide unavailable",{gfx::Medium,21,w-48},alpha(0xffbacdc2u,opacity));
+            gfx::text(x+24,y+85,T("Programme guide unavailable"),{gfx::Medium,21,w-48},alpha(0xffbacdc2u,opacity));
             return;
         }
-        gfx::text(x+24,y+82,"NOW  " + (ch.now.empty()?"No information":ch.now),
+        gfx::text(x+24,y+82,std::string(T("NOW"))+"  " + (ch.now.empty()?std::string(T("No information")):ch.now),
                   {gfx::Medium,22,w-48},alpha(0xfff5fff6u,opacity));
         if (ch.now_end>ch.now_start) {
             const auto epoch=(int64_t)std::time(nullptr);
@@ -159,7 +138,7 @@ void PlayerUi::draw_live_epg(float opacity)
             gfx::fill({x+24,y+104,w-48,5},alpha(0x66ffffffu,opacity),2.5f);
             gfx::fill({x+24,y+104,(w-48)*progress,5},alpha(0xffffffffu,opacity),2.5f);
         }
-        gfx::text(x+24,y+154,"NEXT  " + (ch.next.empty()?"No information":ch.next),
+        gfx::text(x+24,y+154,std::string(T("NEXT"))+"  " + (ch.next.empty()?std::string(T("No information")):ch.next),
                   {gfx::Medium,22,w-48},alpha(0xffd4e2d8u,opacity));
 
     }
@@ -228,9 +207,9 @@ static std::string speed_label()
 /* Changes take effect on the currently playing video; the setting persists. */
 static const char *upscaling_button_label()
 {
-    static const char *names[] = {"Upscaling: Off", "Upscaling: Auto", "Upscaling: FSR 1", "Upscaling: Anime4K"};
+    static const char *names[] = {N_("Upscaling: Off"), N_("Upscaling: Auto"), N_("Upscaling: FSR 1"), N_("Upscaling: Anime4K")};
     const int mode = settings::get().local.upscale_mode;
-    return names[mode >= 0 && mode < 4 ? mode : 0];
+    return T(names[mode >= 0 && mode < 4 ? mode : 0]);
 }
 
 std::vector<PlayerUi::Button> PlayerUi::buttons() const
@@ -1125,7 +1104,7 @@ void PlayerUi::draw_controls(const NuvioStatus &st)
     const float by = H - 128, bh = 60;
     auto button_label = [&](Button b) -> std::string {
         switch (b) {
-        case Button::PlayPause: return st.paused ? T("Spill av") : "Pause";
+        case Button::PlayPause: return st.paused ? T("Spill av") : T("Pause");
         case Button::Episodes: return T("Episoder");
         case Button::Chapters: return T("Kapitler");
         case Button::Speed: return speed_label();
@@ -1156,7 +1135,7 @@ void PlayerUi::draw_controls(const NuvioStatus &st)
     for (size_t i = 0; i < bs.size(); i++) {
         std::string label;
         switch (bs[i]) {
-        case Button::PlayPause: label = st.paused ? T("Spill av") : "Pause"; break;
+        case Button::PlayPause: label = st.paused ? T("Spill av") : T("Pause"); break;
         case Button::Episodes: label = T("Episoder"); break;
         case Button::Chapters: label = T("Kapitler"); break;
         case Button::Speed: label = speed_label(); break;
@@ -1238,9 +1217,9 @@ void PlayerUi::draw_loading(const NuvioStatus &st)
             gfx::fill({W / 2 - 40 + i * 32, H - 160, 14, 14}, alpha(kText, da * pulse), 7);
         }
         if (!st.started) {
-            gfx::text(W/2,H-205,(st.open_stage && *st.open_stage)?st.open_stage:"Opening stream...",
+            gfx::text(W/2,H-205,(st.open_stage && *st.open_stage)?st.open_stage:T("Opening stream …"),
                       {gfx::Medium,24,1200},alpha(kText2,da),1);
-            draw_pad_hint(W/2-95,H-92,PadButton::Circle,"Cancel",26,da);
+            draw_pad_hint(W/2-95,H-92,PadButton::Circle,T("Avbryt"),26,da);
         }
         m_dirty = true;
     }
@@ -1285,7 +1264,7 @@ void PlayerUi::draw_skip_next(const NuvioStatus &st)
         gfx::text(tx, r.y + 80, title, {gfx::Bold, 24, r.w - 270}, kText);
         if (m_req->prefs.autoplay_next && m_card_since >= 0) {
             const double left = std::max(0.0, 10.0 - (st.now - m_card_since));
-            char c[48];
+            char c[96];
             std::snprintf(c, sizeof c, T("Spilles om %d s"), (int)std::ceil(left));
             const float cw = gfx::text(tx, r.y + 116, c, {gfx::Medium, 20}, kText2);
             draw_pad_hint(tx + cw + 18, r.y + 109, PadButton::Cross, T("Nå"), 24);
@@ -1959,8 +1938,8 @@ void PlayerUi::draw(const NuvioStatus &st)
     if (m_still_prompt) {
         const gfx::Rect r{W / 2 - 400, H / 2 - 110, 800, 220};
         glass_panel(r, 20, 1.f, true, 1.f);
-        gfx::text(W / 2, H / 2 - 15, "Are you still watching?", {gfx::Bold, 38}, kText, 1);
-        gfx::text(W / 2, H / 2 + 48, "Press X to continue or Circle to stop", {gfx::Medium, 25}, kText2, 1);
+        gfx::text(W / 2, H / 2 - 15, T("Are you still watching?"), {gfx::Bold, 38}, kText, 1);
+        gfx::text(W / 2, H / 2 + 48, T("Press X to continue or Circle to stop"), {gfx::Medium, 25}, kText2, 1);
     }
 
     if (a_flash.value > 0.01f) {   /* play / pause, flashed in the centre */

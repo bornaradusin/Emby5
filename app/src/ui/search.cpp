@@ -1,5 +1,6 @@
 /* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ui/search.h"
+#include "app/i18n.h"
 #include "ui/browse_grid.h"
 #include "ui/search_text.h"
 #include "app/io_worker.h"
@@ -38,7 +39,7 @@ void Search::reconcile_user_data(const jf::Item &fresh) {
 }
 void Search::edit_query() {
     const auto data = m_data;
-    ime::request(ime::Kind::Search, "Search " + m_context.title, m_query,
+    ime::request(ime::Kind::Search, TF("Search {section}", {{"section", m_context.title}}), m_query,
         [data](const std::string &q) {
             std::lock_guard<std::mutex> lock(data->lock);
             if (data->alive) { data->query = search_text(q); data->query_ready = true; ++data->revision; }
@@ -160,8 +161,8 @@ Action Search::input(uint32_t p) {
 void Search::draw(double, float dt) {
     consume_query(); sync(); m_animating = false; m_has_card = false;
     gfx::fill({0,0,gfx::W,gfx::H}, kBg);
-    gfx::text(kPad, 140, "Search " + m_context.title, {gfx::Bold, 50, 1400}, kText);
-    gfx::text(kPad, 206, m_query.empty() ? "Triangle: enter a search" : m_query, {gfx::Medium, 28, 1500}, kText2);
+    gfx::text(kPad, 140, TF("Search {section}", {{"section", m_context.title}}), {gfx::Bold, 50, 1400}, kText);
+    gfx::text(kPad, 206, m_query.empty() ? T("Triangle: enter a search") : m_query, {gfx::Medium, 28, 1500}, kText2);
     bool loading, failed;
     { std::lock_guard<std::mutex> lock(m_data->lock); loading = m_data->loading; failed = m_data->failed; }
     const bool square = m_context.types == "MusicArtist" || m_context.types == "MusicAlbum" || m_context.types == "Playlist";
@@ -186,12 +187,12 @@ void Search::draw(double, float dt) {
     }
     gfx::pop_scissor();
     if (m_items->empty()) gfx::text(kPad, 350,
-        failed ? "Could not search. X: retry, Triangle: edit." : loading ? "Searching..." : m_query.empty() ? "Enter a search to see results." : "No results in this section.",
+        failed ? T("Could not search. X: retry, Triangle: edit.") : loading ? T("Søker \xE2\x80\xA6") : m_query.empty() ? T("Enter a search to see results.") : T("No results in this section."),
         {gfx::Medium,28,1500}, kText2);
-    else if (failed) gfx::text(kPad, gfx::H-70, "Refresh failed. Triangle: edit or retry this search.", {gfx::Medium,20,1500}, kText2);
-    else if (loading) gfx::text(kPad, gfx::H-70, "Searching...", {gfx::Medium,20}, kText2);
+    else if (failed) gfx::text(kPad, gfx::H-70, T("Refresh failed. Triangle: edit or retry this search."), {gfx::Medium,20,1500}, kText2);
+    else if (loading) gfx::text(kPad, gfx::H-70, T("Søker \xE2\x80\xA6"), {gfx::Medium,20}, kText2);
     draw_pad_hints(kPad, gfx::H-32,
-        {{PadButton::Triangle,"Edit search"},{PadButton::Cross,"Open"},{PadButton::Circle,"Back"}}, 0, 24);
+        {{PadButton::Triangle,T("Edit search")},{PadButton::Cross,T("Open")},{PadButton::Circle,T("Back")}}, 0, 24);
     m_menu.draw(dt, &m_animating);
     m_animating |= loading || art::animating() || ime::active();
 }

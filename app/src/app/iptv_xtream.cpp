@@ -1,5 +1,6 @@
 /* Emby5 IPTV Xtream client. SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/iptv_xtream.h"
+#include "app/i18n.h"
 #include "app/request_budget.h"
 #include "app/xtream_fetch.h"
 #include <memory>
@@ -44,8 +45,8 @@ bool valid(const Credentials &c) {
 std::string path() { return evo_data_path("emby5/iptv-xtream.json"); }
 bool response(const Credentials &c, const std::string &action, std::string *body, std::string *error) {
     auto r = jf::http_request("GET", api_url(c, action), {}, "", 25);
-    if (!r.ok() || !r.error.empty()) { if (error) *error = (!r.ok() && r.status) ? "Xtream HTTP " + std::to_string(r.status) : "Xtream connection failed or timed out"; return false; }
-    if (r.body.size() > (32u << 20)) { if (error) *error = "Channel response too large"; return false; }
+    if (!r.ok() || !r.error.empty()) { if (error) *error = (!r.ok() && r.status) ? "Xtream HTTP " + std::to_string(r.status) : N_("Xtream connection failed or timed out"); return false; }
+    if (r.body.size() > (32u << 20)) { if (error) *error = N_("Channel response too large"); return false; }
     *body = std::move(r.body);
     return true;
 }
@@ -62,16 +63,16 @@ std::string live_url(const Credentials &c, const Channel &ch) {
     return root(c) + "/live/" + escape(c.username) + "/" + escape(c.password) + "/" + escape(ch.id) + "." + ext;
 }
 bool authenticate(const Credentials &c, std::string *error) {
-    if (!valid(c)) { if (error) *error = "Enter an HTTP(S) server URL, username and password"; return false; }
+    if (!valid(c)) { if (error) *error = N_("Enter an HTTP(S) server URL, username and password"); return false; }
     std::string body;
     if (!response(c, "", &body, error)) return false;
     cJSON *j = cJSON_Parse(body.c_str());
-    if (!j) { if (error) *error = "Invalid Xtream response"; return false; }
+    if (!j) { if (error) *error = N_("Invalid Xtream response"); return false; }
     const cJSON *u = cJSON_GetObjectItemCaseSensitive(j, "user_info");
     const std::string auth = field(u, "auth");
     const std::string status = field(u, "status");
     const bool ok = auth == "1" && (status.empty() || status == "Active");
-    if (!ok && error) *error = "Xtream authentication failed or subscription inactive";
+    if (!ok && error) *error = N_("Xtream authentication failed or subscription inactive");
     cJSON_Delete(j);
     return ok;
 }
@@ -80,7 +81,7 @@ bool load_catalog(const Credentials &c, Catalog *catalog, std::string *error,
                   std::function<void(const iptv_catalogue::Scan &)> progress,
                   std::function<void(const Catalog &)> available) {
     if(error)error->clear();
-    if(!catalog || !valid(c)) {if(error)*error="Enter an HTTP(S) server URL, username and password";return false;}
+    if(!catalog || !valid(c)) {if(error)*error=N_("Enter an HTTP(S) server URL, username and password");return false;}
     emby5::RequestBudget budget(budget_seconds,cancelled);
     std::vector<Channel> fresh;std::unordered_set<std::string> seen;
     auto collect=[&](const cJSON *array,const std::string &category,const std::vector<Category> &) {
@@ -110,7 +111,7 @@ bool load_catalog(const Credentials &c, Catalog *catalog, std::string *error,
     auto scan=iptv_catalogue::fetch(c,"get_live_categories","get_live_streams","stream_id",budget,
                                    collect,false,retry_failed?&catalog->scan:nullptr,report);
     // Session/provider changes discard the result, including partial responses.
-    if(cancelled&&cancelled()) {if(error)*error="Channel refresh cancelled";return false;}
+    if(cancelled&&cancelled()) {if(error)*error=N_("Channel refresh cancelled");return false;}
     if(!scan.whole && (!scan.complete || scan.incremental)) {
         std::unordered_set<std::string> known;
         for(const auto &cat:scan.categories)known.insert(cat.id);

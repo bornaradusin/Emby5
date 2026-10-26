@@ -5,7 +5,7 @@
 **A native Emby and Jellyfin client for a PS5 that runs homebrew.** It browses your libraries,
 plays films, shows and music with the PS5's own video decoder, and adds Live TV, video on
 demand and Seerr requests. The app is `PPSA99515`, its tile is called **Emby5**. This is
-version 1.2.7.
+version 1.2.8.
 
 Emby5 contains no media, channels or subscriptions: it plays what your own server and
 providers give you.

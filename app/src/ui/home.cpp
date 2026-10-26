@@ -34,11 +34,11 @@ std::string runtime_label(int64_t ticks)
     const int min = (int)(ticks / jf::kTicksPerSecond / 60);
     if (min <= 0)
         return std::string();
-    char b[32];
+    char b[64];
     if (min >= 60)
         std::snprintf(b, sizeof b, T("%d t %d min"), min / 60, min % 60);
     else
-        std::snprintf(b, sizeof b, "%d min", min);
+        std::snprintf(b, sizeof b, T("%d min"), min);
     return b;
 }
 
@@ -466,7 +466,7 @@ void Home::draw_info(const jf::Item &it, float bottom, bool hero, float a)
     }
 
     if (!it.overview.empty())
-        gfx::text(kPad, meta_y + 50, hidden?"Episode description hidden. Open details and press Square to reveal.":it.overview, ov, alpha(kText2, a));
+        gfx::text(kPad, meta_y + 50, hidden?T("Episode description hidden. Open details and press Square to reveal."):it.overview, ov, alpha(kText2, a));
 
     if (hero) {
         /* "Spill av" / "Fortsett" and "Mer info": glass buttons, the focus drop on

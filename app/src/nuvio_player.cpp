@@ -549,16 +549,16 @@ std::vector<std::pair<std::string, std::string>> playback_stats(const Session &s
          * Settings mode. It includes automatic selection and bypasses. */
         const char *up = evo_agc_upscale_label();
         std::string active = up ? up : "Off";
-        if (active == "Sharp") active = "FSR 1 - Active";
-        else if (active.rfind("Sharp (",0)==0) active="FSR 1 - Active "+active.substr(6);
-        else if (active.rfind("AI (", 0) == 0) active = "Anime4K - Active " + active.substr(3);
-        else if (active == "Off") active = "Native - Off";
+        if (active == "Sharp") active = T("FSR 1 - Active");
+        else if (active.rfind("Sharp (",0)==0) active=std::string(T("FSR 1 - Active"))+" "+active.substr(6);
+        else if (active.rfind("AI (", 0) == 0) active = std::string(T("Anime4K - Active")) + " " + active.substr(3);
+        else if (active == "Off") active = T("Native - Off");
         else if (active.rfind("Off (", 0) == 0) {
-            active = "Native - " + active.substr(5);
+            active = std::string(T("Native")) + " - " + active.substr(5);
             if (!active.empty() && active.back() == ')') active.pop_back();
         }
-        v.push_back({"Upscaling", active});
-        v.push_back({"GPU scratch", evo_agc_upscale_memory_status()});
+        v.push_back({T("Upscaling"), active});
+        v.push_back({T("GPU scratch"), evo_agc_upscale_memory_status()});
     }
     if (audio_stream_index >= 0 && audio_stream_index < (int)play_fmt->nb_streams) {
         const AVCodecParameters *p = play_fmt->streams[audio_stream_index]->codecpar;
@@ -731,7 +731,7 @@ void open_source(Session &s, int index, double at)
     s_osd.reopen(&s.req, s.open_started);
     if (!start_job(s.job)) {
         s.failed = true;
-        s.error = "Could not start playback. Press Circle to return.";
+        s.error = T("Could not start playback. Press Circle to return.");
     }
     evo_bt("nuvio: opening source %d at %.1f s", index, at);
 }
@@ -781,7 +781,7 @@ void apply(Session &s, const OsdCommand &c)
             if (!start_job(s.job)) {
                 s.st.switching = false;
                 s.failed = true;
-                s.error = "Could not start playback. Press Circle to return.";
+                s.error = T("Could not start playback. Press Circle to return.");
             }
         }
         break;
@@ -883,7 +883,7 @@ static void reopen_at(Session &s, double at)
     s_osd.reopen(&s.req, s.open_started);
     if (!start_job(s.job)) {
         s.failed = true;
-        s.error = "Could not start playback. Press Circle to return.";
+        s.error = T("Could not start playback. Press Circle to return.");
     }
 }
 
@@ -903,7 +903,7 @@ static bool connection_dropped(Session &s, double now, bool keep_pos = false)
 {
     if (s.drop_retries >= 6) {
         s.failed = true;
-        s.error = s.req.str("connection_gone", "The connection to the server was lost.");
+        s.error = s.req.str("connection_gone", T("The connection to the server was lost."));
         return true;
     }
     s.drop_retries++;
@@ -913,7 +913,7 @@ static bool connection_dropped(Session &s, double now, bool keep_pos = false)
     evo_bt("nuvio: stream broke off at %.1f s - retry %d", s.drop_pos, s.drop_retries);
     s_pb->stopPlayback();
     s.opened = false;
-    s_osd.toast(s.req.str("connection_lost", "Lost the connection - trying again\xE2\x80\xA6"), now);
+    s_osd.toast(s.req.str("connection_lost", T("Lost the connection - trying again \xE2\x80\xA6")), now);
     return true;
 }
 
@@ -993,7 +993,7 @@ extern "C" void nuvio_player_run(const char *json)
     evo_bt("nuvio: open '%s' at %.1f s", s.req.header_title().c_str(), s.req.start_position);
     if (!start_job(s.job)) {
         s.failed = true;
-        s.error = "Could not start playback. Press Circle to return.";
+        s.error = T("Could not start playback. Press Circle to return.");
     }
 
     double last_report = 0, last_diag = 0, last_auto = 0;
@@ -1017,8 +1017,8 @@ extern "C" void nuvio_player_run(const char *json)
                     connection_dropped(s, now, true);   /* still gone: wait and try again */
                 } else if (!s.job.ok) {
                     s.failed = true;
-                    s.error = s.req.str("open_failed", "This stream could not be opened. The link may have "
-                                                       "expired, or the source is unavailable.");
+                    s.error = s.req.str("open_failed", T("This stream could not be opened. The link may have "
+                                                         "expired, or the source is unavailable."));
                     evo_bt("nuvio: open failed");
                 } else {
                     s.opened = true;
@@ -1034,14 +1034,14 @@ extern "C" void nuvio_player_run(const char *json)
                         dolby_vision_profile(play_fmt->streams[video_stream_index]->codecpar) == 5 &&
                         !evo_agc_runtime_pipeline_valid(EVO_AGC_PIPE_VIDEO_DV5))
                         s_osd.toast(s.req.str("dv5_unsupported",
-                                              "Dolby Vision profile 5 can't be shown on PS5 - colours may be off. Try another source."),
+                                              T("Dolby Vision profile 5 can't be shown on PS5 - colours may be off. Try another source.")),
                                     now);
                 }
             } else {
                 refresh_audio(s);
                 s.st.quality_line = quality_line();
                 if (!s.job.ok)
-                    s_osd.toast(s.req.str("audio_switch_failed", "That audio track could not be played"), now);
+                    s_osd.toast(s.req.str("audio_switch_failed", T("That audio track could not be played")), now);
             }
             if (s.done)
                 break;
@@ -1097,7 +1097,7 @@ extern "C" void nuvio_player_run(const char *json)
             }
             if (!s.started) {
                 s.st.open_progress = evo_demux_prebuffer_progress();
-                s.st.open_stage = s.req.str("buffering", "Buffering\xE2\x80\xA6");
+                s.st.open_stage = s.req.str("buffering", T("Buffering \xE2\x80\xA6"));
             }
             if (std::fabs(s.st.position - s.last_pos) > 0.05) {
                 s.last_pos = s.st.position;
@@ -1151,7 +1151,7 @@ extern "C" void nuvio_player_run(const char *json)
             }
             if (evo_pb_decode_fatal()) {
                 s.failed = true;
-                s.error = s.req.str("decode_failed", "This video could not be decoded.");
+                s.error = s.req.str("decode_failed", T("This video could not be decoded."));
             }
             if (s.started && !s.st.paused && s.st.position > s.drop_pos + 20 && s.drop_retries > 0)
                 s.drop_retries = 0;   /* playing well again */
@@ -1171,18 +1171,18 @@ extern "C" void nuvio_player_run(const char *json)
                 s_osd.playback_ended(s.st, cmds);
             }
         } else if (!s.started) {
-            s.st.open_stage = s.req.str("opening", "Opening stream\xE2\x80\xA6");
+            s.st.open_stage = s.req.str("opening", T("Opening stream \xE2\x80\xA6"));
             s.st.open_progress = 0;
         }
-        if (s.cancel && s.job.running) s.st.open_stage = "Cancelling...";
+        if (s.cancel && s.job.running) s.st.open_stage = T("Cancelling \xE2\x80\xA6");
         if (s.job.running && !s.opened && now >= s.job.deadline) {
             s.job.cancel = true;
             s.failed = true;
-            s.error = "Opening the stream timed out. Press Circle to return.";
+            s.error = T("Opening the stream timed out. Press Circle to return.");
         }
         if (!s.started && !s.failed && s.opened && now - s.open_started > 30.0) {
             s.failed = true;
-            s.error = s.req.str("did_not_start", "Playback did not start. The source may be too slow or unavailable.");
+            s.error = s.req.str("did_not_start", T("Playback did not start. The source may be too slow or unavailable."));
         }
         s.st.error = s.error;
         emby5_playback_state(s.st.position, s.st.duration, s.st.paused || s.st.buffering ||

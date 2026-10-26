@@ -40,15 +40,15 @@ constexpr int kNumQualities = 9;
 struct Mode {
     const char *code, *name;
 };
-const Mode kModes[] = {{"Default", "Standard"},
-                       {"Smart", "Smart"},
-                       {"Always", "Alltid"},
-                       {"OnlyForced", "Bare tvungne"},
-                       {"HearingImpaired", "Hearing impaired (SDH)"},
-                       {"None", "Av"}};
+const Mode kModes[] = {{"Default", N_("Standard")},
+                       {"Smart", N_("Smart")},
+                       {"Always", N_("Alltid")},
+                       {"OnlyForced", N_("Bare tvungne")},
+                       {"HearingImpaired", N_("Hearing impaired (SDH)")},
+                       {"None", N_("Av")}};
 constexpr int kNumModes = sizeof(kModes) / sizeof(kModes[0]);
 
-const char *kHeaders[] = {"Konto", "Avspilling", "Seerr", "Live TV", "Appearance", "", "VOD", "System", "Content display"};
+const char *kHeaders[] = {N_("Konto"), N_("Avspilling"), N_("Seerr"), N_("Live TV"), N_("Appearance"), "", N_("VOD"), N_("System"), N_("Content display")};
 
 const char *auth_name(seerr_service::Auth a)
 {
@@ -146,88 +146,93 @@ std::string SettingsScreen::value(Row r) const
 {
     settings::All s = settings::get();
     if(m_appearance.active)static_cast<settings::Appearance&>(s.local)=m_appearance.draft;
-    const auto yesno=[](bool v){return v?"On":"Off";};
+    const auto yesno=[](bool v){return v?T("P\xC3\xA5"):T("Av");};
     switch (r) {
     case SwitchUser: return m_client.user_name();
-    case EmbyLive: {const auto s=iptv_live::summary();return iptv_catalogue::describe(s.server,s.emby_count,"channels");}
-    case XtreamLive: {const auto s=iptv_live::summary();return iptv_catalogue::describe(s.xtream,s.xtream_count,"channels");}
-    case M3UStatus: {const auto s=iptv_live::summary();return iptv_catalogue::describe(s.playlist,s.m3u_count,"channels");}
+    case EmbyLive: {const auto s=iptv_live::summary();return iptv_catalogue::describe(s.server,s.emby_count,iptv_catalogue::Unit::Channels);}
+    case XtreamLive: {const auto s=iptv_live::summary();return iptv_catalogue::describe(s.xtream,s.xtream_count,iptv_catalogue::Unit::Channels);}
+    case M3UStatus: {const auto s=iptv_live::summary();return iptv_catalogue::describe(s.playlist,s.m3u_count,iptv_catalogue::Unit::Channels);}
     case IPTVSummary: {
         const auto live=iptv_live::summary();
         const unsigned count=live.emby_count+live.xtream_count+live.m3u_count;
-        return std::to_string(count)+" channels - "+std::to_string(live.emby_count)+" server / "+
-            std::to_string(live.xtream_count)+" Xtream / "+std::to_string(live.m3u_count)+" M3U";
+        return TF("{count} channels - {server} server / {xtream} Xtream / {m3u} M3U",
+                  {{"count", std::to_string(count)}, {"server", std::to_string(live.emby_count)},
+                   {"xtream", std::to_string(live.xtream_count)}, {"m3u", std::to_string(live.m3u_count)}});
     }
     case VODInterval: {
         const int hours=iptv_vod::refresh_interval_hours();
-        return hours==0 ? "Manual only" : "Every "+std::to_string(hours)+" hours";
+        return hours==0 ? std::string(T("Manual only")) : TF("Every {hours} hours",{{"hours",std::to_string(hours)}});
     }
-    case VODRefresh: return iptv_vod::snapshot().loading?"Refresh in progress":"X to refresh full catalogue";
+    case VODRefresh: return iptv_vod::snapshot().loading?T("Refresh in progress"):T("X to refresh full catalogue");
     case VODStatus: {
         const auto vod=iptv_vod::snapshot();
-        const auto counts=std::to_string(vod.movie_count)+" movies, "+std::to_string(vod.show_count)+" TV shows";
-        if(vod.loading)return counts+" - refreshing; available titles can be used";
-        return counts+(vod.error.empty()?" - ready":" - some sources need retry below");
+        const auto counts=TF("{movies} movies, {shows} TV shows",{{"movies",std::to_string(vod.movie_count)},{"shows",std::to_string(vod.show_count)}});
+        if(vod.loading)return counts+T(" - refreshing; available titles can be used");
+        return counts+(vod.error.empty()?T(" - ready"):T(" - some sources need retry below"));
     }
-    case VODMoviesStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.movies,s.movie_count-s.m3u_count,"movies");}
-    case VODShowsStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.shows,s.show_count,"TV shows");}
-    case VODM3UStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.playlist,s.m3u_count,"movies");}
-    case M3UUrl: {const auto url=iptv_m3u::playlist_url();return url.empty()?"X to enter":url;}
-    case IPTVServer: return m_iptv_creds.server.empty() ? "X to enter" : m_iptv_creds.server;
-    case IPTVUsername: return m_iptv_creds.username.empty() ? "X to enter" : m_iptv_creds.username;
-    case IPTVPassword: return m_iptv_creds.password.empty() ? "X to enter" : "********";
-    case IPTVCategories: return std::to_string(m_iptv_store.categories().size()) + " categories - X to manage";
+    case VODMoviesStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.movies,s.movie_count-s.m3u_count,iptv_catalogue::Unit::Movies);}
+    case VODShowsStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.shows,s.show_count,iptv_catalogue::Unit::Shows);}
+    case VODM3UStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.playlist,s.m3u_count,iptv_catalogue::Unit::Movies);}
+    case M3UUrl: {const auto url=iptv_m3u::playlist_url();return url.empty()?std::string(T("X to enter")):url;}
+    case IPTVServer: return m_iptv_creds.server.empty() ? std::string(T("X to enter")) : m_iptv_creds.server;
+    case IPTVUsername: return m_iptv_creds.username.empty() ? std::string(T("X to enter")) : m_iptv_creds.username;
+    case IPTVPassword: return m_iptv_creds.password.empty() ? T("X to enter") : "********";
+    case IPTVCategories: return TF("{count} categories - X to manage",{{"count",std::to_string(m_iptv_store.categories().size())}});
     case Upscaling: {
-        const char *const modes[] = {"Off", "Auto", "FSR 1", "Anime4K"};
+        const char *const modes[] = {T("Av"), T("Auto"), "FSR 1", "Anime4K"};
         return modes[std::max(0, std::min(3, s.local.upscale_mode))];
     }
     case Quality:
         return s.local.max_mbps == 0 ? T("Automatisk (maks)") : std::to_string(s.local.max_mbps) + " Mbit/s";
     case SubMode: return T(kModes[index_of(kModes, s.server.subtitle_mode)].name);
-    case Theme: return std::string(theme_name(s.local.theme))+(settings::appearance_modified(s.local)?" - Modified":" - Default");
-    case BackgroundArt: return s.local.background_artwork?"Artwork":"Plain background";
-    case BackdropDim: {const char *v[]={"Theme default","25%","50%","75%","90%"};return v[s.local.backdrop_dim];}
-    case ControlStyle: {const char *v[]={"Theme default","Solid","Glass"};return v[s.local.control_style];}
-    case FocusOutline: return s.local.strong_focus?"Strong":"Normal";
+    case Theme: return std::string(theme_name(s.local.theme))+(settings::appearance_modified(s.local)?T(" - Modified"):T(" - Default"));
+    case BackgroundArt: return s.local.background_artwork?T("Artwork"):T("Plain background");
+    case BackdropDim: {const char *v[]={T("Theme default"),"25%","50%","75%","90%"};return v[s.local.backdrop_dim];}
+    case ControlStyle: {const char *v[]={T("Theme default"),T("Solid"),T("Glass")};return v[s.local.control_style];}
+    case FocusOutline: return s.local.strong_focus?T("Strong"):T("Normal");
     case PosterEnlarge: return yesno(s.local.poster_enlarge);
     case ReducedMotion: return yesno(s.local.reduced_motion);
-    case DescriptionScroll: {const char *v[]={"Off (Read more available)","Slow","Normal"};return s.local.reduced_motion?"Off while Reduced motion is on":v[s.local.description_scroll];}
-    case ContentDisplay: return "Spoilers, title logos and posters";
+    case DescriptionScroll: {const char *v[]={T("Off (Read more available)"),T("Slow"),T("Normal")};return s.local.reduced_motion?T("Off while Reduced motion is on"):v[s.local.description_scroll];}
+    case ContentDisplay: return T("Spoilers, title logos and posters");
     case ColourVariant:return theme_variant_name(s.local.colour_variant);
     case ButtonShape:return theme_shape_name(s.local.button_shape);
-    case PreviewScene:{const char *v[]={"Buttons & navigation","Library grid","Movie / series details","Playback controls"};return v[m_preview_scene];}
-    case CompareAppearance:return m_compare_appearance?"Last applied appearance":"Current draft";
-    case CustomSlot:{const auto &slot=m_appearance.slots[m_appearance.selected_slot];return std::to_string(m_appearance.selected_slot+1)+" / 3 - "+(slot.name.empty()?"Unnamed":slot.name)+(slot.valid?"":" (empty)");}
-    case RenameMyTheme:return "Open keyboard for the selected slot";
-    case RestoreAppearance:return "Restore colours and layout from before editing";
-    case SaveMyTheme: return "Save current draft to the selected slot";
-    case LoadMyTheme: return m_appearance.saved_valid?"Load selected slot into preview":"This slot is empty";
-    case ApplyAppearance: return "Save and return to System";
-    case CancelAppearance: return "Discard preview and return to System";
+    case PreviewScene:{const char *v[]={T("Buttons & navigation"),T("Library grid"),T("Movie / series details"),T("Playback controls")};return v[m_preview_scene];}
+    case CompareAppearance:return m_compare_appearance?T("Last applied appearance"):T("Current draft");
+    case CustomSlot:{const auto &slot=m_appearance.slots[m_appearance.selected_slot];return std::to_string(m_appearance.selected_slot+1)+" / 3 - "+(slot.name.empty()?std::string(T("Unnamed")):slot.name=="My theme"?std::string(T("My theme")):slot.name)+(slot.valid?"":T(" (empty)"));}
+    case RenameMyTheme:return T("Open keyboard for the selected slot");
+    case RestoreAppearance:return T("Restore colours and layout from before editing");
+    case SaveMyTheme: return T("Save current draft to the selected slot");
+    case LoadMyTheme: return m_appearance.saved_valid?T("Load selected slot into preview"):T("This slot is empty");
+    case ApplyAppearance: return T("Save and return to System");
+    case CancelAppearance: return T("Discard preview and return to System");
     case SpoilerProtection: return yesno(s.local.spoiler_protection);
-    case TitleStyle: return s.local.title_as_text?"Text title":"Logo (text fallback)";
+    case TitleStyle: return s.local.title_as_text?T("Text title"):T("Logo (text fallback)");
     case DetailPoster: return yesno(s.local.detail_poster);
     case Accent: return theme_accent_name(s.local.theme_accent);
     case Background: return theme_background_name(s.local.theme_background);
     case UiTextSize: return std::to_string(s.local.ui_text_percent) + "%";
-    case PosterSize: return s.local.poster_size==0?"Compact":s.local.poster_size==2?"Large":"Default";
-    case ResetAppearance: return "X to restore the selected preset's defaults";
-    case Appearance: return "Themes, colours, text and cards";
+    case PosterSize: return s.local.poster_size==0?T("Compact"):s.local.poster_size==2?T("Large"):T("Standard");
+    case ResetAppearance: return T("X to restore the selected preset's defaults");
+    case Appearance: return T("Themes, colours, text and cards");
     case StorageInfo: return "/data/Emby5/";
-    case CheckUpdates: return s.local.check_updates ? "On" : "Off";
+    case CheckUpdates: return s.local.check_updates ? T("P\xC3\xA5") : T("Av");
+    case Language:
+        if (s.local.language.empty())
+            return TF("PS5 ({language})", {{"language", i18n::language_name(i18n::ps5_language())}});
+        return i18n::language_name(i18n::lang());
     case SubSize: return std::to_string(s.local.sub_size) + " %";
     case SubBackground:
         return s.local.sub_background < 0.05f ? std::string(T("Av"))
                                               : std::to_string((int)(s.local.sub_background * 100 + 0.5f)) + " %";
     case Autoplay: return s.server.autoplay_next ? T("På") : T("Av");
-    case StillWatching: return s.local.still_watching == 1 ? "After 3 episodes" :
-                              s.local.still_watching == 2 ? "After 2 hours" : "Off";
+    case StillWatching: return s.local.still_watching == 1 ? T("After 3 episodes") :
+                              s.local.still_watching == 2 ? T("After 2 hours") : T("Av");
     case AutoSkip: return s.local.auto_skip_intro ? T("På") : T("Av");
     case NightMode: return s.local.night_mode ? T("På") : T("Av");
     case Bitstream:   /* night mode needs the sound decoded here, so it wins */
         return !s.local.hdmi_bitstream ? T("Av") : s.local.night_mode ? T("Av med nattmodus") : T("På");
     case ThemeMusic: return s.local.theme_music ? T("På") : T("Av");
-    case UpdateNotes: { const auto u=update_service::snapshot(); return u.checking ? "Checking release notes..." : "X to read release notes"; }
+    case UpdateNotes: { const auto u=update_service::snapshot(); return u.checking ? T("Checking release notes …") : T("X to read release notes"); }
     case AppVersion: {
         int major = 0, minor = 0, patch = 0;
         if (std::sscanf(EMBY5_VERSION, "%d.%d.%d", &major, &minor, &patch) == 3)
@@ -328,6 +333,17 @@ void SettingsScreen::change(Row r, int dir)
     }
 
     switch (r) {
+    case Language: {   /* the PS5's, then each language in turn */
+        int i = -1;
+        for (int k = 0; k < i18n::kLangCount; k++)
+            if (s.local.language == i18n::language_code((i18n::Lang)k))
+                i = k;
+        i = cycle(i + 1, i18n::kLangCount + 1) - 1;
+        s.local.language = i < 0 ? std::string() : std::string(i18n::language_code((i18n::Lang)i));
+        settings::set_local(s.local);
+        i18n::use_language(s.local.language);   /* the screens rebuild their text (main loop) */
+        return;
+    }
     case CheckUpdates:
         s.local.check_updates = !s.local.check_updates;
         settings::set_local(s.local);
@@ -494,7 +510,7 @@ Action SettingsScreen::input(uint32_t p)
                          });
         }
         else if(m_row==M3UUrl) {
-            ime::request(ime::Kind::Url,"M3U playlist URL (empty to remove)",iptv_m3u::playlist_url(),
+            ime::request(ime::Kind::Url,T("M3U playlist URL (empty to remove)"),iptv_m3u::playlist_url(),
                          [this](const std::string &url) {
                              if(iptv_m3u::save_playlist_url(url)) {iptv_live::refresh(&m_client,true);iptv_vod::refresh(true);}
                          });
@@ -530,8 +546,8 @@ void SettingsScreen::iptv_edit(Row r)
                            r == IPTVPassword ? ime::Kind::Password : ime::Kind::Text;
     const std::string initial = r == IPTVServer ? m_iptv_creds.server :
                                 r == IPTVUsername ? m_iptv_creds.username : "";
-    const char *title = r == IPTVServer ? "Xtream server URL" :
-                        r == IPTVUsername ? "Xtream username" : "Xtream password";
+    const char *title = r == IPTVServer ? T("Xtream server URL") :
+                        r == IPTVUsername ? T("Xtream username") : T("Xtream password");
     ime::request(kind, title, initial, [this,r](const std::string &v) {
         if (v.empty()) return;
         if (r == IPTVServer) m_iptv_creds.server = v;
@@ -569,7 +585,7 @@ void SettingsScreen::iptv_open_group_actions() {
     const auto &cats=m_iptv_store.categories();
     if(m_iptv_category<0||m_iptv_category>=(int)cats.size())return;
     m_import_confirm=false;
-    m_group_menu.open(cats[m_iptv_category].name,{"Add / remove individual channels","Add channels from a provider group"});
+    m_group_menu.open(cats[m_iptv_category].name,{T("Add / remove individual channels"),T("Add channels from a provider group")});
 }
 void SettingsScreen::iptv_sync_catalog() {
     const auto summary=iptv_live::summary();
@@ -586,12 +602,14 @@ void SettingsScreen::iptv_sync_catalog() {
         for(const auto &ch:available->channels) {
             if(ch.id.empty())continue;
             const auto name=ch.category_id.empty()?ch.source+" Live TV":ch.category_id;
+            const auto title=ch.category_id.empty()?TF("{source} Live TV",{{"source",ch.source}}):
+                ch.category_id=="Other Channels"?std::string(T("Other Channels")):ch.category_id;
             const auto id=ch.source+":"+(ch.category_key.empty()?name:ch.category_key);
             auto inserted=by_group.emplace(id,m_provider_groups.size());
             if(inserted.second){const auto &state=ch.source=="Xtream"?live.xtream:ch.source=="M3U"?live.playlist:live.server;
                 bool partial=state.loading||state.cached||!state.error.empty();
                 if(ch.source=="Xtream"&&!state.loading&&!ch.category_key.empty()&&live.xtream_scan.completed.count(ch.category_key))partial=false;
-                m_provider_groups.push_back({id,ch.source+" - "+name,{},partial});}
+                m_provider_groups.push_back({id,ch.source+" - "+title,{},partial});}
             m_provider_groups[inserted.first->second].channels.push_back(iptv_categories::Store::channel_key(ch.id));
         }
         iptv_filter_groups();
@@ -643,9 +661,9 @@ void SettingsScreen::iptv_category_input(uint32_t p)
         const int choice=m_group_menu.input(p);if(choice<0)return;
         if(m_import_confirm) {
             if(choice==1){size_t added=0;
-                if(m_import_generation!=m_iptv_content_generation)m_group_note="The catalogue changed. Select the provider group again before importing.";
-                else if(m_iptv_store.add_channels(m_import_destination,m_import_channels,&added))m_group_note="Added "+std::to_string(added)+" channels. Existing channels kept; duplicates skipped.";
-                else m_group_note="Could not save the group. No channels were added.";
+                if(m_import_generation!=m_iptv_content_generation)m_group_note=T("The catalogue changed. Select the provider group again before importing.");
+                else if(m_iptv_store.add_channels(m_import_destination,m_import_channels,&added))m_group_note=TF("Added {count} channels. Existing channels kept; duplicates skipped.",{{"count",std::to_string(added)}});
+                else m_group_note=T("Could not save the group. No channels were added.");
             }
             m_import_channels.clear();m_import_confirm=false;
         } else if(choice==0) {m_iptv_page=IPTVChannels;m_iptv_channel=0;m_iptv_search.clear();m_channel_hold.reset();}
@@ -665,13 +683,13 @@ void SettingsScreen::iptv_category_input(uint32_t p)
         if (p & NUVIO_BTN_UP) m_iptv_category = std::max(0,m_iptv_category-1);
         if (p & NUVIO_BTN_DOWN) m_iptv_category = std::min(n,m_iptv_category+1);
         if ((p & NUVIO_BTN_CROSS) && m_iptv_category == n) {
-            ime::request(ime::Kind::Text,"New IPTV category","",[this](const std::string &name){
+            ime::request(ime::Kind::Text,T("New IPTV category"),"",[this](const std::string &name){
                 if (m_iptv_store.create(name)) m_iptv_category=(int)m_iptv_store.categories().size()-1;
             });
         } else if (m_iptv_category < n) {
             const auto id = cats[(size_t)m_iptv_category].id;
             if (p & NUVIO_BTN_CROSS)
-                ime::request(ime::Kind::Text,"Rename IPTV category",cats[(size_t)m_iptv_category].name,
+                ime::request(ime::Kind::Text,T("Rename IPTV category"),cats[(size_t)m_iptv_category].name,
                              [this,id](const std::string &name){m_iptv_store.rename(id,name);});
             if (p & NUVIO_BTN_SQUARE) {
                 m_iptv_store.erase(id);
@@ -685,7 +703,7 @@ void SettingsScreen::iptv_category_input(uint32_t p)
     }
     if (m_iptv_category >= (int)cats.size()) {m_iptv_page=IPTVCategoryList;return;}
     if(m_iptv_page==IPTVProviderGroups) {
-        if(p&NUVIO_BTN_TRIANGLE){ime::request(ime::Kind::Search,"Find provider group",m_provider_query,[this](const std::string &q){m_provider_query=q;m_provider_index=0;iptv_filter_groups();});return;}
+        if(p&NUVIO_BTN_TRIANGLE){ime::request(ime::Kind::Search,T("Find provider group"),m_provider_query,[this](const std::string &q){m_provider_query=q;m_provider_index=0;iptv_filter_groups();});return;}
         if(p&NUVIO_BTN_SQUARE){m_provider_query.clear();m_provider_index=0;iptv_filter_groups();return;}
         if(p&NUVIO_BTN_UP)m_provider_index=std::max(0,m_provider_index-1);
         if(p&NUVIO_BTN_DOWN)m_provider_index=std::min(std::max(0,(int)m_provider_filtered.size()-1),m_provider_index+1);
@@ -695,8 +713,8 @@ void SettingsScreen::iptv_category_input(uint32_t p)
             std::unordered_set<std::string> existing;for(const auto &id:dest.channels)existing.insert(iptv_categories::Store::channel_key(id));
             size_t count=0;for(const auto &id:m_import_channels)if(existing.insert(id).second)++count;
             m_import_confirm=true;
-            m_group_menu.open((group.partial?"Partial/cached group: ":"Import group: ")+group.name,
-                {"Cancel","Add "+std::to_string(count)+" available channels to "+dest.name});
+            m_group_menu.open(TF(group.partial?"Partial/cached group: {group}":"Import group: {group}",{{"group",group.name}}),
+                {T("Avbryt"),TF("Add {count} available channels to {group}",{{"count",std::to_string(count)},{"group",dest.name}})});
         }
         return;
     }
@@ -704,7 +722,7 @@ void SettingsScreen::iptv_category_input(uint32_t p)
     if(!m_visible_catalog)return;
     const auto &catalog=*m_visible_catalog;
     if (p & NUVIO_BTN_TRIANGLE) {
-        ime::request(ime::Kind::Text,"Search IPTV channels",m_iptv_search,
+        ime::request(ime::Kind::Text,T("Search IPTV channels"),m_iptv_search,
                      [this](const std::string &query){m_iptv_search=query;m_iptv_channel=0;});
         return;
     }
@@ -718,7 +736,7 @@ void SettingsScreen::iptv_category_input(uint32_t p)
     const auto channel_id=catalog.channels[filtered[(size_t)m_iptv_channel]].id;
     const auto &assigned = cats[(size_t)m_iptv_category].channels;
     const bool is_assigned=m_iptv_store.contains(id,channel_id);
-    if (p & NUVIO_BTN_CROSS) {if(!m_iptv_store.assign(id,channel_id,!is_assigned))m_group_note="Could not save channel assignment.";else m_group_note.clear();}
+    if (p & NUVIO_BTN_CROSS) {if(!m_iptv_store.assign(id,channel_id,!is_assigned))m_group_note=T("Could not save channel assignment.");else m_group_note.clear();}
     if (p & NUVIO_BTN_L2) m_iptv_store.move_channel(id,channel_id,-1);
     if (p & NUVIO_BTN_R2) m_iptv_store.move_channel(id,channel_id,1);
 }
@@ -726,12 +744,12 @@ void SettingsScreen::iptv_category_input(uint32_t p)
 void SettingsScreen::iptv_draw_categories()
 {
     gfx::fill({0,0,gfx::W,gfx::H},kBg);
-    gfx::text(180,150,"IPTV category management",{gfx::Bold,54},kText);
+    gfx::text(180,150,T("IPTV category management"),{gfx::Bold,54},kText);
     const auto &cats=m_iptv_store.categories();
     const bool channels=m_iptv_page==IPTVChannels;
     const bool providers=m_iptv_page==IPTVProviderGroups;
-    gfx::text(180,212,providers ? "Hold Up/Down: Faster scrolling  Triangle: Find group  X: Review import  Circle: Back" : channels ? "Hold Up/Down: Faster scrolling  Triangle: Search  Square: Clear  X: Assign  Circle: Back" :
-              "X: Rename/Create  Square: Delete  L2/R2: Reorder  Triangle: Channels  Options: Add group",
+    gfx::text(180,212,providers ? T("Hold Up/Down: Faster scrolling  Triangle: Find group  X: Review import  Circle: Back") : channels ? T("Hold Up/Down: Faster scrolling  Triangle: Search  Square: Clear  X: Assign  Circle: Back") :
+              T("X: Rename/Create  Square: Delete  L2/R2: Reorder  Triangle: Channels  Options: Add group"),
               {gfx::Medium,23},kText2);
     iptv_sync_catalog();
     std::string error; bool loading;
@@ -741,8 +759,8 @@ void SettingsScreen::iptv_draw_categories()
     const auto &catalog=m_visible_catalog?*m_visible_catalog:empty_catalog;
     if (channels && m_iptv_category >= (int)cats.size()) return;
     const auto &filtered=m_filtered_channels;
-    if (channels) gfx::text(180,255,"Search: " + (m_iptv_search.empty()?std::string("All channels (Triangle to search)"):m_iptv_search),{gfx::Medium,23,1400},kText2);
-    if(providers && m_iptv_category>=0 && m_iptv_category<(int)cats.size()) gfx::text(180,255,"Add to: "+cats[m_iptv_category].name+"  |  Find: "+(m_provider_query.empty()?std::string("All provider groups"):m_provider_query),{gfx::Medium,23,1400},kText2);
+    if (channels) gfx::text(180,255,TF("Search: {query}",{{"query",m_iptv_search.empty()?std::string(T("All channels (Triangle to search)")):m_iptv_search}}),{gfx::Medium,23,1400},kText2);
+    if(providers && m_iptv_category>=0 && m_iptv_category<(int)cats.size()) gfx::text(180,255,TF("Add to: {group}  |  Find: {query}",{{"group",cats[m_iptv_category].name},{"query",m_provider_query.empty()?std::string(T("All provider groups")):m_provider_query}}),{gfx::Medium,23,1400},kText2);
     const int count=providers?(int)m_provider_filtered.size():channels ? (int)filtered.size() : (int)cats.size()+1;
     const int selected=providers?m_provider_index:channels ? m_iptv_channel : m_iptv_category;
     const int first=std::max(0,selected-7);
@@ -750,8 +768,8 @@ void SettingsScreen::iptv_draw_categories()
         const float y=295.f+(i-first)*52.f;
         if (i==selected) {glass_panel({165,y-31,1500,48},14,1.f,false,1.f);draw_focus_outline({165,y-31,1500,48},14);}
         std::string name;
-        if(providers){const auto &g=m_provider_groups[m_provider_filtered[i]];name=g.name+" ("+std::to_string(g.channels.size())+" channels"+(g.partial?", partial/cached)":")");}
-        else if (!channels) name=i<(int)cats.size()?cats[(size_t)i].name:"+ Create category";
+        if(providers){const auto &g=m_provider_groups[m_provider_filtered[i]];name=g.name+" ("+TF(g.partial?"{count} channels, partial/cached":"{count} channels",{{"count",std::to_string(g.channels.size())}})+")";}
+        else if (!channels) name=i<(int)cats.size()?cats[(size_t)i].name:std::string(T("+ Create category"));
         else {
             const auto &ch=catalog.channels[filtered[(size_t)i]];
             const bool checked=m_iptv_store.contains(cats[(size_t)m_iptv_category].id,ch.id);
@@ -759,10 +777,10 @@ void SettingsScreen::iptv_draw_categories()
         }
         gfx::text(190,y,name,{gfx::SemiBold,26,1360},i==selected?kText:kText2);
     }
-    if (channels && loading) gfx::text(190,1025,"Loading channels...",{gfx::Medium,24},kText2);
-    else if(channels && !error.empty()) gfx::text(190,1025,error,{gfx::Medium,24},kText2);
-    else if(channels && count==0) gfx::text(190,400,m_iptv_search.empty()?"No channels loaded; check IPTV credentials":"No channels match your search",{gfx::Medium,24},kText2);
-    if(providers&&count==0)gfx::text(190,400,loading?"Catalogue loading; available groups will appear here.":"No matching provider groups available.",{gfx::Medium,24},kText2);
+    if (channels && loading) gfx::text(190,1025,T("Loading channels …"),{gfx::Medium,24},kText2);
+    else if(channels && !error.empty()) gfx::text(190,1025,i18n::message(error),{gfx::Medium,24},kText2);
+    else if(channels && count==0) gfx::text(190,400,m_iptv_search.empty()?T("No channels loaded; check IPTV credentials"):T("No channels match your search"),{gfx::Medium,24},kText2);
+    if(providers&&count==0)gfx::text(190,400,loading?T("Catalogue loading; available groups will appear here."):T("No matching provider groups available."),{gfx::Medium,24},kText2);
     if(!m_group_note.empty())gfx::text(190,1060,m_group_note,{gfx::Medium,22,1500},kText2);
     m_group_menu.draw();
 }
@@ -791,14 +809,14 @@ void SettingsScreen::draw(double, float dt)
     gfx::fill({0, 0, gfx::W, gfx::H}, kBg);
     gfx::fill_vgradient({0, 0, gfx::W, 500}, 0x33302048u, 0x00000000u);
     if (m_tiles) {
-        gfx::text(300,205,"Settings",{gfx::Bold,64},kText);
+        gfx::text(300,205,T("Innstillinger"),{gfx::Bold,64},kText);
         for(int i=0;i<tile_count;++i){
             const int col=i%2,row=i/2;
             const gfx::Rect r{300.f+col*670.f,265.f+row*174.f,630.f,150.f};
             glass_panel(r,24,1.f,false,m_focused && i==m_tile?1.f:0.f);
             if(m_focused && i==m_tile)draw_focus_outline(r,24);
-            gfx::text(r.x+32,r.y+62,tiles[i].label,{gfx::Bold,31,580},kText);
-            gfx::text(r.x+32,r.y+106,tiles[i].description,{gfx::Medium,23,580},kText2);
+            gfx::text(r.x+32,r.y+62,T(tiles[i].label),{gfx::Bold,31,580},kText);
+            gfx::text(r.x+32,r.y+106,T(tiles[i].description),{gfx::Medium,23,580},kText2);
         }
         return;
     }
@@ -827,7 +845,7 @@ void SettingsScreen::draw(double, float dt)
         m_animating = true;
     const float off = m_scroll.value;
 
-    gfx::text(left, 200 - off, std::string("Settings / ")+kHeaders[m_section], {gfx::Bold, 48}, kText);
+    gfx::text(left, 200 - off, TF("Settings / {section}", {{"section", T(kHeaders[m_section])}}), {gfx::Bold, 48}, kText);
     /* Each section is one glass card (a grouped list); the focus is the drop. */
     for (int r0 = 0; r0 < RowCount;) {
         if (!shown(r0) || section_of(r0)!=m_section) {
@@ -856,10 +874,10 @@ void SettingsScreen::draw(double, float dt)
         if (sec != last_section) {
             last_section = sec;
             if (sec < 8)
-                gfx::text(left + 8, ys[r] - 22 - off, (sec == 2 || sec == 3) ? kHeaders[sec] : T(kHeaders[sec]), {gfx::Bold, 22}, kText3);
+                gfx::text(left + 8, ys[r] - 22 - off, T(kHeaders[sec]), {gfx::Bold, 22}, kText3);
         }
         if(r==VODStatus && m_section==3)
-            gfx::text(left+8,ys[r]-22-off,"VOD settings",{gfx::Bold,24},kText);
+            gfx::text(left+8,ys[r]-22-off,T("VOD settings"),{gfx::Bold,24},kText);
         const bool focus = r == m_row;
         const gfx::Rect rr{left, ys[r] - off, width, row_h};
         const uint32_t fg = kText, fg2 = focus ? kText : kText2;
@@ -875,21 +893,21 @@ void SettingsScreen::draw(double, float dt)
         }
     }
     if (m_section==4)
-        gfx::text(left, y+40-off, "Presets remain available. Overrides apply only to this PS5; subtitles have separate sizing.",
+        gfx::text(left, y+40-off, T("Presets remain available. Overrides apply only to this PS5; subtitles have separate sizing."),
                   {gfx::Regular,20,width}, kText3);
     if (m_notes_open) {
         gfx::fill({0, 0, gfx::W, gfx::H}, 0xc608101bu);
         const gfx::Rect panel{270, 145, gfx::W-540, gfx::H-290};
         glass_panel(panel, 26, 1.f, true);
-        gfx::text(panel.x+45, panel.y+70, "What's New", {gfx::Bold, 42}, kText);
+        gfx::text(panel.x+45, panel.y+70, T("What's New"), {gfx::Bold, 42}, kText);
         const auto u = update_service::snapshot();
         gfx::text(panel.x+45, panel.y+116,
-                  u.latest.empty()?"Release notes":("Emby5 "+u.latest),
+                  u.latest.empty()?std::string(T("Release notes")):("Emby5 "+u.latest),
                   {gfx::Medium,25}, kText2);
         std::vector<std::string> lines;
         const std::string notes=u.notes.empty()?
-            (u.checking ? "Loading release notes..." : u.message.empty() ?
-             "No release notes available. Close and reopen to retry." : u.message) : u.notes;
+            (u.checking ? std::string(T("Loading release notes …")) : u.message.empty() ?
+             std::string(T("No release notes available. Close and reopen to retry.")) : u.message) : u.notes;
         const float max_w=panel.w-110;
         std::string line;
         auto flush=[&]{lines.push_back(line);line.clear();};
@@ -916,7 +934,7 @@ void SettingsScreen::draw(double, float dt)
             gfx::text(panel.x+48,panel.y+172+j*37,
                       lines[(size_t)(start+j)],{gfx::Regular,25},kText);
         gfx::text(panel.x+48,panel.y+panel.h-42,
-                  "Up/Down: scroll     X / O: close",
+                  T("Up/Down: scroll     X / O: close"),
                   {gfx::Medium,22},kText2);
     }
 }

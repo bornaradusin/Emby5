@@ -37,7 +37,7 @@ public:
         Theme, Accent, Background, BackgroundArt, BackdropDim, UiTextSize, PosterSize,
         ControlStyle, FocusOutline, PosterEnlarge, ReducedMotion, DescriptionScroll,
         ContentDisplay, SaveMyTheme, LoadMyTheme, ResetAppearance, ApplyAppearance, CancelAppearance, Together,
-        Appearance, UpdateNotes, CheckUpdates, AppVersion, ServerInfo, StorageInfo,
+        Appearance, Language, UpdateNotes, CheckUpdates, AppVersion, ServerInfo, StorageInfo,
         SpoilerProtection, TitleStyle, DetailPoster, ColourVariant, ButtonShape,
         PreviewScene, CompareAppearance, CustomSlot, RenameMyTheme, RestoreAppearance, RowCount
     };

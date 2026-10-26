@@ -1,6 +1,7 @@
 /* Emby5 - GPL-3.0-or-later. Full text is always available without auto motion. */
 #pragma once
 #include "ui/screen.h"
+#include "app/i18n.h"
 #include "ui/overview_scroll.h"
 #include "nuvio_input.h"
 namespace ui {
@@ -28,7 +29,7 @@ public:
         gfx::fill(panel,kBg,22);
         const float current=gfx::text_scale();
         const gfx::TextStyle style{gfx::Regular,27};
-        if(scale!=current) {scale=current;lines=overview::wrap(body.empty()?"No description available.":body,panel.w-96,
+        if(scale!=current) {scale=current;lines=overview::wrap(body.empty()?T("No description available."):body,panel.w-96,
             [&](const std::string &s){return gfx::measure_text(s,style);});}
         const float line_h=40*current;
         visible=std::max(1,(int)((panel.h-210)/line_h));
@@ -39,7 +40,7 @@ public:
             gfx::text(panel.x+48,panel.y+144+i*line_h,lines[(size_t)(start+i)],style,kText);
         gfx::pop_scissor();
         const std::string position=std::to_string(start+1)+"-"+std::to_string(std::min(start+visible,(int)lines.size()))+" / "+std::to_string(lines.size());
-        gfx::text(panel.x+48,panel.y+panel.h-40,"Up/Down: scroll   Left/Right: page   Circle: close",{gfx::Medium,22,panel.w-330},kText2);
+        gfx::text(panel.x+48,panel.y+panel.h-40,T("Up/Down: scroll   Left/Right: page   Circle: close"),{gfx::Medium,22,panel.w-330},kText2);
         gfx::text(panel.x+panel.w-48,panel.y+panel.h-40,position,{gfx::Medium,22,260},kText2,2);
     }
 };

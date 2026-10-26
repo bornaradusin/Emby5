@@ -39,7 +39,7 @@ HttpResponse tracked_request(const std::string &method, const std::string &url,
 }
 
 constexpr int kTimeout = 15;
-constexpr const char *kVersion = "1.2.7";
+constexpr const char *kVersion = "1.2.8";
 constexpr const char *kFields = "Overview,Genres";            /* rows: what the UI shows */
 constexpr const char *kItemFields =
     "Overview,Genres,MediaStreams,Taglines,People,Studios,ChildCount,ProductionLocations,SpecialFeatureCount,"

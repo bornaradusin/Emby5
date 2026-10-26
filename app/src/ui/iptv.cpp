@@ -1,5 +1,6 @@
 /* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ui/iptv.h"
+#include "app/i18n.h"
 #include "ui/browse_grid.h"
 #include "ui/browse_rows.h"
 #include "ui/search_text.h"
@@ -125,7 +126,7 @@ Action IPTV::search(bool from_navigation) {
     synchronise();
     const auto scope = m_scope;
     const std::weak_ptr<int> life = m_life;
-    ime::request(ime::Kind::Search, "Search Live TV channels", m_query,
+    ime::request(ime::Kind::Search, T("Search Live TV channels"), m_query,
         [this, life, scope, from_navigation](const std::string &raw) {
             if (life.expired() || scope != m_scope || scope != browse_state::provider_scope(m_client)) return;
             const auto query = search_text(raw);
@@ -151,7 +152,7 @@ void IPTV::open_groups(Menu mode, const std::string &query) {
         if (search_fold(group.title).find(needle) == std::string::npos) continue;
         labels.push_back(group.title); m_destinations.push_back(group.id);
     }
-    m_menu.open(mode == Pinned ? "Pinned groups" : "Jump to group (Triangle: find group)", std::move(labels));
+    m_menu.open(mode == Pinned ? T("Pinned groups") : T("Jump to group (Triangle: find group)"), std::move(labels));
 }
 void IPTV::enter_from_top() { m_header = count() == 0; m_animating = true; }
 void IPTV::focus_channel(const std::string &group_id, const std::string &channel_id) {
@@ -218,7 +219,7 @@ Action IPTV::input(uint32_t p) {
     if (m_menu.active()) {
         if ((p & NUVIO_BTN_TRIANGLE) && m_menu_mode == Groups) {
             const auto scope = m_scope; const std::weak_ptr<int> life = m_life;
-            ime::request(ime::Kind::Search,"Find group","",[this,life,scope](const std::string &q) {
+            ime::request(ime::Kind::Search,T("Find group"),"",[this,life,scope](const std::string &q) {
                 if (!life.expired() && scope == m_scope) open_groups(Groups, search_text(q));
             }); return action;
         }
@@ -238,10 +239,10 @@ Action IPTV::input(uint32_t p) {
     }
     if (p & NUVIO_BTN_OPTIONS) {
         m_menu_mode = Options;
-        std::vector<std::string> labels{"Jump to group", "Pinned groups"};
+        std::vector<std::string> labels{T("Jump to group"), T("Pinned groups")};
         m_pin_group = m_query.empty() && !m_groups->empty() ? (*m_groups)[m_row].id : std::string();
-        if (!m_pin_group.empty()) labels.push_back("Pin / unpin current group");
-        labels.push_back("Refresh sources"); m_menu.open("Live TV options",std::move(labels)); return action;
+        if (!m_pin_group.empty()) labels.push_back(T("Pin / unpin current group"));
+        labels.push_back(T("Refresh sources")); m_menu.open(T("Live TV options"),std::move(labels)); return action;
     }
     if (p & NUVIO_BTN_TRIANGLE) return search();
     if (!m_query.empty() && (p & NUVIO_BTN_CIRCLE)) { clear_search(); return action; }
@@ -266,8 +267,8 @@ void IPTV::draw(double now, float dt) {
     gfx::fill({0,0,gfx::W,gfx::H},kBg);
     const auto status=iptv_live::summary();const float opacity=m_nav.value;
     if(opacity>.01f) {
-        gfx::text(kPad,176,searching?"Live TV - search results":"Live TV",{gfx::Bold,50,1400},alpha(kText,opacity));
-        if(searching)gfx::text(kPad,224,m_query+" - "+std::to_string(count())+" channels",{gfx::Medium,25,1600},alpha(kText2,opacity));
+        gfx::text(kPad,176,searching?T("Live TV - search results"):T("Live TV"),{gfx::Bold,50,1400},alpha(kText,opacity));
+        if(searching)gfx::text(kPad,224,m_query+" - "+TF("{count} channels",{{"count",std::to_string(count())}}),{gfx::Medium,25,1600},alpha(kText2,opacity));
     }
     const float clip_top=(searching?260.f:210.f)*opacity,bottom=gfx::H-138.f;
     gfx::push_scissor({0,clip_top,gfx::W,bottom-clip_top});
@@ -300,7 +301,7 @@ void IPTV::draw(double now, float dt) {
         }
     }
     gfx::pop_scissor();
-    if(searching?count()==0:m_groups->empty())gfx::text(kPad,380,searching?"No matching channels. Triangle: edit search.":status.loading?"Loading Live TV channels...":"No channels available. Check your sources in Settings.",{gfx::Medium,27,1600},kText2);
+    if(searching?count()==0:m_groups->empty())gfx::text(kPad,380,searching?T("No matching channels. Triangle: edit search."):status.loading?T("Loading Live TV channels..."):T("No channels available. Check your sources in Settings."),{gfx::Medium,27,1600},kText2);
     const auto *selected=channel(m_index);
     iptv_xtream::Channel guide_channel;
     if(selected&&iptv_live::channel_by_id(selected->id,&guide_channel))selected=&guide_channel;
@@ -312,12 +313,12 @@ void IPTV::draw(double now, float dt) {
             m_guide_requested = selected->id;
             iptv_live::request_guide(&m_client, *selected);
         }
-        const std::string info = !selected->now.empty() ? "Now: " + selected->now :
-            "No programme information available";
+        const std::string info = !selected->now.empty() ? TF("Now: {programme}", {{"programme", selected->now}}) :
+            T("No programme information available");
         gfx::text(kPad,gfx::H-97,info,{gfx::Medium,22,1550},kText2);
-        if(!selected->next.empty())gfx::text(kPad,gfx::H-65,"Next: "+selected->next,{gfx::Medium,20,1550},kText3);
+        if(!selected->next.empty())gfx::text(kPad,gfx::H-65,TF("Next: {programme}",{{"programme",selected->next}}),{gfx::Medium,20,1550},kText3);
     }
-    draw_pad_hints(kPad,gfx::H-28,{{PadButton::Triangle,"Search channels"},{PadButton::Options,"Groups / options"},{PadButton::Circle,searching?"Clear search":"Back"}},0,23);
+    draw_pad_hints(kPad,gfx::H-28,{{PadButton::Triangle,T("Search channels")},{PadButton::Options,T("Groups / options")},{PadButton::Circle,searching?T("Clear search"):T("Back")}},0,23);
     m_menu.draw();m_animating|=art::animating()||(status.loading&&m_groups->empty())||m_hold_dir||ime::active()||(selected&&now-m_guide_focus_since<.8);
 }
 } // namespace ui

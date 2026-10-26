@@ -1,4 +1,5 @@
 #include "ui/theme_presets.h"
+#include "app/i18n.h"
 #include "app/settings.h"
 #include "app/appearance.h"
 #include "ui/anim.h"
@@ -44,15 +45,15 @@ static_assert(sizeof(presets)/sizeof(presets[0])==kThemeCount,"stable preset IDs
 static const uint32_t accents[] = {0, 0xff52c447u, 0xff3496ffu, 0xff00d8b5u,
     0xffb277ffu, 0xffff57b2u, 0xffff9432u, 0xffff535fu, 0xffffcf38u};
 const char *theme_accent_name(int id) {
-    static const char *const names[] = {"Theme default", "Emby green", "Blue", "Teal", "Purple", "Pink", "Orange", "Red", "Gold"};
-    return names[id >= 0 && id < 9 ? id : 0];
+    static const char *const names[] = {N_("Theme default"), N_("Emby green"), N_("Blue"), N_("Teal"), N_("Purple"), N_("Pink"), N_("Orange"), N_("Red"), N_("Gold")};
+    return T(names[id >= 0 && id < 9 ? id : 0]);
 }
 const char *theme_background_name(int id) {
-    static const char *const names[] = {"Theme default", "Black", "Dark", "Light",
-        "Midnight blue", "Ocean blue", "Deep teal", "Forest green", "Royal purple",
-        "Plum", "Burgundy", "Warm brown", "Slate blue"};
+    static const char *const names[] = {N_("Theme default"), N_("Black"), N_("Dark"), N_("Light"),
+        N_("Midnight blue"), N_("Ocean blue"), N_("Deep teal"), N_("Forest green"), N_("Royal purple"),
+        N_("Plum"), N_("Burgundy"), N_("Warm brown"), N_("Slate blue")};
     static_assert(sizeof(names)/sizeof(names[0])==kBackgroundCount,"background IDs");
-    return names[id >= 0 && id < kBackgroundCount ? id : 0];
+    return T(names[id >= 0 && id < kBackgroundCount ? id : 0]);
 }
 static uint32_t mix(uint32_t a,uint32_t b,float t) {
     uint32_t c=0xff000000u;
@@ -60,12 +61,12 @@ static uint32_t mix(uint32_t a,uint32_t b,float t) {
     return c;
 }
 const char *theme_variant_name(int id) {
-    const char *names[]={"Theme default","Neutral","Blue","Green / Teal","Purple","Warm amber"};
-    return names[std::max(0,std::min(5,id))];
+    const char *names[]={N_("Theme default"),N_("Neutral"),N_("Blue"),N_("Green / Teal"),N_("Purple"),N_("Warm amber")};
+    return T(names[std::max(0,std::min(5,id))]);
 }
 const char *theme_shape_name(int id) {
-    const char *names[]={"Theme default","Square corners","Slightly rounded","Rounded","Pill / oval-ended","Angled corners"};
-    return names[std::max(0,std::min(5,id))];
+    const char *names[]={N_("Theme default"),N_("Square corners"),N_("Slightly rounded"),N_("Rounded"),N_("Pill / oval-ended"),N_("Angled corners")};
+    return T(names[std::max(0,std::min(5,id))]);
 }
 ThemePalette theme_palette_for(const settings::Appearance &input) {
     const auto a=settings::normalize_appearance(input);

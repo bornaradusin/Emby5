@@ -153,14 +153,14 @@ void ItemMenu::draw(float dt, bool *animating)
 
     if(m_confirm){
         const gfx::Rect r{(gfx::W-820)/2,(gfx::H-360)/2,820,360};glass_panel(r,24,a);
-        gfx::text(r.x+40,r.y+65,"Change the entire "+std::string(m_item.type=="Series"?"series?":"season?"),{gfx::Bold,30,740},alpha(kText,a));
+        gfx::text(r.x+40,r.y+65,T(m_item.type=="Series"?"Change the entire series?":"Change the entire season?"),{gfx::Bold,30,740},alpha(kText,a));
         gfx::text(r.x+40,r.y+110,m_item.name,{gfx::Medium,24,740},alpha(kText2,a));
         for(int i=0;i<2;++i){gfx::Rect button{r.x+35,r.y+145+i*76.f,750,64};glass_panel(button,14,a,false,i==m_confirm_choice?1.f:0.f);
-            gfx::text(button.x+24,button.y+42,i==0?"Cancel":m_item.played?"Mark all as unplayed":"Mark all as played",{gfx::SemiBold,26,700},alpha(kText,a));}
+            gfx::text(button.x+24,button.y+42,i==0?T("Cancel"):m_item.played?T("Mark all as unplayed"):T("Mark all as played"),{gfx::SemiBold,26,700},alpha(kText,a));}
         return;
     }
     const bool ep = m_item.type == "Episode";
-    const std::string title = m_item.id.empty()?"Browse options":ep ? m_item.series_name : m_item.name;
+    const std::string title = m_item.id.empty()?T("Browse options"):ep ? m_item.series_name : m_item.name;
     std::string sub;
     if (ep) {
         char b[256];
@@ -188,13 +188,13 @@ void ItemMenu::draw(float dt, bool *animating)
         const gfx::Rect row{r.x + 30, y, w - 60, row_h};
         const char *label = "";
         switch (m_options[i]) {
-        case PlayNow: label=m_item.position_ticks>0?"Resume":"Play";break;
-        case StartOver:label="Play from beginning";break;
-        case Series:label="Go to series";break;
-        case Season:label="Go to season";break;
-        case Trailer:label="Trailer QR";break;
-        case ViewAll:label="View all in this row";break;
-        case Retry:label="Retry Home sections";break;
+        case PlayNow: label=m_item.position_ticks>0?T("Resume"):T("Play");break;
+        case StartOver:label=T("Play from beginning");break;
+        case Series:label=T("Go to series");break;
+        case Season:label=T("Go to season");break;
+        case Trailer:label=T("Trailer QR");break;
+        case ViewAll:label=T("View all in this row");break;
+        case Retry:label=T("Retry Home sections");break;
         case Info: label = T("Mer info"); break;
         case List: label = m_item.favorite ? T("Fjern fra Min liste") : T("Legg til i Min liste"); break;
         case Played:

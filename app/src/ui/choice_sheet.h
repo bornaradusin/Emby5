@@ -1,6 +1,7 @@
 /* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "ui/screen.h"
+#include "app/i18n.h"
 #include "nuvio_input.h"
 namespace ui {
 class ChoiceSheet {
@@ -31,8 +32,8 @@ public:
             if(i==focus)draw_focus_outline(button,14);
             gfx::text(button.x+22,button.y+41,labels[(size_t)i],{gfx::SemiBold,24,750},kText);
         }
-        if(labels.empty())gfx::text(panel.x+36,panel.y+99,"Nothing here yet",{gfx::Medium,24,770},kText2);
-        gfx::text(panel.x+36,panel.y+h-20,"X: Select    Circle: Back",{gfx::Medium,20,680},kText2);
+        if(labels.empty())gfx::text(panel.x+36,panel.y+99,T("Nothing here yet"),{gfx::Medium,24,770},kText2);
+        gfx::text(panel.x+36,panel.y+h-20,T("X: Select    Circle: Back"),{gfx::Medium,20,680},kText2);
         if(labels.size()>8)gfx::text(panel.x+780,panel.y+h-20,std::to_string(focus+1)+" / "+std::to_string(labels.size()),{gfx::Medium,18,150},kText2,2);
     }
 };

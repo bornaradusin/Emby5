@@ -1,5 +1,6 @@
 /* Emby5 unified Emby Live TV and Xtream channels. GPL-3.0-or-later */
 #include "app/iptv_live.h"
+#include "app/i18n.h"
 #include "app/io_worker.h"
 #include "app/xtream_fetch.h"
 #include <memory>
@@ -234,7 +235,7 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
     auto failed=[ticket]{
         std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
         for(auto *s:{&cache.server,&cache.xtream,&cache.playlist})if(s->loading){
-            s->loading=false;s->cached=true;s->error="Live TV worker failed";
+            s->loading=false;s->cached=true;s->error=N_("Live TV worker failed");
         }
         refreshing=false;last_refresh=std::chrono::steady_clock::now();update_status();
     };
@@ -303,9 +304,9 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
                     }
                 }
                 iptv_catalogue::State s;s.configured=true;s.cached=!ok;
-                if(!ok)s.error="Server channels unavailable";
+                if(!ok)s.error=N_("Server channels unavailable");
                 publish(server->server_product(),std::move(channels),ok,std::move(s));
-            }catch(...){source_failure(server->server_product(),"Server channel worker failed");}
+            }catch(...){source_failure(server->server_product(),N_("Server channel worker failed"));}
         };
         auto xtream_job=[&] {
             if(should_skip(1))return;
@@ -365,7 +366,7 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
                 // The loader has already merged failed categories with the cache.
                 // Publish the usable partial result, not just all-or-nothing success.
                 publish("Xtream",std::move(cat.channels),true,std::move(state),&cat.scan);
-            }catch(...){source_failure("Xtream","Xtream channel worker failed");}
+            }catch(...){source_failure("Xtream",N_("Xtream channel worker failed"));}
         };
         auto m3u_job=[&] {
             if(should_skip(2))return;
@@ -379,9 +380,9 @@ void refresh(jf::Client *client, bool force, bool retry_failed) {
                     return ext=="mp4"||ext=="mkv"||ext=="avi"||ext=="mov"||ext=="webm";
                 }),cat.channels.end());
                 iptv_catalogue::State state;state.configured=true;state.cached=!ok;
-                if(!ok)state.error="M3U channels unavailable";
+                if(!ok)state.error=N_("M3U channels unavailable");
                 publish("M3U",std::move(cat.channels),ok,std::move(state));
-            }catch(...){source_failure("M3U","M3U channel worker failed");}
+            }catch(...){source_failure("M3U",N_("M3U channel worker failed"));}
         };
         std::vector<std::function<void()>> jobs{server_job};
         if(has_xtream)jobs.push_back(xtream_job);

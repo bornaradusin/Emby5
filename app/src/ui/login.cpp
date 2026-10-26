@@ -206,7 +206,7 @@ void Login::check_server()
             return;   /* another server since */
         sh->busy = false;
         if (!ok) {
-            sh->error = T("No Emby or Jellyfin server found at ") + c->server();
+            sh->error = TF("No Emby or Jellyfin server found at {address}", {{"address", c->server()}});
             return;
         }
         sh->server_name = name;
@@ -521,7 +521,7 @@ void Login::draw(double now, float dt)
         gfx::text(kX, 230, T("Connect to Emby or Jellyfin"), {gfx::Bold, 64}, kText);
         gfx::text(kX, 290, T("Enter your Emby or Jellyfin address, including any base path. Example: 192.168.0.10:8096"),
                   {gfx::Medium, 28, 1200}, kText2);
-        field({kX, 390, kW, 84}, "SERVER", m_server, "http://", m_focus == 0, lift("srv", m_focus == 0));
+        field({kX, 390, kW, 84}, T("SERVER"), m_server, "http://", m_focus == 0, lift("srv", m_focus == 0));
         button({kX, 530, 260, 76}, busy ? T("Kobler til \xE2\x80\xA6") : T("Fortsett"), m_focus == 1, lift("go", m_focus == 1));
         /* Servers on the network, found by asking (Emby's discovery). */
         scan(now);
@@ -546,7 +546,7 @@ void Login::draw(double now, float dt)
         std::vector<float> w(nf), at(nf);
         float row_w = 0;
         for (int i = 0; i < nf; i++) {
-            labels[i] = (found[i].name.empty() ? std::string("Server") : found[i].name) + "  \xC2\xB7  " +
+            labels[i] = (found[i].name.empty() ? std::string(T("Server")) : found[i].name) + "  \xC2\xB7  " +
                         host_of(found[i].address);
             w[i] = std::min(560.f, gfx::text_width(labels[i], {gfx::Bold, 26}) + 64);
             at[i] = row_w;

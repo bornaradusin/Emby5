@@ -25,11 +25,11 @@ std::string minutes_label(int min)
 {
     if (min <= 0)
         return std::string();
-    char b[32];
+    char b[64];
     if (min >= 60)
         std::snprintf(b, sizeof b, T("%d t %d min"), min / 60, min % 60);
     else
-        std::snprintf(b, sizeof b, "%d min", min);
+        std::snprintf(b, sizeof b, T("%d min"), min);
     return b;
 }
 
@@ -453,7 +453,7 @@ void SeerrDetail::draw(double now, float dt)
         y += 44;
     }
     m_synopsis.draw(m_loaded?t.overview:m_item.overview,kPad,y,860,dt,m_row<0&&!modal(),&m_animating);
-    gfx::text(kPad,648-off,"Square: Read more",{gfx::Medium,19,860},kText2);
+    gfx::text(kPad,648-off,T("Square: Read more"),{gfx::Medium,19,860},kText2);
 
     /* Buttons: glass panes, the focus drop over them, then the labels. */
     const float by = 668 - off;

@@ -1,5 +1,6 @@
 /* Disk-indexed Xtream and M3U VOD catalogue. SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/iptv_vod.h"
+#include "app/i18n.h"
 #include "app/stable_identity.h"
 #include "app/io_worker.h"
 #include "app/request_budget.h"
@@ -163,7 +164,7 @@ void load_legacy(const std::string &path,Index &m,Index &s) {
         Item v;if(!r.json||!parse_item(r.json.get(),v)){m=Index{};s=Index{};return;}
         if(v.source=="Xtream")add_ref(v.series?s:m,v,pos);
     }
-    m.scan.error=s.scan.error="Cached catalogue requires refresh";
+    m.scan.error=s.scan.error=N_("Cached catalogue requires refresh");
 }
 void update_status(bool changed=true) { // caller holds mu
     status.m3u_count=m3u_movies.size();
@@ -172,10 +173,10 @@ void update_status(bool changed=true) { // caller holds mu
     status.categories_done=status.movies.done+status.shows.done;
     status.categories_total=status.movies.total+status.shows.total;
     status.error.clear();
-    for(const auto &pair:{std::make_pair("Movies",&status.movies),std::make_pair("TV shows",&status.shows),std::make_pair("M3U",&status.playlist)}) {
+    for(const auto &pair:{std::make_pair(N_("Movies"),&status.movies),std::make_pair(N_("TV shows"),&status.shows),std::make_pair("M3U",&status.playlist)}) {
         if(pair.second->configured&&!pair.second->error.empty()) {
             if(!status.error.empty())status.error+="; ";
-            status.error+=std::string(pair.first)+": "+pair.second->error;
+            status.error+=std::string(T(pair.first))+": "+i18n::message(pair.second->error);
         }
     }
     if(changed)++status.generation;
@@ -280,7 +281,7 @@ void refresh(bool force,bool retry_failed){
     auto fail=[ticket] {
         std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
         for(auto *s:{&status.movies,&status.shows,&status.playlist})if(s->loading) {
-            s->loading=false;s->error="Catalogue worker failed";s->cached=true;
+            s->loading=false;s->error=N_("Catalogue worker failed");s->cached=true;
         }
         preview_movies.reset();preview_shows.reset();
         refreshing=false;last=std::chrono::steady_clock::now();update_status();
@@ -440,7 +441,7 @@ void refresh(bool force,bool retry_failed){
                 auto &s=series?status.shows:status.movies;
                 s.loading=false;s.cached=(series?shows:movies)->count!=0;
                 (series?preview_shows:preview_movies).reset();
-                s.error="Catalogue cache/worker failed; previous titles kept";update_status();
+                s.error=N_("Catalogue cache/worker failed; previous titles kept");update_status();
             }
         };
         auto playlist=[&] {
@@ -456,10 +457,10 @@ void refresh(bool force,bool retry_failed){
                 std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
                 if(ok)m3u_movies=std::move(discovered);
                 status.playlist.loading=false;status.playlist.cached=!ok&&!m3u_movies.empty();
-                status.playlist.error=ok?"":"M3U refresh failed";update_status();
+                status.playlist.error=ok?"":N_("M3U refresh failed");update_status();
             } catch(...) {
                 std::lock_guard<std::mutex> g(mu);if(epoch!=ticket)return;
-                status.playlist.loading=false;status.playlist.error="M3U refresh failed";update_status();
+                status.playlist.loading=false;status.playlist.error=N_("M3U refresh failed");update_status();
             }
         };
         std::vector<std::function<void()>> jobs;
@@ -478,14 +479,14 @@ std::vector<Episode> episodes(const Item &series,std::string *error){
     iptv_xtream::Credentials c;if(!iptv_xtream::load_credentials(&c))return result;
     cJSON *doc=nullptr;
     if(!json(iptv_xtream::api_url(c,"get_series_info")+"&series_id="+encode(series.id),&doc)){
-        if(error)*error="Could not load episodes. Press Circle to return and retry.";return result;}
+        if(error)*error=T("Could not load episodes. Press Circle to return and retry.");return result;}
     const cJSON *seasons=cJSON_GetObjectItemCaseSensitive(doc,"episodes");
     if(cJSON_IsObject(seasons))for(const cJSON *season=seasons->child;season;season=season->next){
         const int n=season->string?std::atoi(season->string):0;const cJSON *ep;
         cJSON_ArrayForEach(ep,season){Episode e;e.id=value(ep,"id");e.name=value(ep,"title");
             e.extension=value(ep,"container_extension");e.season=n;
             const auto num=value(ep,"episode_num");e.number=num.empty()?0:std::atoi(num.c_str());
-            if(e.name.empty())e.name="Episode "+std::to_string(e.number);
+            if(e.name.empty())e.name=TF("Episode {number}",{{"number",std::to_string(e.number)}});
             if(!e.id.empty())e.url=episode_url(c,e.id,e.extension);
             if(!e.url.empty()&&result.size()<3000)result.push_back(std::move(e));
         }

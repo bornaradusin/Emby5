@@ -1,5 +1,6 @@
 /* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ui/vod_detail.h"
+#include "app/i18n.h"
 #include "app/io_worker.h"
 #include "nuvio_input.h"
 #include "gfx/art.h"
@@ -9,9 +10,9 @@ VodDetail::VodDetail(jf::Client &c,iptv_vod::Item item,std::string episode):m_cl
 VodDetail::~VodDetail(){std::lock_guard<std::mutex> g(m_data->lock);m_data->alive=false;}
 void VodDetail::activate(){
     auto d=m_data;auto item=m_item;const auto identity=m_provider;
-    auto fail=[d]{std::lock_guard<std::mutex> g(d->lock);if(d->alive){d->ready=true;d->detail.error="Could not load provider details. Circle returns to the list.";}};
+    auto fail=[d]{std::lock_guard<std::mutex> g(d->lock);if(d->alive){d->ready=true;d->detail.error=T("Could not load provider details. Circle returns to the list.");}};
     if(!emby5::spawn_io([d,item,identity]{auto v=iptv_vod::details(item);
-        if(identity!=iptv_vod::provider_identity()){v={};v.error="Provider changed. Reopen this item.";}
+        if(identity!=iptv_vod::provider_identity()){v={};v.error=T("Provider changed. Reopen this item.");}
         std::lock_guard<std::mutex> g(d->lock);if(d->alive){d->detail=std::move(v);d->ready=true;}},fail))fail();
 }
 bool VodDetail::needs_redraw()const{std::lock_guard<std::mutex> g(m_data->lock);return m_data->ready&&!m_loaded;}
@@ -56,7 +57,7 @@ Action VodDetail::input(uint32_t p){
     if(p&NUVIO_BTN_CIRCLE){a.kind=Action::Back;return a;}
     if(p&NUVIO_BTN_SQUARE){m_reader.open(m_view.item.name,m_view.description);return a;}
     if(!m_loaded||!m_view.ok)return a;
-    if(p&NUVIO_BTN_OPTIONS){m_choices.open("Playback",{browse_state::position(m_scope,selected())>0?"Resume":"Play","Play from beginning","Remove local resume point"});return a;}
+    if(p&NUVIO_BTN_OPTIONS){m_choices.open(T("Playback"),{browse_state::position(m_scope,selected())>0?T("Resume"):T("Play"),T("Play from beginning"),T("Remove local resume point")});return a;}
     if(m_zone==0){
         if(p&NUVIO_BTN_LEFT)m_button=0;if(p&NUVIO_BTN_RIGHT)m_button=1;
         if(p&NUVIO_BTN_DOWN) {if(!m_seasons.empty())m_zone=1;}
@@ -80,27 +81,27 @@ void VodDetail::draw(double,float dt){
     if(!item.poster.empty())if(const auto *t=art::get(item.poster,400,600))gfx::image(poster,t,1.f,14,true);
     gfx::text(450,190,item.name,{gfx::Bold,44,1320},kText);
     gfx::text(450,241,item.source+(item.group.empty()?"":" - "+item.group),{gfx::Medium,23,1300},kText2);
-    m_synopsis.draw(m_loaded?(m_view.description.empty()?"No description available.":m_view.description):"Loading provider details...",450,302,1300,dt,m_zone==0&&!modal(),&m_animating);
-    if(m_view.duration>0)gfx::text(450,430,std::to_string((int)(m_view.duration/60))+" min",{gfx::Medium,23,600},kText2);
-    if(m_loaded&&!m_view.error.empty())gfx::text(450,m_view.ok?582:470,m_view.error,{gfx::Medium,24,1300},kText2);
+    m_synopsis.draw(m_loaded?(m_view.description.empty()?T("No description available."):m_view.description):T("Loading provider details..."),450,302,1300,dt,m_zone==0&&!modal(),&m_animating);
+    if(m_view.duration>0)gfx::text(450,430,TF("{minutes} min",{{"minutes",std::to_string((int)(m_view.duration/60))}}),{gfx::Medium,23,600},kText2);
+    if(m_loaded&&!m_view.error.empty())gfx::text(450,m_view.ok?582:470,i18n::message(m_view.error),{gfx::Medium,24,1300},kText2);
     if(m_loaded&&m_view.ok){
         const bool resume=browse_state::position(m_scope,selected())>0;
         for(int i=0;i<2;++i){gfx::Rect b{450+i*350.f,467,325,68};glass_panel(b,14,1.f,false,m_zone==0&&m_button==i?1.f:0.f);
             if(m_zone==0&&m_button==i)draw_focus_outline(b,14);
-            gfx::text(b.x+22,b.y+44,i==0?(resume?"Resume":"Play"):"Play from beginning",{gfx::SemiBold,24,281},kText);}
+            gfx::text(b.x+22,b.y+44,i==0?(resume?T("Resume"):T("Play")):T("Play from beginning"),{gfx::SemiBold,24,281},kText);}
         if(!m_seasons.empty()){
             const int first=std::max(0,m_season-4);
             for(int i=first;i<(int)m_seasons.size()&&i<first+7;++i){gfx::Rect b{kPad+(i-first)*230.f,637,208,60};
                 glass_panel(b,14,1.f,false,i==m_season?.65f:0.f);if(m_zone==1&&i==m_season)draw_focus_outline(b,14);
-                gfx::text(b.x+15,b.y+40,"Season "+std::to_string(m_seasons[(size_t)i]),{gfx::SemiBold,23,178},kText);}
+                gfx::text(b.x+15,b.y+40,TF("Season {number}",{{"number",std::to_string(m_seasons[(size_t)i])}}),{gfx::SemiBold,23,178},kText);}
             const int epfirst=std::max(0,m_episode-3);
             for(int i=epfirst;i<(int)m_indices.size()&&i<epfirst+4;++i){const auto &e=m_view.episodes[m_indices[(size_t)i]];
                 gfx::Rect b{kPad,725+(i-epfirst)*65.f,gfx::W-2*kPad,56};glass_panel(b,12,.9f,false,m_zone==2&&m_episode==i?1.f:0.f);
                 if(m_zone==2&&m_episode==i)draw_focus_outline(b,12);
                 gfx::text(b.x+22,b.y+37,"E"+std::to_string(e.number)+"  "+e.name,{gfx::Medium,24,b.w-44},kText);}
-        }else if(item.series)gfx::text(450,580,"No episodes available",{gfx::Medium,26},kText2);
+        }else if(item.series)gfx::text(450,580,T("No episodes available"),{gfx::Medium,26},kText2);
     }
-    gfx::text(kPad,1034,"Options: playback actions   Square: read more   Circle: back",{gfx::Medium,22,1600},kText2);
+    gfx::text(kPad,1034,T("Options: playback actions   Square: read more   Circle: back"),{gfx::Medium,22,1600},kText2);
     m_choices.draw();m_reader.draw();if(art::animating())m_animating=true;
 }
 }

@@ -425,7 +425,7 @@ void draw_poster(jf::Client &c, const jf::Item &it, const gfx::Rect &base, float
     const bool hidden=settings::hide_episode_spoilers(settings::get_appearance(),it);
     if(hidden) {
         gfx::fill(r,theme_palette().panel,14*k);
-        gfx::text(r.x+r.w/2,r.y+r.h/2,"Unwatched episode",{gfx::SemiBold,20,r.w-24},kText,1);
+        gfx::text(r.x+r.w/2,r.y+r.h/2,T("Unwatched episode"),{gfx::SemiBold,20,r.w-24},kText,1);
     } else if (it.external()) {   /* glass, the picture fading in over it (TMDB has no BlurHash) */
         draw_glass_placeholder(r, 14 * k, opacity);
         if (it.ext.poster.empty() || art::failed(it.ext.poster)) {   /* none to come: its name on the glass */

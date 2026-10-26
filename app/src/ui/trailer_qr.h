@@ -1,6 +1,7 @@
 /* Public library trailer QR, independent of Seerr. GPL-3.0-or-later */
 #pragma once
 #include "ui/screen.h"
+#include "app/i18n.h"
 #include "nuvio_input.h"
 #include "qrcodegen.h"
 #include <algorithm>
@@ -70,8 +71,8 @@ public:
         const gfx::Rect panel{(gfx::W-760)/2,(gfx::H-770)/2,760,770};
         // Opaque panel: backdrop refraction must not affect QR contrast.
         gfx::fill(panel,0xff151b29u,24);
-        gfx::text(gfx::W/2,panel.y+64,"Trailer",{gfx::Bold,34},0xffffffffu,1);
-        gfx::text(gfx::W/2,panel.y+110,"Scan with your phone to watch the trailer",{gfx::Medium,23,700},0xffdedee5u,1);
+        gfx::text(gfx::W/2,panel.y+64,T("Trailer"),{gfx::Bold,34},0xffffffffu,1);
+        gfx::text(gfx::W/2,panel.y+110,T("Scan with your phone to watch the trailer"),{gfx::Medium,23,700},0xffdedee5u,1);
         const int n=qrcodegen_getSize(code.data());
         const float px=std::floor(450.f/(n+8));
         const float side=px*(n+8),left=std::floor((gfx::W-side)/2),top=std::floor(panel.y+150);
@@ -79,7 +80,7 @@ public:
         for(int y=0;y<n;++y)for(int x=0;x<n;++x)
             if(qrcodegen_getModule(code.data(),x,y))gfx::fill({left+(x+4)*px,top+(y+4)*px,px,px},0xff000000u);
         gfx::text(gfx::W/2,panel.y+670,link,{gfx::Regular,20,680},0xffd0d0d8u,1);
-        draw_pad_hint(panel.x+270,panel.y+730,PadButton::Circle,"Close",26,1.f);
+        draw_pad_hint(panel.x+270,panel.y+730,PadButton::Circle,T("Close"),26,1.f);
     }
 };
 }

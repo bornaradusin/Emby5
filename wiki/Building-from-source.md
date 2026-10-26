@@ -30,4 +30,4 @@ The fonts are checked against `app/assets/font-assets.json`. A complete checkout
 
 ## Releasing
 
-Raise `contentVersion` in `app/sce_sys/param.json` (the app's version and the update check) and `kVersion` in `app/src/jf/jf_client.cpp` (what Emby5 tells the server), build with `--release`, and attach `Emby5-<version>.zip` to a release tagged with the version (`1.2.7`).
+Raise `contentVersion` in `app/sce_sys/param.json` (the app's version and the update check) and `kVersion` in `app/src/jf/jf_client.cpp` (what Emby5 tells the server), build with `--release`, and attach `Emby5-<version>.zip` to a release tagged with the version (`1.2.8`).

@@ -1,5 +1,6 @@
 /* Emby5 external M3U playlist support. SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/iptv_m3u.h"
+#include "app/i18n.h"
 #include "jf/jf_http.h"
 #include "evo_data_path.h"
 #include <algorithm>
@@ -60,17 +61,17 @@ bool save_playlist_url(const std::string &url) {
     if(!ok) std::remove(tmp.c_str()); return ok;
 }
 bool load_catalog(const std::string &url,iptv_xtream::Catalog *out,std::string *error) {
-    if(!out||!valid(url)) {if(error) *error="Invalid playlist URL";return false;}
+    if(!out||!valid(url)) {if(error) *error=N_("Invalid playlist URL");return false;}
     auto reply=jf::http_request("GET",url,{},"",30);
     if(!reply.ok()) {if(error) *error=reply.error.empty()?"HTTP "+std::to_string(reply.status):reply.error;return false;}
-    if(reply.body.size()>32u*1024u*1024u) {if(error)*error="Playlist too large";return false;}
+    if(reply.body.size()>32u*1024u*1024u) {if(error)*error=N_("Playlist too large");return false;}
     std::istringstream stream(reply.body); std::string line,extinf;
     iptv_xtream::Catalog fresh; std::map<std::string,std::string> categories;
     bool first=true;
     while(std::getline(stream,line)) {
         if(!line.empty()&&line.back()=='\r') line.pop_back();
         line=strip(line); if(line.empty()) continue;
-        if(first) {first=false; if(line.rfind("#EXTM3U",0)!=0) {if(error)*error="Not an extended M3U channel playlist";return false;}continue;}
+        if(first) {first=false; if(line.rfind("#EXTM3U",0)!=0) {if(error)*error=N_("Not an extended M3U channel playlist");return false;}continue;}
         if(line.rfind("#EXTINF",0)==0) {extinf=line;continue;}
         if(line.front()=='#') continue;
         if(extinf.empty() || fresh.channels.size()>=20000) {extinf.clear();continue;}
@@ -94,12 +95,12 @@ bool load_catalog(const std::string &url,iptv_xtream::Catalog *out,std::string *
     if(fresh.channels.empty() && reply.body.find("#EXT-X-")!=std::string::npos) {
         // A media/variant HLS playlist is one channel, not a channel catalog.
         iptv_xtream::Channel ch;
-        ch.id="m3u:0";ch.name="HLS Stream";ch.source="M3U";
+        ch.id="m3u:0";ch.name=T("HLS Stream");ch.source="M3U";
         ch.category_id="Other Channels";ch.extension=url;
         fresh.categories.push_back({ch.category_id,ch.category_id});
         fresh.channels.push_back(std::move(ch));
     }
-    if(fresh.channels.empty()) {if(error)*error="No playable channels found";return false;}
+    if(fresh.channels.empty()) {if(error)*error=N_("No playable channels found");return false;}
     *out=std::move(fresh);return true;
 }
 }

@@ -1,5 +1,6 @@
 /* Emby5 release information only. Never downloads or installs application updates. */
 #include "app/update_service.h"
+#include "app/i18n.h"
 #include "app/io_worker.h"
 #include "jf/jf_http.h"
 #include <array>
@@ -48,7 +49,7 @@ void failed_request() {
     {
         std::lock_guard<std::mutex> guard(lock);
         state.checking=false;
-        state.message="Could not read release information. Close and reopen What's New to retry.";
+        state.message=T("Could not read release information. Close and reopen What's New to retry.");
         ++state.revision;
     }
     // A fresh enable while the failed request ran may have queued one new check.
@@ -81,7 +82,7 @@ void fetch(bool automatic, uint64_t epoch) {
             state.latest=version;
             state.notes=notes;
             state.available=newer(version);
-            state.message=state.available?"New version available - see What's New":"You're up to date";
+            state.message=state.available?T("New version available - see What's New"):T("You're up to date");
             // Check again at publication, not just when the request started.
             if(automatic && automatic_enabled && signed_in && epoch==automatic_epoch && state.available) {
                 std::array<unsigned,3> parsed{};
@@ -93,7 +94,7 @@ void fetch(bool automatic, uint64_t epoch) {
         } else {
             // Last valid notes remain readable; network failures never generate
             // an unsolicited kernel notification and do not erase usable notes.
-            state.message="Could not read release information. Close and reopen What's New to retry.";
+            state.message=T("Could not read release information. Close and reopen What's New to retry.");
         }
         ++state.revision;
     }
@@ -153,7 +154,7 @@ std::string take_notification() {
     if(!automatic_enabled || !signed_in || pending_epoch!=automatic_epoch) return {};
     std::array<unsigned,3> parsed{};
     if(!version_parts(version,parsed) || !delivered.insert(parsed).second) return {};
-    return "Emby5 " + version + " is available. See Settings > System > What's New.";
+    return TF("Emby5 {version} is available. See Settings > System > What's New.", {{"version", version}});
 }
 uint64_t generation() { std::lock_guard<std::mutex> guard(lock); return state.revision; }
 Snapshot snapshot() { std::lock_guard<std::mutex> guard(lock); return state; }

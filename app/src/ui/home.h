@@ -15,6 +15,7 @@
 #pragma once
 
 #include "jf/jf_client.h"
+#include "app/i18n.h"
 #include "ui/anim.h"
 #include "ui/item_menu.h"
 #include "ui/screen.h"
@@ -66,7 +67,7 @@ public:
         Action a;
         if (m_discover && !modal()) {
             a.kind = Action::Search;
-            a.search_context.title = "Discover";
+            a.search_context.title = T("Oppdag");
             a.search_context.discover = true;
         }
         return a;

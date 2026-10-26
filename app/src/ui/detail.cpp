@@ -44,11 +44,11 @@ std::string runtime_label(int64_t ticks)
     const int min = (int)(ticks / jf::kTicksPerSecond / 60);
     if (min <= 0)
         return std::string();
-    char b[32];
+    char b[64];
     if (min >= 60)
         std::snprintf(b, sizeof b, T("%d t %d min"), min / 60, min % 60);
     else
-        std::snprintf(b, sizeof b, "%d min", min);
+        std::snprintf(b, sizeof b, T("%d min"), min);
     return b;
 }
 
@@ -229,7 +229,7 @@ void Detail::rebuild_content(Content &out)
             group.id = ep.season_id;
             group.index = ep.parent_index;
             group.name = !ep.season_name.empty() ? ep.season_name :
-                ep.parent_index < 0 ? T("Episoder") : T("Sesong ") + std::to_string(ep.parent_index);
+                ep.parent_index < 0 ? std::string(T("Episoder")) : TF("Season {number}", {{"number", std::to_string(ep.parent_index)}});
             out.seasons.push_back(std::move(group));
         }
     }
@@ -763,7 +763,7 @@ void Detail::draw_top(float y0, float dt)
     const float line_height = 37.7f * ui_scale;
     // Keep the synopsis viewport and buttons fixed even at large text sizes.
     const size_t visible_lines = ui_scale > 1.0f ? 2u : 3u;
-    const std::string description=spoiler_hidden(it)?"Episode details hidden. Press Square to reveal without marking watched.":it.overview;
+    const std::string description=spoiler_hidden(it)?T("Episode details hidden. Press Square to reveal without marking watched."):it.overview;
     if (m_overview_text != description || m_overview_scale != ui_scale) {
         m_overview_scale = ui_scale;
         m_overview_text = description;
@@ -785,7 +785,7 @@ void Detail::draw_top(float y0, float dt)
     gfx::pop_fade_mask();
     gfx::pop_scissor();
 
-    gfx::text(kPad,y0+648,spoiler_hidden(it)?"Square: Reveal episode details":"Square: Read more",{gfx::Medium,19,860},kText2);
+    gfx::text(kPad,y0+648,spoiler_hidden(it)?T("Square: Reveal episode details"):T("Square: Read more"),{gfx::Medium,19,860},kText2);
     /* Buttons. */
     const float by = y0 + 668;
     sync_button();
@@ -820,9 +820,9 @@ void Detail::draw_top(float y0, float dt)
         if (bs[i] == RestartButton)
             w = gfx::text_width(T("Fra start"), st) + 64;
         if (bs[i] == TrailerButton)
-            w = gfx::text_width("Trailer", st) + 64;
+            w = gfx::text_width(T("Trailer"), st) + 64;
         if (bs[i] == TrailerQrButton)
-            w = gfx::text_width("Trailer QR", st) + 52;
+            w = gfx::text_width(T("Trailer QR"), st) + 52;
         if (bs[i] == PlayButton)
             w = 40 + 30 + 14 + gfx::text_width(label, st) + (pct >= 0 ? 14 + 90 + 14 + gfx::text_width(sub, {gfx::Medium, 24}) : 0) + 40;
         const float k = 1.f;
@@ -849,9 +849,9 @@ void Detail::draw_top(float y0, float dt)
         } else if (bs[i] == RestartButton) {
             gfx::text(r.x + r.w / 2, cy + 9, T("Fra start"), st, fg, 1);
         } else if (bs[i] == TrailerQrButton) {
-            gfx::text(r.x+r.w/2,cy+9,"Trailer QR",st,fg,1);
+            gfx::text(r.x+r.w/2,cy+9,T("Trailer QR"),st,fg,1);
         } else if (bs[i] == TrailerButton) {
-            gfx::text(r.x + r.w / 2, cy + 9, "Trailer", st, fg, 1);
+            gfx::text(r.x + r.w / 2, cy + 9, T("Trailer"), st, fg, 1);
         } else if (bs[i] == WatchedButton) {
             const bool seen = m_view.item.played;
             const uint32_t cc = seen ? 0xff30d158u : alpha(fg, 0.85f);
@@ -886,7 +886,7 @@ void Detail::draw_top(float y0, float dt)
     credit(T("Med:"), with);
     credit(T("Regi:"), dir);
     if (!m_view.detail.studios.empty())
-        credit(series ? T("Kanal:") : "Studio:", m_view.detail.studios[0]);
+        credit(series ? T("Kanal:") : T("Studio:"), m_view.detail.studios[0]);
 }
 
 void Detail::draw_sections(float dt)
@@ -951,7 +951,7 @@ void Detail::draw_sections(float dt)
             }
             if (m_eps.empty()) {
                 gfx::text(kPad + gutter, tab_y + tab_h + 42.f * scale,
-                          "No episodes available for this season.", {gfx::Regular, 22, inner}, kText2);
+                          T("No episodes available for this season."), {gfx::Regular, 22, inner}, kText2);
             }
         }
     }
@@ -985,11 +985,11 @@ void Detail::draw_sections(float dt)
                     const bool hidden = spoiler_hidden(e);
                     if (hidden) {
                         gfx::fill(r, theme_palette().panel, 14 * k);
-                        gfx::text(r.x + r.w / 2, r.y + r.h / 2, "Unwatched episode", {gfx::Medium, 23, r.w - 24}, kText, 1);
+                        gfx::text(r.x + r.w / 2, r.y + r.h / 2, T("Unwatched episode"), {gfx::Medium, 23, r.w - 24}, kText, 1);
                     } else art::draw(r, landscape_url(m_client, e, 640), e.primary_blurhash, 640, 360, 14 * k);
                     if (focus) draw_image_focus_outline(r, 14 * k);
                     if (e.upcoming || e.played) {
-                        const std::string badge = e.upcoming ? "Upcoming" : T("Sett");
+                        const std::string badge = e.upcoming ? T("Upcoming") : T("Sett");
                         const float bw = std::min(r.w - 28.f, gfx::measure_text(badge, {gfx::SemiBold, 18}) + 28.f);
                         const float bh = 32.f * scale;
                         const gfx::Rect br{r.x + r.w - bw - 14, r.y + 14, bw, bh};
@@ -1004,9 +1004,9 @@ void Detail::draw_sections(float dt)
                     const std::string title = (e.index >= 0 ? std::to_string(e.index) + ". " : "") + e.name;
                     gfx::text(x, y + layout.title_y, title, {gfx::SemiBold, 22, layout.width}, focus ? kText : kText2);
                     gfx::text(x, y + layout.runtime_y, e.upcoming ?
-                              (e.premiere_date.empty() ? "Upcoming" : "Airs " + e.premiere_date.substr(0, 10)) : runtime_label(e.runtime_ticks),
+                              (i18n::date(e.premiere_date).empty() ? std::string(T("Upcoming")) : TF("Airs {date}", {{"date", i18n::date(e.premiere_date)}})) : runtime_label(e.runtime_ticks),
                               {gfx::Medium, 19, layout.width}, kText3);
-                    gfx::text(x, y + layout.synopsis_y, hidden ? "Square: Reveal details" : e.overview,
+                    gfx::text(x, y + layout.synopsis_y, hidden ? T("Square: Reveal details") : e.overview,
                               {gfx::Regular, 19, layout.width, 3, 27}, kText3);
                 }
             }
@@ -1109,7 +1109,7 @@ void Detail::draw_sections(float dt)
                         gfx::shadow(r, 14 * k, 26, 0.3f * lift, 10 * lift);
                     if(spoiler_hidden(s)) {
                         gfx::fill(r,theme_palette().panel,14*k);
-                        gfx::text(r.x+r.w/2,r.y+r.h/2,"Unwatched episode",{gfx::Medium,23,r.w-24},kText,1);
+                        gfx::text(r.x+r.w/2,r.y+r.h/2,T("Unwatched episode"),{gfx::Medium,23,r.w-24},kText,1);
                     } else art::draw(r, landscape_url(m_client, s, 640), landscape_blurhash(s), 640, 360, 14 * k);
                     if(focus)draw_image_focus_outline(r,14*k);
                     if (lift > 0.01f)

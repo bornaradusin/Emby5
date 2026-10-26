@@ -1,5 +1,6 @@
 /* Emby5 catalogue refresh state. SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "app/i18n.h"
 #include <cstddef>
 #include <string>
 #include <unordered_set>
@@ -27,19 +28,21 @@ inline State result_state(const Scan &scan, bool retained) {
     return s;
 }
 // Compact, credential-free status for the Settings rows and catalogue screens.
-inline std::string describe(const State &s, size_t count, const char *unit) {
-    if(!s.configured) return "Not configured";
-    std::string text=std::to_string(count)+" "+unit;
+enum class Unit { Channels, Movies, Shows };
+inline std::string describe(const State &s, size_t count, Unit unit) {
+    if(!s.configured) return T("Not configured");
+    const char *what=unit==Unit::Channels?N_("{count} channels"):unit==Unit::Movies?N_("{count} movies"):N_("{count} TV shows");
+    std::string text=TF(what,{{"count",std::to_string(count)}});
     if(s.loading) {
-        text+=count?" - refreshing":" - loading";
+        text+=count?T(" - refreshing"):T(" - loading");
         if(s.total)text+=" ("+std::to_string(s.done)+"/"+std::to_string(s.total)+")";
     } else if(!s.error.empty()) {
-        const auto state=s.partial?"partial":((s.cached&&count)?"cached":"failed");
+        const char *state=s.partial?N_("partial"):((s.cached&&count)?N_("cached"):N_("failed"));
         // Put the actionable failure before long cached counts in narrow rows.
-        text=s.error+"; "+text+" "+state;
-        if(s.failed)text+="; "+std::to_string(s.failed)+" failed/skipped";
-        text+="; X to retry";
-    } else text+=s.cached?" - cached":" - ready";
+        text=i18n::message(s.error)+"; "+text+" "+T(state);
+        if(s.failed)text+="; "+TF("{count} failed/skipped",{{"count",std::to_string(s.failed)}});
+        text+=T("; X to retry");
+    } else text+=s.cached?T(" - cached"):T(" - ready");
     return text;
 }
 }

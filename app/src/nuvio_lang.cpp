@@ -8,6 +8,7 @@
  * interface, nuvio_osd.cpp, which Emby5's PlayerUi replaced).
  */
 #include "nuvio_osd.h"
+#include "app/i18n.h"
 
 #include <cctype>
 #include <string>
@@ -18,7 +19,7 @@ std::string nuvio_language_key(const std::string &code)
         {"eng", "en"}, {"spa", "es"}, {"fre", "fr"}, {"fra", "fr"}, {"ger", "de"}, {"deu", "de"},
         {"ita", "it"}, {"por", "pt"}, {"rus", "ru"}, {"jpn", "ja"}, {"kor", "ko"}, {"chi", "zh"},
         {"zho", "zh"}, {"ara", "ar"}, {"hin", "hi"}, {"tur", "tr"}, {"pol", "pl"}, {"dut", "nl"},
-        {"nld", "nl"}, {"swe", "sv"}, {"nor", "no"}, {"nob", "nb"}, {"dan", "da"}, {"fin", "fi"},
+        {"nld", "nl"}, {"swe", "sv"}, {"nor", "no"}, {"nob", "nb"}, {"nno", "nn"}, {"dan", "da"}, {"fin", "fi"},
         {"gre", "el"}, {"ell", "el"}, {"heb", "he"}, {"cze", "cs"}, {"ces", "cs"}, {"hun", "hu"},
         {"rum", "ro"}, {"ron", "ro"}, {"bul", "bg"}, {"hrv", "hr"}, {"srp", "sr"}, {"slv", "sl"},
         {"slo", "sk"}, {"slk", "sk"}, {"ukr", "uk"}, {"tha", "th"}, {"vie", "vi"}, {"ind", "id"},
@@ -44,25 +45,25 @@ std::string nuvio_language_key(const std::string &code)
 std::string nuvio_language_name(const std::string &code)
 {
     static const struct { const char *k, *name; } n[] = {
-        {"en", "English"}, {"es", "Spanish"}, {"es-419", "Spanish (Latin America)"},
-        {"es-mx", "Spanish (Mexico)"}, {"fr", "French"}, {"fr-ca", "French (Canada)"},
-        {"de", "German"}, {"it", "Italian"}, {"pt", "Portuguese"}, {"pt-br", "Portuguese (Brazil)"},
-        {"pt-pt", "Portuguese (Portugal)"}, {"ru", "Russian"}, {"ja", "Japanese"}, {"ko", "Korean"},
-        {"zh", "Chinese"}, {"zh-cn", "Chinese (Simplified)"}, {"zh-tw", "Chinese (Traditional)"},
-        {"zh-hk", "Chinese (Hong Kong)"}, {"ar", "Arabic"}, {"hi", "Hindi"}, {"tr", "Turkish"},
-        {"pl", "Polish"}, {"nl", "Dutch"}, {"sv", "Swedish"}, {"no", "Norwegian"}, {"nb", "Norwegian"},
-        {"da", "Danish"}, {"fi", "Finnish"}, {"el", "Greek"}, {"he", "Hebrew"}, {"cs", "Czech"},
-        {"hu", "Hungarian"}, {"ro", "Romanian"}, {"bg", "Bulgarian"}, {"hr", "Croatian"},
-        {"sr", "Serbian"}, {"sl", "Slovenian"}, {"sk", "Slovak"}, {"uk", "Ukrainian"}, {"th", "Thai"},
-        {"vi", "Vietnamese"}, {"id", "Indonesian"}, {"ms", "Malay"}, {"fa", "Persian"}, {"ur", "Urdu"},
-        {"bn", "Bengali"}, {"ta", "Tamil"}, {"te", "Telugu"}, {"ml", "Malayalam"}, {"kn", "Kannada"},
-        {"mr", "Marathi"}, {"ca", "Catalan"}, {"eu", "Basque"}, {"gl", "Galician"}, {"is", "Icelandic"},
-        {"et", "Estonian"}, {"lv", "Latvian"}, {"lt", "Lithuanian"}, {"tl", "Filipino"},
-        {"sq", "Albanian"}, {"mk", "Macedonian"}, {"bs", "Bosnian"}, {"ka", "Georgian"},
-        {"hy", "Armenian"}, {"az", "Azerbaijani"}, {"kk", "Kazakh"}, {"uz", "Uzbek"}, {"mn", "Mongolian"},
-        {"km", "Khmer"}, {"lo", "Lao"}, {"my", "Burmese"}, {"ne", "Nepali"}, {"si", "Sinhala"},
-        {"sw", "Swahili"}, {"af", "Afrikaans"}, {"am", "Amharic"}, {"cy", "Welsh"}, {"ga", "Irish"},
-        {"la", "Latin"}, {"und", ""}, {"unknown", ""}, {"mul", "Multiple"}, {"zxx", ""},
+        {"en", N_("English")}, {"es", N_("Spanish")}, {"es-419", N_("Spanish (Latin America)")},
+        {"es-mx", N_("Spanish (Mexico)")}, {"fr", N_("French")}, {"fr-ca", N_("French (Canada)")},
+        {"de", N_("German")}, {"it", N_("Italian")}, {"pt", N_("Portuguese")}, {"pt-br", N_("Portuguese (Brazil)")},
+        {"pt-pt", N_("Portuguese (Portugal)")}, {"ru", N_("Russian")}, {"ja", N_("Japanese")}, {"ko", N_("Korean")},
+        {"zh", N_("Chinese")}, {"zh-cn", N_("Chinese (Simplified)")}, {"zh-tw", N_("Chinese (Traditional)")},
+        {"zh-hk", N_("Chinese (Hong Kong)")}, {"ar", N_("Arabic")}, {"hi", N_("Hindi")}, {"tr", N_("Turkish")},
+        {"pl", N_("Polish")}, {"nl", N_("Dutch")}, {"sv", N_("Swedish")}, {"no", N_("Norwegian")}, {"nb", N_("Norwegian")}, {"nn", N_("Norwegian Nynorsk")},
+        {"da", N_("Danish")}, {"fi", N_("Finnish")}, {"el", N_("Greek")}, {"he", N_("Hebrew")}, {"cs", N_("Czech")},
+        {"hu", N_("Hungarian")}, {"ro", N_("Romanian")}, {"bg", N_("Bulgarian")}, {"hr", N_("Croatian")},
+        {"sr", N_("Serbian")}, {"sl", N_("Slovenian")}, {"sk", N_("Slovak")}, {"uk", N_("Ukrainian")}, {"th", N_("Thai")},
+        {"vi", N_("Vietnamese")}, {"id", N_("Indonesian")}, {"ms", N_("Malay")}, {"fa", N_("Persian")}, {"ur", N_("Urdu")},
+        {"bn", N_("Bengali")}, {"ta", N_("Tamil")}, {"te", N_("Telugu")}, {"ml", N_("Malayalam")}, {"kn", N_("Kannada")},
+        {"mr", N_("Marathi")}, {"ca", N_("Catalan")}, {"eu", N_("Basque")}, {"gl", N_("Galician")}, {"is", N_("Icelandic")},
+        {"et", N_("Estonian")}, {"lv", N_("Latvian")}, {"lt", N_("Lithuanian")}, {"tl", N_("Filipino")},
+        {"sq", N_("Albanian")}, {"mk", N_("Macedonian")}, {"bs", N_("Bosnian")}, {"ka", N_("Georgian")},
+        {"hy", N_("Armenian")}, {"az", N_("Azerbaijani")}, {"kk", N_("Kazakh")}, {"uz", N_("Uzbek")}, {"mn", N_("Mongolian")},
+        {"km", N_("Khmer")}, {"lo", N_("Lao")}, {"my", N_("Burmese")}, {"ne", N_("Nepali")}, {"si", N_("Sinhala")},
+        {"sw", N_("Swahili")}, {"af", N_("Afrikaans")}, {"am", N_("Amharic")}, {"cy", N_("Welsh")}, {"ga", N_("Irish")},
+        {"la", N_("Latin")}, {"und", ""}, {"unknown", ""}, {"mul", N_("Multiple")}, {"zxx", ""},
     };
     const std::string key = nuvio_language_key(code);
     for (const auto &e : n)

@@ -52,7 +52,7 @@ void SyncPlayScreen::act(int row)
     if (in_group && i-- == 0) {
         std::thread([] { syncplay::leave(); }).detach();
     } else if (i-- == 0) {
-        std::thread([user] { syncplay::create(user + (i18n::english() ? "'s group" : "s gruppe")); }).detach();
+        std::thread([user] { syncplay::create(TF("{name}'s group", {{"name", user}})); }).detach();
     } else if (i >= 0 && i < (int)groups.size()) {
         const std::string id = groups[i].id;
         std::thread([id] { syncplay::join(id); }).detach();

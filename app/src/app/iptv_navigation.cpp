@@ -1,5 +1,6 @@
 /* Emby5 - GPL-3.0-or-later. No network, engine or storage calls here. */
 #include "app/iptv_navigation.h"
+#include "app/i18n.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -54,10 +55,14 @@ Groups build_groups(const std::vector<iptv_xtream::Channel> &channels,
         if(!visible(c) || !used.insert(c.source+"\n"+c.id).second) continue;
         const auto name=c.category_id.empty()?
             ((c.source=="Emby"||c.source=="Jellyfin")?c.source+" Live TV":"Other Channels"):c.category_id;
+        /* The id keeps the English name (pins and positions are stored by it); the title is translated. */
+        const auto title=c.category_id.empty()?
+            ((c.source=="Emby"||c.source=="Jellyfin")?TF("{source} Live TV",{{"source",c.source}}):std::string(T("Other Channels"))):
+            c.category_id=="Other Channels"?std::string(T("Other Channels")):c.category_id;
         const auto id="provider:"+c.source+":"+(c.category_key.empty()?name:c.category_key);
         auto it=positions.find(id);
         if(it==positions.end()) {
-            positions[id]=result.size();result.push_back({id,name,{c}});
+            positions[id]=result.size();result.push_back({id,title,{c}});
         } else result[it->second].channels.push_back(c);
     }
     return result;

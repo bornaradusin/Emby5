@@ -7,7 +7,7 @@
 | *Wrong username or password* | Check them by signing in on the server's website. |
 | *Quick Connect is not enabled on this server* | Turn Quick Connect on in the server's settings, or sign in with username and password. |
 | No pictures, or only some | Update to 1.2.7 or later: earlier versions didn't sign in for pictures, so servers (or proxies) that require it showed none, and titles without a picture tag stayed blank. A title the server has no picture for keeps a placeholder. |
-| The interface is in the wrong language | Emby5 follows the PS5's system language. Before 1.2.7 many languages showed another language's menu words (Simplified Chinese showed Korean); update. See [Language](Settings#language). |
+| The interface is in the wrong language, or partly in English | Choose the language in **Settings › System › Language**, or **PS5** to follow the system language. Before 1.2.8 most languages had only their menu words translated; update. See [Language](Settings#language). |
 | A video doesn't play, or plays badly | Lower **Maximum quality** (**Settings › Playback**) so the server transcodes files above it, and check the limits below. |
 | No sound through the receiver | Turn **HDMI bitstream** off, or check that the receiver supports the format. Night mode turns bitstream off. |
 | Live TV or VOD is empty | Check the source's status in **Settings › Live TV** and retry it. |

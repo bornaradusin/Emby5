@@ -235,8 +235,9 @@ void Album::draw(double now, float dt)
         for (const jf::Item &t : m_tracks)
             total += t.runtime_ticks;
         const int min = (int)(total / jf::kTicksPerSecond / 60);
-        char b[64];
-        std::snprintf(b, sizeof b, "%zu %s \xC2\xB7 %d min", m_tracks.size(), m_playlist ? T("titler") : T("spor"), min);
+        char b[192];
+        std::snprintf(b, sizeof b, "%s \xC2\xB7 %s", TF(m_playlist ? "{count} titles" : "{count} tracks", {{"count", std::to_string(m_tracks.size())}}).c_str(),
+                      TF("{minutes} min", {{"minutes", std::to_string(min)}}).c_str());
         meta += (meta.empty() ? "" : " \xC2\xB7 ") + std::string(b);
     }
     gfx::text(x, kTop + 168, meta, {gfx::Medium, 24}, alpha(kText3, m_content.value));

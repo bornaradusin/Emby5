@@ -508,29 +508,21 @@ void load_home(jf::Client &c, unsigned session, bool keep_hero = false)
         }
     }
     std::lock_guard<std::mutex> g(s_state.lock);if(valid()&&s_state.phase!=Phase::Home){
-        s_state.phase=Phase::Failed;s_state.message="Could not load the library. Check the connection and retry.";}
+        s_state.phase=Phase::Failed;s_state.message=T("Could not load the library. Check the connection and retry.");}
 }
 
 /* Emby's recommendations ("Fordi du så ...") and a few genres, under the
  * rows. The server takes seconds over recommendations, so the home screen
  * never waits for them: they are added when they arrive. Genres are picked
  * once per session (rows should not reshuffle while browsing). */
-/* TMDB's genre names (what Emby's metadata carries) in Norwegian. */
+/* TMDB's genre names (what Emby's metadata carries), in the interface's language. */
 std::string genre_title(const std::string &g)
 {
-    if (i18n::english())
-        return g;   /* the metadata's own (English) names */
-    static const std::map<std::string, std::string> no = {
-        {"Action", "Action"}, {"Adventure", "Eventyr"}, {"Action & Adventure", "Action og eventyr"},
-        {"Animation", "Animasjon"}, {"Comedy", "Komedie"}, {"Crime", "Krim"}, {"Documentary", "Dokumentar"},
-        {"Drama", "Drama"}, {"Family", "Familie"}, {"Fantasy", "Fantasy"}, {"History", "Historie"},
-        {"Horror", "Skrekk"}, {"Kids", "Barn"}, {"Music", "Musikk"}, {"Mystery", "Mysterier"},
-        {"Reality", "Reality"}, {"Romance", "Romantikk"}, {"Science Fiction", "Science fiction"},
-        {"Sci-Fi & Fantasy", "Science fiction og fantasy"}, {"Talk", "Talkshow"}, {"Thriller", "Thriller"},
-        {"TV Movie", "TV-film"}, {"War", "Krig"}, {"War & Politics", "Krig og politikk"}, {"Western", "Western"},
-        {"Soap", "Såpe"}, {"News", "Nyheter"}};
-    const auto it = no.find(g);
-    return it == no.end() ? g : it->second;
+    static const char *const known[] = {N_("Action"), N_("Adventure"), N_("Action & Adventure"), N_("Animation"), N_("Comedy"), N_("Crime"), N_("Documentary"), N_("Drama"), N_("Family"), N_("Fantasy"), N_("History"), N_("Horror"), N_("Kids"), N_("Music"), N_("Mystery"), N_("Reality"), N_("Romance"), N_("Science Fiction"), N_("Sci-Fi & Fantasy"), N_("Talk"), N_("Thriller"), N_("TV Movie"), N_("War"), N_("War & Politics"), N_("Western"), N_("Soap"), N_("News")};
+    for (const char *k : known)
+        if (g == k)
+            return T(k);
+    return g;
 }
 
 void load_extras(jf::Client &c, unsigned session)
@@ -1287,9 +1279,9 @@ bool poll_user_data_results()
         }
         s_user_data_refresh_requested = true;
         if (!d.result.accepted && !(d.result.refreshed && d.result.matched))
-            notify("The server did not confirm the change. Refreshing the server state.");
+            notify(T("The server did not confirm the change. Refreshing the server state."));
         else if (d.result.refreshed && !d.result.matched)
-            notify("The server returned a different status. The server state will be shown.");
+            notify(T("The server returned a different status. The server state will be shown."));
         // Successful writes are quiet, including empty 2xx acknowledgements.
     }
     return changed;
@@ -1307,7 +1299,7 @@ void play_provider(const ui::Action &a) {
         cJSON_AddStringToObject(req,"playMethod","DirectPlay");
         cJSON *stream=cJSON_CreateObject();
         cJSON_AddStringToObject(stream,"addon","IPTV");
-        cJSON_AddStringToObject(stream,"title",a.iptv_is_vod?"VOD":"Live TV");
+        cJSON_AddStringToObject(stream,"title",a.iptv_is_vod?"VOD":T("Live TV"));
         cJSON_AddItemToObject(req,"stream",stream);
         char *json=cJSON_PrintUnformatted(req);
         cJSON_Delete(req);
@@ -1339,8 +1331,8 @@ void play_live_tv() {
         ~Finish(){iptv_navigation::end();iptv_live::set_playing_channel({});}
     } finish;
     if(!s_client)return;
-    if(s_user_data_busy){notify("A server change is still pending. Try again when it finishes.");return;}
-    if(syncplay::active()){notify("Leave SyncPlay before switching Live TV channels.");return;}
+    if(s_user_data_busy){notify(T("A server change is still pending. Try again when it finishes."));return;}
+    if(syncplay::active()){notify(T("Leave SyncPlay before switching Live TV channels."));return;}
     stop_theme(true);stop_music();nuvio_player_set_headless(0);nuvio_input_close();
     try {
         do {
@@ -1351,7 +1343,7 @@ void play_live_tv() {
             iptv_live::request_guide(s_client,live.channel);
             if(live.channel.source=="Emby" || live.channel.source=="Jellyfin") {
                 if(live.channel.source!=s_client->server_product()){
-                    notify("The server changed. Refresh Live TV before playing this channel.");break;
+                    notify(T("The server changed. Refresh Live TV before playing this channel."));break;
                 }
                 jf::Item item;item.id=live.channel.emby_id;item.name=live.channel.name;item.type="LiveTvChannel";
                 std::string error;
@@ -1364,12 +1356,12 @@ void play_live_tv() {
                 if(live.channel.source=="M3U")url=live.channel.extension;
                 else if(live.channel.source=="Xtream") {
                     iptv_xtream::Credentials credentials;
-                    if(!iptv_xtream::load_credentials(&credentials)){notify("Xtream credentials are unavailable.");break;}
+                    if(!iptv_xtream::load_credentials(&credentials)){notify(T("Xtream credentials are unavailable."));break;}
                     auto channel=live.channel;
                     if(channel.id.rfind("xtream:",0)==0)channel.id.erase(0,7);
                     url=iptv_xtream::live_url(credentials,channel);
                 }
-                if(url.empty()){notify("This channel has no playable stream.");break;}
+                if(url.empty()){notify(T("This channel has no playable stream."));break;}
                 cJSON *req=cJSON_CreateObject();
                 cJSON_AddStringToObject(req,"url",url.c_str());
                 cJSON_AddStringToObject(req,"title",live.channel.name.c_str());
@@ -1382,13 +1374,13 @@ void play_live_tv() {
                 cJSON_AddStringToObject(stream,"addon","IPTV");
                 cJSON_AddStringToObject(stream,"title","Live TV");cJSON_AddItemToObject(req,"stream",stream);
                 char *json=cJSON_PrintUnformatted(req);cJSON_Delete(req);
-                if(!json){notify("Unable to prepare Live TV playback.");break;}
+                if(!json){notify(T("Unable to prepare Live TV playback."));break;}
                 const std::string request(json);std::free(json);
                 browse_state::clear_playback();
                 nuvio_player_run(request.c_str());nuvio_player_leave();
             }
         } while(iptv_navigation::advance());
-    } catch(...) {notify("Live TV playback could not continue. Returning to channels.");}
+    } catch(...) {notify(T("Live TV playback could not continue. Returning to channels."));}
     nuvio_player_leave();nuvio_input_open(s_user);
 }
 
@@ -1410,7 +1402,7 @@ void open_search(const ui::SearchContext &context)
     const int tab = s_tab;
     const bool from_nav = s_nav_focus;
     // Keep the original screen/focus untouched if the keyboard is cancelled.
-    ime::request(ime::Kind::Search, "Search " + context.title, "",
+    ime::request(ime::Kind::Search, TF("Search {section}", {{"section", context.title}}), "",
         [context, client, origin, session, tab, from_nav](const std::string &raw) {
             const auto query = ui::search_text(raw);
             if (query.empty() || session != s_session || client != s_client ||
@@ -1602,7 +1594,7 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
         break;
     case ui::Action::Changed: {
         if (s_user_data_busy.exchange(true)) {
-            notify("A server change is still pending. Please try again when it finishes.");
+            notify(T("A server change is still pending. Please try again when it finishes."));
             break;
         }
         jf::Client *c = s_client; // session clients are immutable and retained by s_clients
@@ -1634,7 +1626,7 @@ void shell_input(uint32_t p, jf::Item *play, bool *chose, bool *from_start, bool
             publish();
         }, publish)) {
             s_user_data_busy = false;
-            notify("Could not send the server change. No change was sent.");
+            notify(T("Could not send the server change. No change was sent."));
         }
 
         break;
@@ -1993,7 +1985,7 @@ void play(jf::Item item, bool from_start, bool shuffle = false, const std::vecto
           size_t start = 0)
 {
     if (s_user_data_busy) {
-        notify("A server change is still pending. Start playback after it finishes.");
+        notify(T("A server change is still pending. Start playback after it finishes."));
         return;
     }
 
@@ -2196,7 +2188,7 @@ int main()
     }
     accounts::set_ps5_user(s_user);
     browse_state::set_user(s_user);   /* each PS5 user keeps their own Emby account */
-    i18n::use_ps5_system_language();
+    i18n::use_language(settings::get().local.language);   /* the PS5's, unless one is chosen */
     /* Restore the saved refresh rate in both directions. The video output may
      * have been left at 120 Hz by a previous process or by early initialization. */
     const bool requested_120hz = settings::get().local.refresh_120 && evo_agc_runtime_supports_120hz();

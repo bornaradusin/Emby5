@@ -37,7 +37,7 @@ Detail details(const Item &item) {
     out.item = item;
     const auto before = provider_identity();
     if (!find_item(item.source, item.id, item.series, &out.item)) {
-        out.error = "This title is no longer available. Refresh the catalogue.";
+        out.error = N_("This title is no longer available. Refresh the catalogue.");
         return out;
     }
     if (item.series) {
@@ -45,11 +45,11 @@ Detail details(const Item &item) {
         out.ok = out.error.empty();
     } else {
         out.ok = !out.item.url.empty();
-        if (!out.ok) out.error = "This title has no playable stream.";
+        if (!out.ok) out.error = N_("This title has no playable stream.");
     }
     if (before != provider_identity()) {
         out = {};
-        out.error = "The provider changed. Reopen this title.";
+        out.error = N_("The provider changed. Reopen this title.");
     }
     return out;
 }

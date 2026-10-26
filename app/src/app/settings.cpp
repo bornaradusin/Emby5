@@ -183,7 +183,11 @@ void load_local()
     // remains false; appearance resets do not change this independent preference.
     const auto *updates = cJSON_GetObjectItemCaseSensitive(j, "checkUpdates");
     s_all.local.check_updates = cJSON_IsBool(updates) ? cJSON_IsTrue(updates) : true;
-    /* Ignore legacy saved language: the PS5 language is authoritative. */
+    /* The interface language chosen in Settings (an empty one follows the PS5).
+     * Older versions' "language" is ignored: the PS5 language was authoritative then. */
+    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "interfaceLanguage"))
+        if (cJSON_IsString(v) && v->valuestring)
+            s_all.local.language = v->valuestring;
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "autoplayNextLocal")) {
         if (cJSON_IsBool(v)) {
             s_all.local.autoplay_next_override_valid = true;
@@ -268,6 +272,7 @@ static bool save_local_snapshot(const Local &l)
     cJSON_AddBoolToObject(j, "nightMode", l.night_mode);
     cJSON_AddBoolToObject(j, "hdmiBitstream", l.hdmi_bitstream);
     cJSON_AddBoolToObject(j, "themeMusic", l.theme_music);
+    cJSON_AddStringToObject(j, "interfaceLanguage", l.language.c_str());
     cJSON_AddBoolToObject(j, "checkUpdates", l.check_updates);
 
     cJSON *st = cJSON_CreateObject();

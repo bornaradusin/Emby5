@@ -1,5 +1,6 @@
 /* Emby5 - SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ui/vod.h"
+#include "app/i18n.h"
 #include "ui/browse_grid.h"
 #include "ui/browse_rows.h"
 #include "ui/search_text.h"
@@ -148,7 +149,7 @@ void Vod::switch_type(bool shows) {
 Action Vod::search(bool from_navigation) {
     if (m_menu.active()||ime::active()) return {};
     synchronise();const auto identity=m_identity;const bool shows=m_shows;const std::weak_ptr<int> life=m_life;
-    ime::request(ime::Kind::Search,shows?"Search VOD TV shows":"Search VOD movies",m_query,
+    ime::request(ime::Kind::Search,shows?T("Search VOD TV shows"):T("Search VOD movies"),m_query,
         [this,life,identity,shows,from_navigation](const std::string &raw) {
             if(life.expired()||identity!=m_identity||identity!=iptv_vod::provider_identity()||shows!=m_shows)return;
             const auto query=search_text(raw);
@@ -166,7 +167,7 @@ Action Vod::search(bool from_navigation) {
 void Vod::open_groups(const std::string &query) {
     m_menu_mode=Categories;m_destinations.clear();std::vector<std::string> labels;const auto needle=search_fold(query);
     for(const auto &group:m_groups)if(search_fold(group.name).find(needle)!=std::string::npos){labels.push_back(group.name);m_destinations.push_back(group.name);}
-    m_menu.open("Jump to category (Triangle: find category)",std::move(labels));
+    m_menu.open(T("Jump to category (Triangle: find category)"),std::move(labels));
 }
 void Vod::enter_from_top(){m_header=count()==0;m_control=m_shows?1:0;m_animating=true;}
 Action Vod::input(uint32_t p) {
@@ -174,7 +175,7 @@ Action Vod::input(uint32_t p) {
     if(m_menu.active()) {
         if(m_menu_mode==Categories&&(p&NUVIO_BTN_TRIANGLE)) {
             const std::weak_ptr<int> life=m_life;const auto identity=m_identity;
-            ime::request(ime::Kind::Search,"Find category","",[this,life,identity](const std::string &q){if(!life.expired()&&identity==m_identity)open_groups(search_text(q));});return action;
+            ime::request(ime::Kind::Search,T("Find category"),"",[this,life,identity](const std::string &q){if(!life.expired()&&identity==m_identity)open_groups(search_text(q));});return action;
         }
         const int choice=m_menu.input(p);
         if(choice<0)return action;
@@ -182,7 +183,7 @@ Action Vod::input(uint32_t p) {
             if(choice==0&&m_client) {
                 m_progress=browse_state::progress(browse_state::provider_scope(*m_client));
                 std::vector<std::string> labels;for(const auto &v:m_progress)labels.push_back(v.source+" - "+v.title);
-                m_menu_mode=ContinueWatching;m_menu.open("VOD Continue Watching",std::move(labels));
+                m_menu_mode=ContinueWatching;m_menu.open(T("VOD Continue Watching"),std::move(labels));
             } else if(choice==1)open_groups();
             else if(choice==2)iptv_vod::refresh(true);
         } else if(m_menu_mode==ContinueWatching&&(size_t)choice<m_progress.size()) {
@@ -194,7 +195,7 @@ Action Vod::input(uint32_t p) {
         }
         return action;
     }
-    if(p&NUVIO_BTN_OPTIONS){remember();m_menu_mode=Options;m_menu.open("VOD options",{"Continue Watching (local)","Jump to category","Refresh catalogue"});return action;}
+    if(p&NUVIO_BTN_OPTIONS){remember();m_menu_mode=Options;m_menu.open(T("VOD options"),{T("Continue Watching (local)"),T("Jump to category"),T("Refresh catalogue")});return action;}
     if(p&NUVIO_BTN_TRIANGLE)return search();
     if(!m_query.empty()&&(p&NUVIO_BTN_CIRCLE)){clear_search();return action;}
     const auto snapshot=iptv_vod::snapshot();
@@ -238,8 +239,8 @@ void Vod::draw(double,float dt) {
     gfx::fill({0,0,gfx::W,gfx::H},kBg);
     const float opacity=m_nav.value;
     if(opacity>.01f) {
-        gfx::text(kPad,176,searching?(m_shows?"VOD TV shows - search results":"VOD movies - search results"):"VOD",{gfx::Bold,50,1400},alpha(kText,opacity));
-        const char *types[]={"Movies","TV Shows"};
+        gfx::text(kPad,176,searching?(m_shows?T("VOD TV shows - search results"):T("VOD movies - search results")):"VOD",{gfx::Bold,50,1400},alpha(kText,opacity));
+        const char *types[]={T("Movies"),T("TV Shows")};
         for(int i=0;i<2;++i) {
             const gfx::Rect button{kPad+i*250.f,204,230.f,60};
             const bool focus=m_focused&&m_header&&m_control==i&&!m_menu.active()&&!ime::active();
@@ -247,7 +248,7 @@ void Vod::draw(double,float dt) {
             if(focus)draw_focus_outline(button,14,opacity);
             gfx::text(button.x+20,button.y+39,types[i],{gfx::SemiBold,24,button.w-40},alpha(kText,opacity));
         }
-        if(searching)gfx::text(kPad+515,243,m_query+" - "+std::to_string(count())+" titles",{gfx::Medium,24,950},alpha(kText2,opacity));
+        if(searching)gfx::text(kPad+515,243,m_query+" - "+TF("{count} titles",{{"count",std::to_string(count())}}),{gfx::Medium,24,950},alpha(kText2,opacity));
     }
     const float clip_top=280.f*opacity,bottom=gfx::H-72.f;
     gfx::push_scissor({0,clip_top,gfx::W,bottom-clip_top});
@@ -269,7 +270,7 @@ void Vod::draw(double,float dt) {
             const auto pos=m_positions.find(key);const int index=r==m_row?m_index:pos==m_positions.end()?0:pos->second.index;
             auto &sx=m_row_scroll[key];sx.to(rows.horizontal(index));m_animating|=sx.step(dt,12.f);
             const float y=rows.card(r,0,m_scroll.value,0).y;
-            gfx::text(kPad,y-35,group.name,{gfx::SemiBold,29,1450},kText);
+            gfx::text(kPad,y-35,group.name=="Movies"||group.name=="TV Shows"?std::string(T(group.name.c_str())):group.name,{gfx::SemiBold,29,1450},kText);
             const auto range=rows.columns(grid_count(group.count),sx.value);auto &page=m_row_pages[key];
             const int limit=range.second-range.first;
             if(page.first!=range.first||page.limit!=limit){page.items=iptv_vod::page(m_shows,group.name,range.first,limit);page.first=range.first;page.limit=limit;}
@@ -285,8 +286,8 @@ void Vod::draw(double,float dt) {
         for(auto i=m_row_pages.begin();i!=m_row_pages.end();)if(!retained.count(i->first))i=m_row_pages.erase(i);else ++i;
     }
     gfx::pop_scissor();
-    if(searching?count()==0:m_groups.empty())gfx::text(kPad,380,searching?"No matching titles in this section. Triangle: edit search.":snapshot.loading?"Loading provider catalogue...":snapshot.error.empty()?"No titles in this section.":snapshot.error,{gfx::Medium,27,1600},kText2);
-    draw_pad_hints(kPad,gfx::H-30,{{PadButton::Triangle,m_shows?"Search TV shows":"Search movies"},{PadButton::Square,"Movies / TV Shows"},{PadButton::Options,"Categories / options"},{PadButton::Circle,searching?"Clear search":"Back"}},0,22);
+    if(searching?count()==0:m_groups.empty())gfx::text(kPad,380,searching?T("No matching titles in this section. Triangle: edit search."):snapshot.loading?T("Loading provider catalogue..."):snapshot.error.empty()?std::string(T("No titles in this section.")):i18n::message(snapshot.error),{gfx::Medium,27,1600},kText2);
+    draw_pad_hints(kPad,gfx::H-30,{{PadButton::Triangle,m_shows?T("Search TV shows"):T("Search movies")},{PadButton::Square,T("Movies / TV Shows")},{PadButton::Options,T("Categories / options")},{PadButton::Circle,searching?T("Clear search"):T("Back")}},0,22);
     m_menu.draw();m_animating|=art::animating()||(snapshot.loading&&m_groups.empty())||ime::active();
 }
 } // namespace ui

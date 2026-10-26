@@ -6,7 +6,7 @@
 | **Playback** | Maximum quality, video upscaling, subtitles (mode, size, background), playing the next episode, Are you still watching?, skipping intros, audio delay, night mode, HDMI bitstream, theme music, refresh rate |
 | **Discover/Seerr** | [Seerr](Seerr)'s address and sign-in |
 | **Live TV** | [Live TV](Live-TV) sources and groups, and [VOD](VOD) at the bottom |
-| **System** | Appearance, What's New, updates, version, server, storage |
+| **System** | Appearance, language, What's New, updates, version, server, storage |
 
 Audio language, subtitle mode and autoplay follow your Emby account, so they apply in every Emby app.
 
@@ -15,6 +15,7 @@ Audio language, subtitle mode and autoplay follow your Emby account, so they app
 ```text
 System
 |-- Appearance
+|-- Language              PS5 / a language
 |-- What's New
 |-- Check for updates     On / Off
 |-- Installed version
@@ -23,6 +24,7 @@ System
 ```
 
 - **Appearance**: themes and the look of the app, see [Appearance](Appearance).
+- **Language**: the interface's language, see [Language](#language).
 - **Installed version**, **Connected server** and **Persistent storage** are for reading only.
 
 ### Updates
@@ -31,13 +33,13 @@ System
 
 ## Language
 
-Emby5 uses the PS5's system language. There's no separate language setting.
+**Settings › System › Language** chooses the interface's language. **PS5**, the default, follows the PS5's system language (English when Emby5 doesn't have it); press **X**, or left and right, to choose a language yourself. The change shows at once and is kept.
 
-- **Translated:** English, Norwegian, French, Spanish, German, Italian, Portuguese, and from 1.2.7 **Chinese (Simplified and Traditional)**. A few newer Settings rows (such as the Live TV sources) are in English in every language.
-- **Menus only:** Japanese, Korean, Dutch, Russian, Polish, Danish, Swedish, Finnish, Turkish, Arabic, Czech, Greek, Hungarian, Romanian, Thai, Indonesian, Vietnamese and Ukrainian show the main menu words in their language, and the rest in English.
-- Any other language shows English.
+From 1.2.8 the whole interface is translated in every language: English, Japanese, French, Spanish, German, Italian, Portuguese, Dutch, Russian, Korean, Chinese (Simplified and Traditional), Polish, Danish, Swedish, Norwegian, Finnish, Turkish, Arabic, Czech, Greek, Hungarian, Romanian, Thai, Indonesian, Vietnamese, Ukrainian, **Croatian** and **Serbian** (Cyrillic). That includes dates, genres, and the names of audio and subtitle languages. Croatian and Serbian are only in this list, as the PS5 has no such system language.
 
-Before 1.2.7 the languages' menu words were mixed up: Japanese and Dutch showed English, Russian showed Dutch, Korean showed Russian, Simplified Chinese showed Korean, and so on down the list. 1.2.7 fixes that.
+What comes from your server or provider (titles, descriptions, channel and group names) stays as it is, and so do the theme presets' names.
+
+Before 1.2.8 most languages had only the main menu words translated, and a few newer screens were in English in every language. Before 1.2.7 the languages' menu words were mixed up (Simplified Chinese showed Korean, and so on).
 
 ## Refresh rate
 

@@ -1,6 +1,7 @@
 /* Bounded, partial-safe Xtream catalogue requests. GPL-3.0-or-later */
 #pragma once
 #include "app/iptv_xtream.h"
+#include "app/i18n.h"
 #include "app/request_budget.h"
 #include "jf/jf_catalogue_http.h"
 #include "app/catalogue_request_queue.h"
@@ -41,11 +42,11 @@ inline Scan fetch(const iptv_xtream::Credentials &creds, const std::string &cate
     auto transfer=[&](const std::string &url,const std::function<bool(const std::string&)> &accept) {
         const auto stop=[&]{return cancelled()||playback_active();};
         RequestTurn turn(key,stop);
-        if(!turn){jf::CatalogueHttpResult r;r.cancelled=true;r.error=playback_active()?"Refresh paused during playback":"Catalogue request cancelled";return r;}
+        if(!turn){jf::CatalogueHttpResult r;r.cancelled=true;r.error=playback_active()?N_("Refresh paused during playback"):N_("Catalogue request cancelled");return r;}
         // Waiting for another section is not network inactivity for this request.
         budget.progress();
         auto r=jf::http_catalogue_array(url,accept,stop,[&](uint64_t){budget.progress();},90);
-        if(r.cancelled&&playback_active())r.error="Refresh paused during playback";
+        if(r.cancelled&&playback_active())r.error=N_("Refresh paused during playback");
         return r;
     };
     bool resuming=retry&&retry->list_ok&&!retry->categories.empty()&&!retry->failed.empty();
@@ -84,7 +85,7 @@ inline Scan fetch(const iptv_xtream::Credentials &creds, const std::string &cate
     // A progressive snapshot can therefore never masquerade as a full refresh.
     out.failed=ids;notify();unsigned consecutive_transport_failures=0;
     for(const auto &id:ids) {
-        if(cancelled()){error="Catalogue request cancelled";break;}
+        if(cancelled()){error=N_("Catalogue request cancelled");break;}
         auto url=iptv_xtream::api_url(creds,item_action);
         if(!id.empty())url+="&category_id="+encode(id);
         Json batch(cJSON_CreateArray(),cJSON_Delete);if(!batch)throw std::bad_alloc();
@@ -106,7 +107,7 @@ inline Scan fetch(const iptv_xtream::Credentials &creds, const std::string &cate
             if(++pending>=256)flush();
             return !cancelled();
         });
-        if(cancelled()){error="Catalogue request cancelled";break;}
+        if(cancelled()){error=N_("Catalogue request cancelled");break;}
         flush(); // verified complete objects remain usable after a truncated reply
         if(response.complete) {
             // A valid empty array authoritatively clears just this category.
@@ -123,7 +124,7 @@ inline Scan fetch(const iptv_xtream::Credentials &creds, const std::string &cate
         if(response.cancelled||response.status==401||response.status==403||consecutive_transport_failures>=3)break;
     }
     out.complete=out.failed.empty()&&(out.list_ok||out.whole);
-    out.error=out.complete?"":error.empty()?"Catalogue refresh incomplete":error;
+    out.error=out.complete?"":error.empty()?N_("Catalogue refresh incomplete"):error;
     notify();return out;
 }
 // Footer metadata travels atomically with a VOD cache; Live keeps it in its JSON.
@@ -153,7 +154,7 @@ inline Scan read_scan(const cJSON *j) {
     s.done=s.total>=s.failed.size()?s.total-s.failed.size():0;
     // Missing/contradictory metadata must not suppress a refresh as a fresh cache.
     if(!s.failed.empty())s.complete=false;
-    if(!s.complete&&s.error.empty())s.error="Cached catalogue requires refresh";
+    if(!s.complete&&s.error.empty())s.error=N_("Cached catalogue requires refresh");
     return s;
 }
 }

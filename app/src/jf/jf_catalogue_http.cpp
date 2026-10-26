@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "jf_catalogue_http.h"
+#include "app/i18n.h"
 #include "json_array_stream.h"
 #include <algorithm>
 #include <cerrno>
@@ -46,11 +47,11 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
     const std::function<void(uint64_t)> &activity,int idle_seconds) {
     CatalogueHttpResult result;
     if(url.rfind("http://",0)!=0&&url.rfind("https://",0)!=0) {
-        result.error="Invalid catalogue address";return result;
+        result.error=N_("Invalid catalogue address");return result;
     }
     Deadline deadline{Clock::now(),Clock::now(),std::chrono::seconds(std::max(1,idle_seconds)),cancelled};
     AVIOInterruptCB interrupt{Deadline::check,&deadline};
-    if(Deadline::check(&deadline)){result.cancelled=true;result.error="Catalogue request cancelled";return result;}
+    if(Deadline::check(&deadline)){result.cancelled=true;result.error=N_("Catalogue request cancelled");return result;}
     AVDictionary *options=nullptr;
     av_dict_set(&options,"method","GET",0);
     // JSON is not a seekable media file. No byte-range probe or reconnect replay.
@@ -67,8 +68,8 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
     if(opened<0) {
         result.status=http_status(opened);result.cancelled=deadline.aborted;
         result.transport_error=!result.status&&!result.cancelled;
-        result.error=result.cancelled?"Catalogue request cancelled":deadline.timed_out?
-            "Catalogue connection made no progress":result.status?"HTTP "+std::to_string(result.status):
+        result.error=result.cancelled?N_("Catalogue request cancelled"):deadline.timed_out?
+            N_("Catalogue connection made no progress"):result.status?"HTTP "+std::to_string(result.status):
             "Catalogue connection failed ("+std::to_string(opened)+")";
         return result;
     }
@@ -82,7 +83,7 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
         n=avio_read_partial(io,buffer,sizeof buffer);
         if(n<=0)break;
         deadline.last=Clock::now();result.bytes+=(uint64_t)n;
-        if(result.bytes>max_bytes){result.error="Catalogue exceeds streaming safety limit";break;}
+        if(result.bytes>max_bytes){result.error=N_("Catalogue exceeds streaming safety limit");break;}
         if(activity)activity(result.bytes);
         if(!parser.feed(reinterpret_cast<const char*>(buffer),(size_t)n)) {result.error=parser.error();break;}
         // Parsing/disk publication is local work, not a stalled network read.
@@ -90,8 +91,8 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
     }
     result.items=parser.items();result.cancelled=deadline.aborted;
     if(result.error.empty()) {
-        if(result.cancelled)result.error="Catalogue request cancelled";
-        else if(deadline.timed_out)result.error="Catalogue transfer stopped making progress";
+        if(result.cancelled)result.error=N_("Catalogue request cancelled");
+        else if(deadline.timed_out)result.error=N_("Catalogue transfer stopped making progress");
         else if(n<0&&n!=AVERROR_EOF && !(n==AVERROR(EIO)&&declared<0)) {
             result.error="Catalogue read failed ("+std::to_string(n)+")";result.transport_error=true;
         } else if(!parser.finish())result.error=parser.error();

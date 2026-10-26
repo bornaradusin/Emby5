@@ -68,6 +68,7 @@ struct Local : Appearance {
     bool night_mode = false;     /* compress loud and quiet together, dialogue lifted */
     bool hdmi_bitstream = false; /* Dolby Digital (Plus) and DTS to the TV/receiver undecoded (emby5_bitstream) */
     bool check_updates = true;  /* automatic release checks/notifications; never installation */
+    std::string language;        /* "" follows the PS5's language, else an i18n::language_code */
     bool theme_music = true;     /* a title's theme song, quietly, on its page */
 };
 

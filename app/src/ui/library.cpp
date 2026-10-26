@@ -30,10 +30,10 @@ struct Sort {
     bool desc;
 };
 const Sort kSorts[] = {
-    {"Nylig lagt til", "DateCreated,SortName", true},
-    {"A\xE2\x80\x93\xC3\x85", "SortName", false},
-    {"Utgivelses\xC3\xA5r", "PremiereDate,SortName", true},
-    {"Vurdering", "CommunityRating,SortName", true},
+    {N_("Nylig lagt til"), "DateCreated,SortName", true},
+    {N_("A\xE2\x80\x93\xC3\x85"), "SortName", false},
+    {N_("Utgivelses\xC3\xA5r"), "PremiereDate,SortName", true},
+    {N_("Vurdering"), "CommunityRating,SortName", true},
 };
 constexpr int kNumSorts = 4;
 constexpr int kSortByName = 1;
@@ -634,7 +634,7 @@ void Library::draw_filters(float dt)
                 break;
             case FDecade: {
                 label = T("Tiår");
-                char b[32];
+                char b[64];
                 std::snprintf(b, sizeof b, T("%d-tallet"), kDecades[m_filters.decade]);
                 value = m_filters.decade > 0 ? std::string(b) : std::string(T("Alle"));
                 break;
@@ -899,7 +899,7 @@ void Library::draw(double now, float dt)
     (void)focus_i;
 
     if (items.empty())
-        gfx::text(gfx::W / 2, 560, failed?"Could not load this list. Press X to retry.":loading || total < 0 ? T("Henter \xE2\x80\xA6")
+        gfx::text(gfx::W / 2, 560, failed?T("Could not load this list. Press X to retry."):loading || total < 0 ? T("Henter \xE2\x80\xA6")
                   : active_filters() > 0 ? T("Ingen titler passer filteret") : T("Ingenting her ennå"),
                   {gfx::Medium, 30}, kText2, 1);
     m_menu.draw(dt, &m_animating);

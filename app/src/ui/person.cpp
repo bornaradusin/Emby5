@@ -18,22 +18,10 @@ namespace {
 constexpr float kPosterW = 220, kPosterH = 330, kGap = 32;
 constexpr float kRowsTop = 640, kRowH = 470;
 
-/* "1971-03-12T00:00:00.0000000Z" -> "12. mars 1971" */
+/* "1971-03-12T00:00:00.0000000Z" -> "March 12, 1971" in the interface's language */
 std::string born_label(const std::string &iso)
 {
-    static const char *const months[] = {"januar", "februar", "mars",     "april",   "mai",      "juni",
-                                         "juli",   "august",  "september", "oktober", "november", "desember"};
-    int y = 0, m = 0, d = 0;
-    if (std::sscanf(iso.c_str(), "%d-%d-%d", &y, &m, &d) != 3 || m < 1 || m > 12)
-        return std::string();
-    static const char *const en[] = {"January", "February", "March",     "April",   "May",      "June",
-                                     "July",    "August",   "September", "October", "November", "December"};
-    char b[48];
-    if (i18n::english())
-        std::snprintf(b, sizeof b, "%s %d, %d", en[m - 1], d, y);   /* March 12, 1971 */
-    else
-        std::snprintf(b, sizeof b, "%d. %s %d", d, months[m - 1], y);
-    return b;
+    return i18n::date(iso);
 }
 
 } // namespace
@@ -119,7 +107,7 @@ void Person::draw(double now, float dt)
 
     const jf::Item &p = m_view.person;
     const std::vector<jf::Item> *rows[2] = {&m_view.movies, &m_view.series};
-    const char *titles[2] = {"Filmer", "Serier"};
+    const char *titles[2] = {T("Filmer"), T("Serier")};
 
     /* The background takes its colour from the focused title (or the first). */
     const jf::Item *focus_item = nullptr;
