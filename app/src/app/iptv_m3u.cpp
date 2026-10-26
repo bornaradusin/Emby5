@@ -12,6 +12,8 @@
 namespace iptv_m3u {
 namespace {
 std::string path() { return evo_data_path("emby5/iptv-m3u.txt"); }
+std::string guide_path() { return evo_data_path("emby5/iptv-m3u-guide.txt"); }            /* Settings */
+std::string named_guide_path() { return evo_data_path("emby5/iptv-m3u-guide-named.txt"); } /* the playlist's */
 std::string strip(const std::string &s) {
     size_t a=s.find_first_not_of(" \t\r\n"),b=s.find_last_not_of(" \t\r\n");
     return a==std::string::npos?std::string():s.substr(a,b-a+1);
@@ -43,6 +45,29 @@ std::string resolve(const std::string &base,const std::string &url) {
     if(url.front()=='/') return origin(base)+url;
     auto pos=base.find_last_of('/'); return pos==std::string::npos?url:base.substr(0,pos+1)+url;
 }
+std::string read_line(const std::string &file) {
+    FILE *f=std::fopen(file.c_str(),"rb"); if(!f) return {};
+    char buf[4096]={}; const size_t n=std::fread(buf,1,sizeof(buf)-1,f); std::fclose(f);
+    const std::string value=strip(std::string(buf,n)); return valid(value)?value:std::string();
+}
+bool write_line(const std::string &file,const std::string &value) {
+    evo_mkdir(evo_data_dir()); evo_mkdir(evo_data_path("emby5"));
+    if(value.empty()) {std::remove(file.c_str());return true;}
+    const std::string tmp=file+".tmp";
+    FILE *f=std::fopen(tmp.c_str(),"wb"); if(!f) return false;
+    bool ok=std::fwrite(value.data(),1,value.size(),f)==value.size();
+    ok=std::fclose(f)==0&&ok;
+    if(ok) ok=std::rename(tmp.c_str(),file.c_str())==0;
+    if(!ok) std::remove(tmp.c_str()); return ok;
+}
+}
+std::string user_guide_url() { return read_line(guide_path()); }
+std::string playlist_guide_url() { return read_line(named_guide_path()); }
+std::string guide_url() { const auto own=user_guide_url(); return own.empty()?playlist_guide_url():own; }
+bool save_guide_url(const std::string &url) {
+    const std::string value=strip(url);
+    if(!value.empty()&&!valid(value)) return false;
+    return write_line(guide_path(),value);
 }
 std::string playlist_url() {
     FILE *f=std::fopen(path().c_str(),"rb"); if(!f) return {};
@@ -71,7 +96,16 @@ bool load_catalog(const std::string &url,iptv_xtream::Catalog *out,std::string *
     while(std::getline(stream,line)) {
         if(!line.empty()&&line.back()=='\r') line.pop_back();
         line=strip(line); if(line.empty()) continue;
-        if(first) {first=false; if(line.rfind("#EXTM3U",0)!=0) {if(error)*error=N_("Not an extended M3U channel playlist");return false;}continue;}
+        if(first) {
+            first=false; if(line.rfind("#EXTM3U",0)!=0) {if(error)*error=N_("Not an extended M3U channel playlist");return false;}
+            /* The playlist's own guide: url-tvg or x-tvg-url, the first of a comma-separated list. */
+            std::string guide=attribute(line,"url-tvg"); if(guide.empty()) guide=attribute(line,"x-tvg-url");
+            if(guide.empty()) guide=attribute(line,"tvg-url");
+            guide=strip(guide.substr(0,guide.find(',')));
+            fresh.guide_url=guide.empty()?std::string():resolve(url,guide);
+            if(!valid(fresh.guide_url)) fresh.guide_url.clear();
+            continue;
+        }
         if(line.rfind("#EXTINF",0)==0) {extinf=line;continue;}
         if(line.front()=='#') continue;
         if(extinf.empty() || fresh.channels.size()>=20000) {extinf.clear();continue;}
@@ -80,6 +114,7 @@ bool load_catalog(const std::string &url,iptv_xtream::Catalog *out,std::string *
         ch.name=strip(comma==std::string::npos?"":extinf.substr(comma+1));
         if(ch.name.empty()) ch.name=attribute(extinf,"tvg-name");
         ch.logo=resolve(url,attribute(extinf,"tvg-logo"));
+        ch.epg_id=strip(attribute(extinf,"tvg-id"));
         ch.category_id=attribute(extinf,"group-title");
         if(ch.category_id.empty()) ch.category_id="Other Channels";
         ch.extension=resolve(url,line); if (!valid(ch.extension)) { extinf.clear(); continue; } ch.id="m3u:"+std::to_string(fresh.channels.size()); ch.source="M3U";
@@ -101,6 +136,7 @@ bool load_catalog(const std::string &url,iptv_xtream::Catalog *out,std::string *
         fresh.channels.push_back(std::move(ch));
     }
     if(fresh.channels.empty()) {if(error)*error=N_("No playable channels found");return false;}
+    if(fresh.guide_url!=playlist_guide_url()) write_line(named_guide_path(),fresh.guide_url);   /* for the TV guide */
     *out=std::move(fresh);return true;
 }
 }

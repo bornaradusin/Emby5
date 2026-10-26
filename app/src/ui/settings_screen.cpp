@@ -174,6 +174,11 @@ std::string SettingsScreen::value(Row r) const
     case VODShowsStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.shows,s.show_count,iptv_catalogue::Unit::Shows);}
     case VODM3UStatus: {const auto s=iptv_vod::snapshot();return iptv_catalogue::describe(s.playlist,s.m3u_count,iptv_catalogue::Unit::Movies);}
     case M3UUrl: {const auto url=iptv_m3u::playlist_url();return url.empty()?std::string(T("X to enter")):url;}
+    case M3UGuide: {   /* the address entered here, else the playlist's own */
+        const auto own=iptv_m3u::user_guide_url();
+        if(!own.empty())return own;
+        return iptv_m3u::playlist_guide_url().empty()?std::string(T("X to enter")):std::string(T("From the playlist"));
+    }
     case IPTVServer: return m_iptv_creds.server.empty() ? std::string(T("X to enter")) : m_iptv_creds.server;
     case IPTVUsername: return m_iptv_creds.username.empty() ? std::string(T("X to enter")) : m_iptv_creds.username;
     case IPTVPassword: return m_iptv_creds.password.empty() ? T("X to enter") : "********";
@@ -531,6 +536,10 @@ Action SettingsScreen::input(uint32_t p)
                          [this](const std::string &url) {
                              if(iptv_m3u::save_playlist_url(url)) {iptv_live::refresh(&m_client,true);iptv_vod::refresh(true);}
                          });
+        }
+        else if(m_row==M3UGuide) {
+            ime::request(ime::Kind::Url,T("M3U TV guide (XMLTV) URL (empty: the playlist's own)"),iptv_m3u::user_guide_url(),
+                         [](const std::string &url) { iptv_m3u::save_guide_url(url); });   /* the guide picks it up */
         }
         else if (m_row == IPTVServer || m_row == IPTVUsername || m_row == IPTVPassword)
             iptv_edit((Row)m_row);

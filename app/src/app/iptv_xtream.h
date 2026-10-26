@@ -11,9 +11,12 @@ struct Channel { std::string id, name, category_id, logo, extension;
     std::string source = "Xtream", emby_id, now, next, guide_time;
     int64_t now_start=0, now_end=0, next_start=0, next_end=0;
     std::string category_key; // Stable provider ID, separate from the displayed group name.
+    std::string epg_id;       // The channel's id in an XMLTV guide (M3U tvg-id).
 };
 using Category = iptv_catalogue::Category;
-struct Catalog { std::vector<Category> categories; std::vector<Channel> channels; iptv_catalogue::Scan scan; };
+struct Catalog { std::vector<Category> categories; std::vector<Channel> channels; iptv_catalogue::Scan scan;
+    std::string guide_url; // An M3U playlist's own XMLTV guide (url-tvg / x-tvg-url), when it names one.
+};
 std::string api_url(const Credentials &credentials, const std::string &action);
 std::string live_url(const Credentials &credentials, const Channel &channel);
 bool authenticate(const Credentials &credentials, std::string *error);

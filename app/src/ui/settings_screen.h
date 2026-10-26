@@ -33,7 +33,7 @@ public:
         VolumeBoost, NightMode, Bitstream,
         ThemeMusic, Refresh,
         SeerrOn, SeerrUrl, SeerrAuth, SeerrAccount, SeerrTest,
-        EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, M3UUrl, M3UStatus, IPTVSummary, IPTVCategories,
+        EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, M3UUrl, M3UGuide, M3UStatus, IPTVSummary, IPTVCategories,
         VODStatus, VODMoviesStatus, VODShowsStatus, VODM3UStatus, VODInterval, VODRefresh,
         Theme, Accent, Background, BackgroundArt, BackdropDim, UiTextSize, PosterSize,
         ControlStyle, FocusOutline, PosterEnlarge, ReducedMotion, DescriptionScroll,

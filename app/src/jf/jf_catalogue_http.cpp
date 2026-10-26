@@ -41,10 +41,14 @@ int http_status(int rc) {
     }
 }
 }
-CatalogueHttpResult http_catalogue_array(const std::string &url,
-    const std::function<bool(const std::string &)> &item,
+namespace {
+/* One GET read as it arrives: open (with the catalogue's deadline and error
+ * texts), then chunk() for each piece until the end, a refusal or max_bytes. */
+CatalogueHttpResult transfer(const std::string &url,const char *headers,
+    const std::function<bool(const unsigned char *,size_t,std::string *)> &chunk,
+    const std::function<bool(std::string *)> &finish,
     const std::function<bool()> &cancelled,
-    const std::function<void(uint64_t)> &activity,int idle_seconds) {
+    const std::function<void(uint64_t)> &activity,int idle_seconds,uint64_t max_bytes,size_t *items) {
     CatalogueHttpResult result;
     if(url.rfind("http://",0)!=0&&url.rfind("https://",0)!=0) {
         result.error=N_("Invalid catalogue address");return result;
@@ -58,7 +62,7 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
     av_dict_set(&options,"seekable","0",0);
     av_dict_set(&options,"reconnect","0",0);
     av_dict_set(&options,"multiple_requests","0",0);
-    av_dict_set(&options,"headers","Accept: application/json\r\nConnection: close\r\n",0);
+    av_dict_set(&options,"headers",headers,0);
     av_dict_set_int(&options,"rw_timeout",(int64_t)std::max(1,idle_seconds)*1000000,0);
     av_dict_set_int(&options,"timeout",(int64_t)std::max(1,idle_seconds)*1000000,0);
     AVIOContext *io=nullptr;
@@ -75,9 +79,7 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
     }
     result.status=200;deadline.last=Clock::now();
     const int64_t declared=avio_size(io);
-    JsonArrayStream parser(item);
     unsigned char buffer[16384];int n=0;
-    constexpr uint64_t max_bytes=512ull<<20;
     while(true) {
         if(Deadline::check(&deadline)){n=AVERROR_EXIT;break;}
         n=avio_read_partial(io,buffer,sizeof buffer);
@@ -85,20 +87,55 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
         deadline.last=Clock::now();result.bytes+=(uint64_t)n;
         if(result.bytes>max_bytes){result.error=N_("Catalogue exceeds streaming safety limit");break;}
         if(activity)activity(result.bytes);
-        if(!parser.feed(reinterpret_cast<const char*>(buffer),(size_t)n)) {result.error=parser.error();break;}
+        if(!chunk(buffer,(size_t)n,&result.error))break;
         // Parsing/disk publication is local work, not a stalled network read.
         deadline.last=Clock::now();
     }
-    result.items=parser.items();result.cancelled=deadline.aborted;
+    if(items)result.items=*items;
+    result.cancelled=deadline.aborted;
     if(result.error.empty()) {
         if(result.cancelled)result.error=N_("Catalogue request cancelled");
         else if(deadline.timed_out)result.error=N_("Catalogue transfer stopped making progress");
         else if(n<0&&n!=AVERROR_EOF && !(n==AVERROR(EIO)&&declared<0)) {
             result.error="Catalogue read failed ("+std::to_string(n)+")";result.transport_error=true;
-        } else if(!parser.finish())result.error=parser.error();
+        } else if(!finish(&result.error)){}
         else result.complete=true;
     }
+    if(items)result.items=*items;
     if(deadline.timed_out)result.transport_error=true;
     return result;
+}
+}
+CatalogueHttpResult http_catalogue_array(const std::string &url,
+    const std::function<bool(const std::string &)> &item,
+    const std::function<bool()> &cancelled,
+    const std::function<void(uint64_t)> &activity,int idle_seconds) {
+    JsonArrayStream parser(item);
+    size_t items=0;
+    return transfer(url,"Accept: application/json\r\nConnection: close\r\n",
+        [&](const unsigned char *data,size_t n,std::string *error) {
+            const bool ok=parser.feed(reinterpret_cast<const char*>(data),n);
+            items=parser.items();
+            if(!ok)*error=parser.error();
+            return ok;
+        },
+        [&](std::string *error) {
+            const bool ok=parser.finish();
+            items=parser.items();
+            if(!ok)*error=parser.error();
+            return ok;
+        },cancelled,activity,idle_seconds,512ull<<20,&items);
+}
+CatalogueHttpResult http_stream(const std::string &url,
+    const std::function<bool(const char *, size_t)> &bytes,
+    const std::function<bool()> &cancelled,
+    const std::function<void(uint64_t)> &activity,int idle_seconds,uint64_t max_bytes) {
+    return transfer(url,"Accept: application/xml, text/xml, */*\r\nConnection: close\r\n",
+        [&](const unsigned char *data,size_t n,std::string *error) {
+            if(bytes(reinterpret_cast<const char*>(data),n))return true;
+            *error="stopped by the reader";   /* the caller knows why, and says so */
+            return false;
+        },
+        [](std::string *){return true;},cancelled,activity,idle_seconds,max_bytes,nullptr);
 }
 }

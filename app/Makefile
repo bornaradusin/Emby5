@@ -24,7 +24,7 @@ INCS := -Isrc -Isrc/shim -Ithird_party \
         -Iengine/core/include -Iengine/include -Iengine/pp/include \
         -Iengine/media/include -Iengine/addons/include -Iengine/shaders/agc \
         -I$(HB)/include -I$(HB)/include/freetype2 -I$(HB)/include/harfbuzz \
-        -I$(HB)/include/fribidi
+        -I$(HB)/include/fribidi -I$(HB)/include/libxml2
 
 CFLAGS   := -O2 -g -Wall -Wno-unused-parameter $(TFLAGS) $(DEFS) $(INCS)
 CXXFLAGS := -O2 -g -Wall -Wno-unused-parameter -std=c++17 $(TFLAGS) $(DEFS) $(INCS)

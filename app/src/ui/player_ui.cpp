@@ -13,6 +13,7 @@
 #include "app/iptv_live.h"
 #include "app/iptv_navigation.h"
 #include "app/settings.h"
+#include "app/epg.h"
 #include "app/syncplay.h"
 #include "app/i18n.h"
 #include "emby5_playback.h"
@@ -118,6 +119,8 @@ void PlayerUi::begin(const NuvioRequest *req, double now)
     a_loading.snap(m_music ? 0.f : 1.f);
     if (m_music)
         a_controls.snap(1.f);
+    m_stats = !m_music && settings::get().local.playback_info;   /* as it was left */
+    a_stats.snap(m_stats ? 1.f : 0.f);
     m_dirty = true;
 }
 
@@ -137,6 +140,8 @@ void PlayerUi::draw_live_epg(float opacity)
                   {gfx::Medium,20,1150},alpha(0xfff5fff6u,opacity));
     iptv_xtream::Channel ch;
     if (iptv_live::channel_by_id(m_live_channel_id,&ch)) {
+        if (ch.now.empty() && ch.next.empty())   /* the TV guide's, when the source has no now/next of its own (M3U) */
+            epg::now_next(ch, &ch.now, &ch.next, &ch.now_start, &ch.now_end);
         const float x=70.f, y=75.f, w=830.f, h=ch.now.empty() && ch.next.empty()?115.f:196.f;
         gfx::fill({x,y,w,h},alpha(0xc9000000u,opacity),20);
         gfx::text(x+24,y+38,ch.name,{gfx::Bold,27,w-48},alpha(0xfff5fff6u,opacity));
@@ -709,9 +714,12 @@ void PlayerUi::input_local(const nuvio_input_state &in, const NuvioStatus &st, s
         out.push_back({OsdCmd::Stop});
         return;
     }
-    if ((p & NUVIO_BTN_L3) && !m_music) {   /* the playback info panel, on and off */
+    if ((p & NUVIO_BTN_L3) && !m_music) {   /* the playback info panel, on and off, kept for the next video */
         m_stats = !m_stats;
         a_stats.to(m_stats ? 1.f : 0.f);
+        settings::Local l = settings::get().local;
+        l.playback_info = m_stats;
+        settings::set_local(l);
         return;
     }
     if (m_music) {

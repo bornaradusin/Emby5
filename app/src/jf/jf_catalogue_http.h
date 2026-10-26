@@ -22,4 +22,11 @@ CatalogueHttpResult http_catalogue_array(const std::string &url,
     const std::function<bool()> &cancelled={},
     const std::function<void(uint64_t)> &activity={},
     int idle_seconds=45);
+// The same transport for any body (an XMLTV guide, say): bytes receives each
+// chunk as it arrives; returning false stops the transfer. max_bytes bounds it.
+CatalogueHttpResult http_stream(const std::string &url,
+    const std::function<bool(const char *, size_t)> &bytes,
+    const std::function<bool()> &cancelled={},
+    const std::function<void(uint64_t)> &activity={},
+    int idle_seconds=45, uint64_t max_bytes=512ull<<20);
 }

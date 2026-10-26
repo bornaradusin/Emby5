@@ -1,4 +1,4 @@
-Emby5 is a native Emby and Jellyfin client for a PS5 that runs homebrew. It browses your libraries, plays your films, shows and music with the PS5's own video decoder, and adds Live TV, video on demand and Seerr requests. The app's title ID is `PPSA99515` and its tile on the home screen is called **Emby5**. This wiki describes Emby5 **1.2.8**.
+Emby5 is a native Emby and Jellyfin client for a PS5 that runs homebrew. It browses your libraries, plays your films, shows and music with the PS5's own video decoder, and adds Live TV, video on demand and Seerr requests. The app's title ID is `PPSA99515` and its tile on the home screen is called **Emby5**. This wiki describes Emby5 **1.2.9**.
 
 ![The Emby5 home screen](https://raw.githubusercontent.com/bornaradusin/Emby5/main/docs/Home.jpg)
 

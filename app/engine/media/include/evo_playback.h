@@ -46,6 +46,9 @@ double evo_pb_video_clock_s(void);    /* raw video presentation clock (s)    */
 double evo_pb_video_fps(void);        /* 0 until a stream is open            */
 void   evo_pb_queue_depth(int *vpkts, int *apkts, int *ablocks);  /* debug overlay */
 int    evo_pb_active_backend(void);   /* evo_vdec_backend of the live decoder */
+/* Emby5: video frames dropped because they were late (the presenter could not
+ * keep up), since the stream opened. */
+unsigned long long evo_pb_frames_dropped(void);
 
 /* The audio-preferred media clock (kept under its historical name — many call
  * sites). evo_pb_position_s() is the façade alias. */

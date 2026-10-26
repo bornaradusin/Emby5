@@ -619,6 +619,7 @@ double evo_pb_audio_clock_s(void)   { return (double)audio_clock_seconds; }
 double evo_pb_video_clock_s(void)   { return video_clock_seconds; }
 double evo_pb_video_fps(void)       { return video_fps; }
 int evo_pb_active_backend(void)     { return (int)evo_vdec_active(g_vdec); }
+unsigned long long evo_pb_frames_dropped(void) { return (unsigned long long)g_pp_pb.stats.frames_late_dropped; }
 
 void evo_pb_queue_depth(int *vpkts, int *apkts, int *ablocks)
 {

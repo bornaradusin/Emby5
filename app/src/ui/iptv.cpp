@@ -6,7 +6,9 @@
 #include "ui/search_text.h"
 #include "platform/ime.h"
 #include "gfx/art.h"
+#include "app/epg.h"
 #include <algorithm>
+#include <ctime>
 #include <set>
 
 namespace ui {
@@ -20,6 +22,7 @@ void IPTV::activate() {
         m_scope = scope; m_groups = std::make_shared<const iptv_navigation::Groups>();
         m_positions.clear(); m_row_scroll.clear(); m_query.clear(); m_results.clear(); m_return = {};
         m_index = m_row = 0; m_header = false; m_guide_requested.clear(); m_scroll.snap(0); m_seen = ~uint64_t(0);
+        m_guide = false; epg::reset();   /* another server or provider: another guide */
     }
     iptv_xtream::load_credentials(&m_creds);
     m_store.load(m_creds.server + "|" + m_creds.username);
@@ -29,7 +32,8 @@ void IPTV::activate() {
     m_animating = true;
 }
 bool IPTV::needs_redraw() const {
-    return m_seen != iptv_live::summary().generation || m_hold_dir != 0 || m_search_focus != 0;
+    return m_seen != iptv_live::summary().generation || m_hold_dir != 0 || m_search_focus != 0 ||
+           (m_guide && (epg::generation() != m_guide_seen || (int64_t)std::time(nullptr) / 60 != m_guide_minute));
 }
 void IPTV::synchronise() {
     const auto state=iptv_live::summary();
@@ -210,7 +214,12 @@ void IPTV::update_hold(uint32_t held, double now) {
     const double elapsed = now - m_hold_since;
     if (elapsed < 1.) return;
     const int speed = std::min(5, 2 + (int)(elapsed - 1));
-    if (now - m_hold_last >= .19/speed) { synchronise(); move(dir,nullptr); m_hold_last = now; }
+    if (now - m_hold_last >= .19/speed) {
+        synchronise();
+        if (m_guide) guide_move(dir == NUVIO_BTN_DOWN ? 1 : -1);   /* the guide: channel by channel */
+        else move(dir,nullptr);
+        m_hold_last = now;
+    }
 }
 Action IPTV::input(uint32_t p) {
     Action action;
@@ -237,6 +246,8 @@ Action IPTV::input(uint32_t p) {
         }
         return action;
     }
+    if (m_guide && !(p & (NUVIO_BTN_OPTIONS | NUVIO_BTN_TRIANGLE))) return guide_input(p);
+    if ((p & NUVIO_BTN_SQUARE) && !m_header && count() > 0) { open_guide(); return action; }
     if (p & NUVIO_BTN_OPTIONS) {
         m_menu_mode = Options;
         std::vector<std::string> labels{T("Jump to group"), T("Pinned groups")};
@@ -257,6 +268,7 @@ Action IPTV::input(uint32_t p) {
 }
 void IPTV::draw(double now, float dt) {
     synchronise(); m_animating = false;
+    if (m_guide) { draw_guide(now, dt); return; }
     m_index=std::clamp(m_index,0,std::max(0,count()-1));
     const bool searching=!m_query.empty();
     const BrowseGridGeometry grid(16.f/9.f);
@@ -313,12 +325,17 @@ void IPTV::draw(double now, float dt) {
             m_guide_requested = selected->id;
             iptv_live::request_guide(&m_client, *selected);
         }
-        const std::string info = !selected->now.empty() ? TF("Now: {programme}", {{"programme", selected->now}}) :
+        std::string on_now = selected->now, on_next = selected->next;
+        if (on_now.empty() && on_next.empty()) {   /* the TV guide's, when the source's own is empty (M3U) */
+            if (m_focused && selected->source == "M3U") epg::want(&m_client, {*selected});
+            epg::now_next(*selected, &on_now, &on_next);
+        }
+        const std::string info = !on_now.empty() ? TF("Now: {programme}", {{"programme", on_now}}) :
             T("No programme information available");
         gfx::text(kPad,gfx::H-97,info,{gfx::Medium,22,1550},kText2);
-        if(!selected->next.empty())gfx::text(kPad,gfx::H-65,TF("Next: {programme}",{{"programme",selected->next}}),{gfx::Medium,20,1550},kText3);
+        if(!on_next.empty())gfx::text(kPad,gfx::H-65,TF("Next: {programme}",{{"programme",on_next}}),{gfx::Medium,20,1550},kText3);
     }
-    draw_pad_hints(kPad,gfx::H-28,{{PadButton::Triangle,T("Search channels")},{PadButton::Options,T("Groups / options")},{PadButton::Circle,searching?T("Clear search"):T("Back")}},0,23);
+    draw_pad_hints(kPad,gfx::H-28,{{PadButton::Square,T("TV guide")},{PadButton::Triangle,T("Search channels")},{PadButton::Options,T("Groups / options")},{PadButton::Circle,searching?T("Clear search"):T("Back")}},0,23);
     m_menu.draw();m_animating|=art::animating()||(status.loading&&m_groups->empty())||m_hold_dir||ime::active()||(selected&&now-m_guide_focus_since<.8);
 }
 } // namespace ui

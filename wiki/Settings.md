@@ -5,7 +5,7 @@
 | **Accounts & Servers** | Your saved accounts and servers, signing out, switching |
 | **Playback** | Maximum quality, network buffer, video upscaling, subtitles (mode, size, background), playing the next episode, Are you still watching?, skipping intros, audio delay, volume boost, night mode, HDMI bitstream, theme music, refresh rate |
 | **Discover/Seerr** | [Seerr](Seerr)'s address and sign-in |
-| **Live TV** | [Live TV](Live-TV) sources and groups, and [VOD](VOD) at the bottom |
+| **Live TV** | [Live TV](Live-TV) sources and groups, the M3U TV guide's address, and [VOD](VOD) at the bottom |
 | **System** | Appearance, language, What's New, updates, version, server, storage |
 
 Audio language, subtitle mode and autoplay follow your Emby account, so they apply in every Emby app.

@@ -20,13 +20,36 @@ Channels from all sources appear together, each still playing through its own so
 - **Copy a provider's group into one of yours**: select your group, press **Options**, choose **Add channels from a provider group** and confirm. Channels already in your group keep their place, duplicates are skipped and new channels go at the end. It's a one-time copy, not a link, and the provider's group is left as it is.
 - **Options › Jump to group** opens a searchable list of groups. **Pin / unpin current group** adds shortcuts without changing the order.
 
-## Browsing and the guide
+## Browsing
 
-- **Left / Right** move along a row, **Up / Down** between rows. **✕** plays a channel, **△** searches the loaded channels by name, **○** leaves the search.
-- When the source provides a guide (EPG), cards show what's on now and next, with times and progress, and the player shows the programme's details. There is no full guide grid.
+- **Left / Right** move along a row, **Up / Down** between rows. **✕** plays a channel, **△** searches the loaded channels by name, **○** leaves the search, **□** opens the [TV guide](#the-tv-guide).
+- When there's a guide (EPG) for a channel, its card shows what's on now and next, and the player shows the programme's details.
 - Coming back from playing or searching returns you to the same row and channel.
 - Channel logos are used when the source has them; otherwise the name is shown.
 - Channels found before may be shown from the cache, but playing one needs the stream to be available.
+
+## The TV guide
+
+Press **□** in Live TV for the guide: the channels of the group down the left, the time across from now to three hours ahead, a block for each programme and a line at the current time. The focused programme's title, time, channel, how long is left and its description are at the top. Search results (**△**) have a guide too.
+
+| Button | |
+| --- | --- |
+| **Up / Down** | the previous / next channel (hold to go faster) |
+| **Left / Right** | the previous / next programme on that channel, up to about 12 hours ahead |
+| **L1 / R1** | the previous / next group |
+| **✕** | watch the channel |
+| **□** or **○** | back to the channel cards |
+| **Options** | jump to a group, pinned groups |
+
+Coming back from watching returns you to the guide, on the channel you watched last. Programmes in the past aren't shown, and there's no recording, reminders or catch-up.
+
+Where the guide comes from:
+
+- **Emby and Jellyfin**: the server's own guide, a few channels at a time as you scroll.
+- **Xtream**: the provider's guide, one channel at a time as you scroll, so nothing big is downloaded.
+- **M3U**: an XMLTV guide file. Emby5 uses the one the playlist names (`url-tvg` or `x-tvg-url` in its first line), or the one you enter in **Settings › Live TV › M3U TV guide (XMLTV) URL**. Plain `.xml` and gzip-compressed `.xml.gz` both work. It's downloaded in the background and kept for 12 hours, so the next start is quick. Channels are matched by their `tvg-id`, or else by name. Only the next 14 hours or so are kept, and at most 80,000 programmes, so a huge guide can't fill the console's memory.
+
+When a channel has no guide, its row says so and you can still watch it.
 
 ## Switching channels while watching
 

@@ -13,6 +13,7 @@
 | The sound is too quiet | Turn up **Volume boost** in **Settings › Playback**. |
 | Playback stops to buffer on a remote server or weak Wi-Fi | Lower **Maximum quality**, or raise **Network buffer** (**Settings › Playback**). |
 | Live TV or VOD is empty | Check the source's status in **Settings › Live TV** and retry it. |
+| The TV guide is empty for M3U channels | Enter the guide's XMLTV address in **Settings › Live TV › M3U TV guide (XMLTV) URL**, if the playlist doesn't name one. Channels are matched by `tvg-id`, else by name. |
 | Seerr doesn't answer | Use Seerr's local address and **Test connection** in **Settings › Discover/Seerr**. |
 
 ## Known limitations
@@ -29,7 +30,7 @@
 - Emby5 can't close itself: use the PS button.
 - Some picture-based subtitles can't be restyled.
 - There are no separate audio- and subtitle-language choices in Emby5: subtitles are picked by your Emby account's preferences.
-- There's no full TV guide grid, and the guide depends on the provider.
+- The TV guide depends on the provider: some send none, or only for some channels. M3U playlists need an XMLTV guide (see [The TV guide](Live-TV#the-tv-guide)).
 - How complete and playable third-party Live TV and VOD catalogues are depends on the provider.
 
 Features that depend on the console may behave differently on different firmware and homebrew setups.

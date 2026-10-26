@@ -541,6 +541,9 @@ std::vector<std::pair<std::string, std::string>> playback_stats(const Session &s
         v.push_back({T("Fargeområde"), b});
         v.push_back({T("Dekoder"), evo_pb_active_backend() == EVO_VDEC_BACKEND_NATIVE ? T("Maskinvare (sceVideodec2)")
                                                                                      : T("Programvare (FFmpeg)")});
+        /* Rising while it stutters: the console can't keep up (a buffer that
+         * runs dry points at the network or the server instead). */
+        v.push_back({T("Dropped frames"), std::to_string(evo_pb_frames_dropped())});
         int w = 0, h = 0;
         evo_agc_runtime_get_size(&w, &h);
         std::snprintf(b, sizeof b, "%d\xC3\x97%d  \xC2\xB7  %s", w, h, evo_agc_runtime_hdr_output_active() ? "HDR10" : "SDR");

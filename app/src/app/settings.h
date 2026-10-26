@@ -67,6 +67,7 @@ struct Local : Appearance {
     int audio_delay_ms = 0;      /* the sound system's delay: the picture waits this long (A/V sync) */
     bool night_mode = false;     /* compress loud and quiet together, dialogue lifted */
     int volume_boost = 0;        /* 0 off; 1-4: +50, +100, +200, +300 % (volume_boost_factor) */
+    bool playback_info = false;  /* the player's L3 panel stays as it was left, for the next video */
     int net_buffer = 0;          /* read-ahead of a network stream; 0-3: 30 s, 1, 2, 5 min (net_buffer_seconds) */
     bool hdmi_bitstream = false; /* Dolby Digital (Plus) and DTS to the TV/receiver undecoded (emby5_bitstream) */
     bool check_updates = true;  /* automatic release checks/notifications; never installation */

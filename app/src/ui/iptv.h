@@ -26,7 +26,9 @@ public:
     bool animating() const override { return m_animating; }
     bool needs_redraw() const override;
     float nav_alpha() const override { return m_nav.value; }
-    bool modal() const override { return m_menu.active(); }
+    /* The guide takes L1/R1 (its groups) from the tab bar. */
+    bool modal() const override { return m_menu.active() || m_guide; }
+    bool guide_open() const { return m_guide; }
 private:
     struct Position { int index = 0; std::string key; };
     struct ReturnPosition { std::string group; Position position; bool header = false; float scroll = 0; bool navigation = false; };
@@ -56,6 +58,20 @@ private:
     std::shared_ptr<int> m_life = std::make_shared<int>(0);
     uint32_t m_hold_dir = 0;
     double m_hold_since = 0, m_hold_last = 0;
+    /* The TV guide (Square): the group's channels down, the time across. */
+    bool m_guide = false;
+    int64_t m_guide_time = 0;   /* the focused moment: the focused programme is the one on then */
+    int64_t m_guide_left = 0;   /* the time at the grid's left edge (on a half hour) */
+    Anim m_guide_rows, m_guide_x;   /* the first row shown; the left edge, in seconds from m_guide_base */
+    int64_t m_guide_base = 0;
+    unsigned m_guide_seen = 0;  /* epg::generation() last drawn */
+    int64_t m_guide_minute = 0; /* the "now" line moves once a minute */
+    void open_guide();
+    void close_guide();
+    Action guide_input(uint32_t p);
+    void guide_move(int rows);
+    void guide_follow();
+    void draw_guide(double now, float dt);
     void synchronise();
     void build_groups(const iptv_live::Snapshot &snapshot);
     void rebuild_search(const std::string &selected = {});

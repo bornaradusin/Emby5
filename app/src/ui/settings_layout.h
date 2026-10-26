@@ -67,6 +67,7 @@ inline const char *label_of(int row)
         T("Xtream password"),
         T("Xtream source status"),
         T("M3U / M3U8 playlist URL"),
+        T("M3U TV guide (XMLTV) URL"),
         T("M3U Live TV status"),
         T("Unified Live TV"),
         T("Manage IPTV categories"),
