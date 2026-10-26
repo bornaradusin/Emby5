@@ -150,6 +150,10 @@ private:
     /* Tracks: 0 audio, 1 subtitles, 2 style (when open); the row in each. */
     int m_col = 0;
     int m_rows[3] = {0, 0, 0};
+    /* The audio track being switched to: shown as busy until the switch is done. */
+    int m_audio_switch_to = -1;
+    bool m_audio_switch_seen = false;   /* the player has reported the switch running */
+    double m_audio_switch_since = 0;
     bool m_style_open = false;
     bool m_find_open = false;           /* column 2 is "Søk etter undertekster" */
     std::vector<std::string> m_find_langs;

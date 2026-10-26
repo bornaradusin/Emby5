@@ -535,6 +535,16 @@ packet_queue_clear(
 #define PREBUFFER_OPEN_US    (2LL * 1000000)
 
 static int64_t s_readahead_us = READAHEAD_LOCAL_US;
+static int64_t s_net_readahead_us = READAHEAD_NET_US;   /* Settings › Playback › Network buffer */
+
+void evo_demux_set_net_readahead_s(int seconds)
+{
+    if (seconds < 10)
+        seconds = 10;
+    if (seconds > 600)
+        seconds = 600;
+    s_net_readahead_us = (int64_t)seconds * 1000000;
+}
 static int64_t s_video_bytes_cap = NO_RING_BYTES_CAP;
 static int64_t s_audio_bytes_cap = NO_RING_BYTES_CAP;
 
@@ -799,7 +809,7 @@ void *demux_thread_func(void *arg) {
         const char *u = (play_fmt && play_fmt->url) ? play_fmt->url : "";
         const int net = strncmp(u, "http://", 7) == 0 || strncmp(u, "https://", 8) == 0 ||
                         strncmp(u, "ftp://", 6) == 0 || strncmp(u, "smb://", 6) == 0;
-        s_readahead_us = net ? READAHEAD_NET_US : READAHEAD_LOCAL_US;
+        s_readahead_us = net ? s_net_readahead_us : READAHEAD_LOCAL_US;
     }
     /* Budget by what the rings actually got: cap plus the quarter of
      * overshoot must still fit, or the packets past it fall back to the

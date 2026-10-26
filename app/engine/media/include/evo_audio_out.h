@@ -45,6 +45,9 @@ typedef float evo_pcm_t;
  * compression with the dialogue lifted), for everything that plays. */
 void evo_audio_set_gain(float gain);
 void evo_audio_set_night(int on);
+/* Emby5: volume boost, 1..4 times, for decoded sound (a bitstream can't be
+ * boosted); a limiter keeps the loud passages from clipping. */
+void evo_audio_set_boost(float boost);
 /* Emby5: playback speed, 0.5..2 (the sound time-stretched, the pitch kept). */
 void evo_audio_set_speed(float speed);
 float evo_audio_speed(void);

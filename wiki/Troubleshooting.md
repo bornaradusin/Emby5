@@ -9,7 +9,9 @@
 | No pictures, or only some | Update to 1.2.7 or later: earlier versions didn't sign in for pictures, so servers (or proxies) that require it showed none, and titles without a picture tag stayed blank. A title the server has no picture for keeps a placeholder. |
 | The interface is in the wrong language, or partly in English | Choose the language in **Settings › System › Language**, or **PS5** to follow the system language. Before 1.2.8 most languages had only their menu words translated; update. See [Language](Settings#language). |
 | A video doesn't play, or plays badly | Lower **Maximum quality** (**Settings › Playback**) so the server transcodes files above it, and check the limits below. |
-| No sound through the receiver | Turn **HDMI bitstream** off, or check that the receiver supports the format. Night mode turns bitstream off. |
+| No sound through the receiver | Turn **HDMI bitstream** off, or check that the receiver supports the format. Night mode and volume boost turn bitstream off. |
+| The sound is too quiet | Turn up **Volume boost** in **Settings › Playback**. |
+| Playback stops to buffer on a remote server or weak Wi-Fi | Lower **Maximum quality**, or raise **Network buffer** (**Settings › Playback**). |
 | Live TV or VOD is empty | Check the source's status in **Settings › Live TV** and retry it. |
 | Seerr doesn't answer | Use Seerr's local address and **Test connection** in **Settings › Discover/Seerr**. |
 

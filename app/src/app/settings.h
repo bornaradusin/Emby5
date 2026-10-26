@@ -66,6 +66,8 @@ struct Local : Appearance {
     bool refresh_120 = true;
     int audio_delay_ms = 0;      /* the sound system's delay: the picture waits this long (A/V sync) */
     bool night_mode = false;     /* compress loud and quiet together, dialogue lifted */
+    int volume_boost = 0;        /* 0 off; 1-4: +50, +100, +200, +300 % (volume_boost_factor) */
+    int net_buffer = 0;          /* read-ahead of a network stream; 0-3: 30 s, 1, 2, 5 min (net_buffer_seconds) */
     bool hdmi_bitstream = false; /* Dolby Digital (Plus) and DTS to the TV/receiver undecoded (emby5_bitstream) */
     bool check_updates = true;  /* automatic release checks/notifications; never installation */
     std::string language;        /* "" follows the PS5's language, else an i18n::language_code */
@@ -89,5 +91,18 @@ void set_local(const Local &l);
 void load_server(jf::Client &c);
 /* Changes the account's preferences (written in the background). */
 void set_server(jf::Client &c, const jf::UserPrefs &p);
+
+/* Volume boost as a gain: Off, +50, +100, +200, +300 %. */
+inline float volume_boost_factor(int level)
+{
+    static const float k[] = {1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
+    return level >= 0 && level <= 4 ? k[level] : 1.0f;
+}
+/* The network buffer setting in seconds: 30 s, 1, 2 or 5 minutes. */
+inline int net_buffer_seconds(int level)
+{
+    static const int k[] = {30, 60, 120, 300};
+    return level >= 0 && level <= 3 ? k[level] : 30;
+}
 
 } // namespace settings

@@ -1,8 +1,9 @@
 ## Audio
 
 - AAC, AC-3, E-AC-3, the DTS family, TrueHD, FLAC, Opus, MP3 and other formats FFmpeg can decode, played as PCM.
-- Choose the audio track while playing (**□** › Audio & Subtitles).
+- Choose the audio track while playing (**□** › Audio & Subtitles). While the track changes, the list shows *Switching …* on it, and the picture a spinner. A track without a language reads *Unknown language – track 2*, so such tracks can be told apart (subtitles too).
 - **Audio delay** and **night mode**.
+- **Volume boost** (**Settings › Playback**): Off, +50 %, +100 %, +200 % or +300 %, for quiet files or a quiet TV. A limiter holds the loudest passages instead of letting them distort; the more boost, the more the loud and quiet parts come together. It applies from the next playback, to films, shows, music, Live TV and VOD, but not to a title's theme music.
 
 ### HDMI bitstream
 
@@ -15,7 +16,7 @@ Optionally, Emby5 can send audio untouched to your receiver over HDMI:
 | **DTS core** | DTS core audio |
 
 - When bitstream isn't possible for a stream, the audio is decoded to PCM instead.
-- Night mode turns bitstream off, and playback speed doesn't work with it.
+- Night mode and volume boost turn bitstream off (the sound has to be decoded to change it), and playback speed doesn't work with it.
 - TrueHD Atmos and DTS:X can't be passed through.
 - Whether it works also depends on your receiver, TV and audio settings.
 

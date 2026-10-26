@@ -229,8 +229,17 @@ std::string SettingsScreen::value(Row r) const
                               s.local.still_watching == 2 ? T("After 2 hours") : T("Av");
     case AutoSkip: return s.local.auto_skip_intro ? T("På") : T("Av");
     case NightMode: return s.local.night_mode ? T("På") : T("Av");
-    case Bitstream:   /* night mode needs the sound decoded here, so it wins */
-        return !s.local.hdmi_bitstream ? T("Av") : s.local.night_mode ? T("Av med nattmodus") : T("På");
+    case VolumeBoost:
+        return s.local.volume_boost == 0 ? std::string(T("Av"))
+                                         : "+" + std::to_string((int)(settings::volume_boost_factor(s.local.volume_boost) * 100 - 100 + 0.5f)) + " %";
+    case NetBuffer: {
+        const int sec = settings::net_buffer_seconds(s.local.net_buffer);
+        return sec < 60 ? TF("{seconds} s", {{"seconds", std::to_string(sec)}})
+                        : TF("{minutes} min", {{"minutes", std::to_string(sec / 60)}});
+    }
+    case Bitstream:   /* night mode and volume boost need the sound decoded here, so they win */
+        return !s.local.hdmi_bitstream ? T("Av") : s.local.night_mode ? T("Av med nattmodus")
+               : s.local.volume_boost ? T("Off with volume boost") : T("På");
     case ThemeMusic: return s.local.theme_music ? T("På") : T("Av");
     case UpdateNotes: { const auto u=update_service::snapshot(); return u.checking ? T("Checking release notes …") : T("X to read release notes"); }
     case AppVersion: {
@@ -384,6 +393,14 @@ void SettingsScreen::change(Row r, int dir)
         s.local.night_mode = !s.local.night_mode;
         settings::set_local(s.local);
         evo_audio_set_night(s.local.night_mode);
+        break;
+    case VolumeBoost:   /* from the next playback */
+        s.local.volume_boost = cycle(s.local.volume_boost, 5);
+        settings::set_local(s.local);
+        break;
+    case NetBuffer:   /* from the next playback */
+        s.local.net_buffer = cycle(s.local.net_buffer, 4);
+        settings::set_local(s.local);
         break;
     case Bitstream:   /* from the next playback */
         s.local.hdmi_bitstream = !s.local.hdmi_bitstream;

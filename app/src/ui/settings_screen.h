@@ -29,7 +29,8 @@ class SettingsScreen : public Screen {
 public:
     enum Row {
         SwitchUser, SignOut,
-        Quality, Upscaling, SubMode, SubSize, SubBackground, Autoplay, StillWatching, AutoSkip, AudioDelay, NightMode, Bitstream,
+        Quality, NetBuffer, Upscaling, SubMode, SubSize, SubBackground, Autoplay, StillWatching, AutoSkip, AudioDelay,
+        VolumeBoost, NightMode, Bitstream,
         ThemeMusic, Refresh,
         SeerrOn, SeerrUrl, SeerrAuth, SeerrAccount, SeerrTest,
         EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, M3UUrl, M3UStatus, IPTVSummary, IPTVCategories,

@@ -443,14 +443,20 @@ static int16_t audio_float_to_s16(float v) {
  *    -24 dBFS, 3:1, fast attack, slow release), with make-up gain, the centre
  *    (dialogue) lifted and the LFE lowered, and a soft limiter at the end. Loud
  *    scenes come down, quiet speech comes up.
+ *  - volume boost: up to 4x for quiet files and quiet TVs, with a peak limiter
+ *    (instant attack, 150 ms release) holding the loud passages at -1 dBFS
+ *    rather than clipping them, and the soft limiter behind it.
  */
 static volatile float s_gain_target = 1.0f;
 static float s_gain = 1.0f;
 static volatile int s_night = 0;
+static volatile float s_boost = 1.0f;
 static float s_env = 0.0f;   /* the mix's mean square, smoothed */
+static float s_peak = 0.0f;  /* the boosted mix's peak, for the limiter */
 
 void evo_audio_set_gain(float g) { s_gain_target = g < 0.f ? 0.f : g > 1.f ? 1.f : g; }
 void evo_audio_set_night(int on) { s_night = on; }
+void evo_audio_set_boost(float b) { s_boost = b < 1.f ? 1.f : b > 4.f ? 4.f : b; }
 
 static float soft_limit(float x)
 {
@@ -465,8 +471,11 @@ static void emby5_dsp(float *s, int frames, int ch)
 {
     const int night = s_night;
     const float target = s_gain_target;
-    if (!night && s_gain == target && target == 1.0f)
+    const float boost = s_boost;
+    if (!night && boost == 1.0f && s_gain == target && target == 1.0f)
         return;
+    const float peak_release = 1.f - expf(-1.f / (0.150f * (float)PROSPERO_AUDIO_OUTPUT_RATE));
+    const float ceiling = 0.89f;               /* -1 dBFS */
     const float rate = (float)PROSPERO_AUDIO_OUTPUT_RATE;
     const float attack = 1.f - expf(-1.f / (0.010f * rate)), release = 1.f - expf(-1.f / (0.300f * rate));
     const float ramp = 1.f / (0.25f * rate);   /* gain moves over a quarter second */
@@ -490,6 +499,16 @@ static void emby5_dsp(float *s, int frames, int ch)
                 comp = powf(s_env / thresh, -1.f / 3.f);
             g *= comp * makeup;
         }
+        if (boost > 1.0f) {   /* boosted: the limiter holds the peaks under the ceiling */
+            g *= boost;
+            float peak = 0.f;
+            for (int c = 0; c < ch; c++)
+                peak = fmaxf(peak, fabsf(f[c] * g));
+            s_peak = peak > s_peak ? peak : s_peak + peak_release * (peak - s_peak);
+            if (s_peak > ceiling)
+                g *= ceiling / s_peak;
+        }
+        const int limit = night || boost > 1.0f;
         for (int c = 0; c < ch; c++) {
             float v = f[c] * g;
             if (night && ch >= 6) {
@@ -498,7 +517,7 @@ static void emby5_dsp(float *s, int frames, int ch)
                 else if (c == 3)
                     v *= 0.5f;   /* LFE */
             }
-            f[c] = night ? soft_limit(v) : v;
+            f[c] = limit ? soft_limit(v) : v;
         }
     }
 }

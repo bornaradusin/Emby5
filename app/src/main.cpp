@@ -1315,6 +1315,7 @@ void play_provider(const ui::Action &a) {
             // owns the controller while active, and the shell reopens it
             // when returning to IPTV. Without this the shell loses input.
             nuvio_input_close();
+            emby5_playback_prepare();   /* Settings › Playback: sound and network buffer */
             nuvio_player_run(json);
             nuvio_player_leave();browse_state::clear_playback();
             nuvio_input_open(s_user);
@@ -1377,6 +1378,7 @@ void play_live_tv() {
                 if(!json){notify(T("Unable to prepare Live TV playback."));break;}
                 const std::string request(json);std::free(json);
                 browse_state::clear_playback();
+                emby5_playback_prepare();   /* Settings › Playback: sound and network buffer */
                 nuvio_player_run(request.c_str());nuvio_player_leave();
             }
         } while(iptv_navigation::advance());

@@ -22,6 +22,10 @@ bool emby5_play(jf::Client &client, const jf::Item &item, std::string *error, bo
 void emby5_wait_reports(int max_ms);
 /* A theme song, quietly and unreported (headless: the caller sets that). */
 bool emby5_play_theme(jf::Client &client, const jf::Item &song);
+/* The sound and stream settings for a playback (Settings › Playback): full
+ * volume, normal speed, night mode, volume boost, HDMI bitstream and the
+ * network buffer. Every playback calls it before it opens. */
+void emby5_playback_prepare();
 
 /* The music queue (Now playing's queue sheet). upcoming/indices: what plays after
  * the current track, in order, and each one's index in the queue. */

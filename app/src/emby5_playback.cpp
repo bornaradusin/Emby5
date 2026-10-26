@@ -6,6 +6,7 @@
 #include "emby5_playback.h"
 #include "app/iptv_navigation.h"
 #include "evo_audio_out.h"
+#include "evo_demux.h"
 
 #include "nuvio_player.h"
 #include "nuvio_subs.h"
@@ -805,12 +806,28 @@ bool emby5_play_theme(jf::Client &client, const jf::Item &song)
     Extras ex;
     const std::string req = request_json(client, song, pb, {}, ex);
     evo_audio_set_night(0);
+    evo_audio_set_boost(1.0f);
     evo_audio_set_gain(0.28f);
     emby5_bs_set_allowed(0);   /* a theme plays quietly: decoded, so the gain applies */
     nuvio_player_run(req.c_str());
     evo_audio_set_gain(1.0f);
     client.stop_encoding(pb);
     return true;
+}
+
+void emby5_playback_prepare()
+{
+    const settings::Local l = settings::get().local;
+    evo_audio_set_gain(1.0f);                       /* full volume (a theme may have been playing) */
+    evo_audio_set_speed(1.0f);                      /* each playback starts at normal speed */
+    evo_audio_set_night(l.night_mode ? 1 : 0);      /* Innstillinger: Nattmodus */
+    evo_audio_set_boost(settings::volume_boost_factor(l.volume_boost));
+    /* Innstillinger: HDMI-bitstrøm. Night mode and volume boost need the sound
+     * decoded here, so they win. */
+    emby5_bs_set_allowed(l.hdmi_bitstream && !l.night_mode && l.volume_boost == 0
+                             ? EMBY5_BS_AC3 | EMBY5_BS_EAC3 | EMBY5_BS_DTS
+                             : 0);
+    evo_demux_set_net_readahead_s(settings::net_buffer_seconds(l.net_buffer));
 }
 
 static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf::Item> episodes, std::string *error)
@@ -827,13 +844,7 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
                 cur = (int)i;
         reorder_locked(cur);
     }
-    evo_audio_set_gain(1.0f);                                    /* full volume (a theme may have been playing) */
-    evo_audio_set_speed(1.0f);                                   /* each playback starts at normal speed */
-    evo_audio_set_night(settings::get().local.night_mode ? 1 : 0);   /* Innstillinger: Nattmodus */
-    /* Innstillinger: HDMI-bitstrøm. Night mode needs the sound decoded here, so it wins. */
-    emby5_bs_set_allowed(settings::get().local.hdmi_bitstream && !settings::get().local.night_mode
-                              ? EMBY5_BS_AC3 | EMBY5_BS_EAC3 | EMBY5_BS_DTS
-                              : 0);
+    emby5_playback_prepare();
 
     for (int chain = 0; chain < 50; chain++) {
         jf::Playback pb;

@@ -54,14 +54,28 @@ std::string clock_at(double seconds_from_now)
     return b;
 }
 
-/* Language names in the interface's language: the player's own (English)
- * names, translated. */
-std::string language_name(const std::string &code)
+/* A language's name in the interface's language (the player's own English
+ * names, translated), or empty when the code isn't a language it knows. */
+std::string known_language(const std::string &code)
 {
     if (code.empty() || code == "und")
-        return T("Ukjent språk");
+        return std::string();
     const std::string n = nuvio_language_name(code);
-    return n.empty() ? std::string(T("Ukjent språk")) : std::string(T(n.c_str()));
+    return n.empty() ? n : std::string(T(n.c_str()));
+}
+
+std::string language_name(const std::string &code)
+{
+    const std::string n = known_language(code);
+    return n.empty() ? std::string(T("Ukjent språk")) : n;
+}
+
+/* A track's language, or "Unknown language – track 2" when it has none, so
+ * two such tracks can be told apart. */
+std::string track_language(const std::string &code, int number)
+{
+    const std::string n = known_language(code);
+    return n.empty() ? TF("Unknown language \xE2\x80\x93 track {number}", {{"number", std::to_string(number)}}) : n;
 }
 
 void play_glyph(float x, float cy, float size, uint32_t c)
@@ -324,6 +338,16 @@ void PlayerUi::tick(const NuvioStatus &st, std::vector<OsdCommand> &out, bool po
     m_now = st.now;
     if (!m_req)
         return;
+    if (m_audio_switch_to >= 0) {   /* busy until the player says the switch is over */
+        if (st.switching)
+            m_audio_switch_seen = true;
+        else if (m_audio_switch_seen || !st.error.empty() || st.now - m_audio_switch_since > 2.0 ||
+                 (st.audio_active == m_audio_switch_to && st.now - m_audio_switch_since > 0.5)) {
+            m_audio_switch_to = -1;
+            m_audio_switch_seen = false;
+            m_dirty = true;
+        }
+    }
     m_watch.sample(st.now, st.started && !st.paused && !st.buffering &&
                    !st.switching && !st.seeking && !m_seeking &&
                    st.error.empty() && !m_still_prompt);
@@ -492,7 +516,12 @@ void PlayerUi::tracks_input(uint32_t p, const NuvioStatus &st, std::vector<OsdCo
             m_col = 2;
     } else if (p & NUVIO_BTN_CROSS) {
         if (m_col == 0 && r < na) {
-            out.push_back({OsdCmd::SelectAudio, 0, r});
+            if (m_audio_switch_to < 0 && !st.switching) {   /* one switch at a time */
+                m_audio_switch_to = r;
+                m_audio_switch_seen = false;
+                m_audio_switch_since = st.now;
+                out.push_back({OsdCmd::SelectAudio, 0, r});
+            }
         } else if (m_col == 0 && r >= na && r - na < nv) {
             if (r - na != m_req->source_index) {   /* another version, from this moment */
                 out.push_back({OsdCmd::SwitchSource, 0, r - na});
@@ -896,7 +925,8 @@ bool PlayerUi::wants_frame(const NuvioStatus &st)
     const bool second = std::floor(st.now) != std::floor(last_second);
     last_second = st.now;
     /* art::animating(): an image still loading or fading in (the episode stills). */
-    return moving || m_seeking || m_music || (second && (m_controls || m_card_since >= 0 || m_stats)) ||
+    return moving || m_seeking || m_music || m_audio_switch_to >= 0 ||
+           (second && (m_controls || m_card_since >= 0 || m_stats)) ||
            a_loading.value > 0.f ||
            st.buffering || ((m_overlay != Overlay::None || a_next.value > 0.f || m_music) && art::animating());
 }
@@ -1341,10 +1371,11 @@ void PlayerUi::draw_tracks(const NuvioStatus &st, float a)
             return;
         }
         const NuvioAudioTrack &t = st.audio[i];
-        label = language_name(t.lang);
+        label = track_language(t.lang, i + 1);
         if (!t.title.empty() && t.title != t.codec)
             label += " \xC2\xB7 " + t.title;
-        right = t.codec + (t.channels.empty() ? "" : " " + t.channels);
+        right = i == m_audio_switch_to ? std::string(T("Switching \xE2\x80\xA6"))
+                                       : t.codec + (t.channels.empty() ? "" : " " + t.channels);
         sel = i == st.audio_active;
     });
 
@@ -1368,7 +1399,7 @@ void PlayerUi::draw_tracks(const NuvioStatus &st, float a)
         nuvio_sub_track t;
         if (nuvio_subs_track(i - 1, &t) != 0)
             return;
-        label = language_name(t.lang);
+        label = track_language(t.lang, i);
         if (t.title[0] && std::string(t.title) != label)
             label += " \xC2\xB7 " + std::string(t.title);
         if (t.forced) right += T("Tvungen ");
@@ -1917,7 +1948,8 @@ void PlayerUi::draw(const NuvioStatus &st)
     a_skip.step(dt, 12.f);
     a_next.step(dt, 10.f);
     a_error.step(dt, 10.f);
-    a_spinner.to(st.started && st.buffering ? 1.f : 0.f);
+    const bool switching_audio = m_audio_switch_to >= 0 && m_overlay == Overlay::None;
+    a_spinner.to(st.started && (st.buffering || switching_audio) ? 1.f : 0.f);
     a_spinner.step(dt, 10.f);
     a_toast.to(st.now < m_toast_until ? 1.f : 0.f);
     a_toast.step(dt, 10.f);
@@ -1961,6 +1993,8 @@ void PlayerUi::draw(const NuvioStatus &st)
             gfx::fill({W / 2 + std::cos(ang) * 34 - 5, H / 2 + std::sin(ang) * 34 - 5, 10, 10},
                       alpha(kText, 0.2f + 0.8f * (1.f - phase)), 5);
         }
+        if (switching_audio)
+            gfx::text(W / 2, H / 2 + 92, T("Switching the audio track \xE2\x80\xA6"), {gfx::SemiBold, 26}, kText, 1);
         gfx::pop_opacity();
     }
 

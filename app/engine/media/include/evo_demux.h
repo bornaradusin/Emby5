@@ -56,6 +56,11 @@ float evo_demux_prebuffer_progress(void);
 /* Seconds of playback queued ahead of the decoder. */
 double evo_demux_buffered_s(void);
 
+/* Emby5: how far ahead a network stream is read (Settings › Playback ›
+ * Network buffer), from the next open; 10..600 s, 30 s by default. The ring
+ * sizes still bound it, so a very high bitrate gets less. */
+void evo_demux_set_net_readahead_s(int seconds);
+
 #ifdef __cplusplus
 }
 #endif

@@ -3,7 +3,7 @@
 | Tile | What's in it |
 | --- | --- |
 | **Accounts & Servers** | Your saved accounts and servers, signing out, switching |
-| **Playback** | Maximum quality, video upscaling, subtitles (mode, size, background), playing the next episode, Are you still watching?, skipping intros, audio delay, night mode, HDMI bitstream, theme music, refresh rate |
+| **Playback** | Maximum quality, network buffer, video upscaling, subtitles (mode, size, background), playing the next episode, Are you still watching?, skipping intros, audio delay, volume boost, night mode, HDMI bitstream, theme music, refresh rate |
 | **Discover/Seerr** | [Seerr](Seerr)'s address and sign-in |
 | **Live TV** | [Live TV](Live-TV) sources and groups, and [VOD](VOD) at the bottom |
 | **System** | Appearance, language, What's New, updates, version, server, storage |

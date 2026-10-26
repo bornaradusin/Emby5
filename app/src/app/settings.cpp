@@ -225,6 +225,8 @@ void load_local()
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "themeMusic"))
         s_all.local.theme_music = cJSON_IsTrue(v);
     s_all.local.audio_delay_ms=read_int(j,"audioDelayMs",s_all.local.audio_delay_ms,-500,500);
+    s_all.local.volume_boost=read_int(j,"volumeBoost",s_all.local.volume_boost,0,4);
+    s_all.local.net_buffer=read_int(j,"networkBuffer",s_all.local.net_buffer,0,3);
     if (const cJSON *hz = cJSON_GetObjectItemCaseSensitive(j, "refresh120"))
         s_all.local.refresh_120 = cJSON_IsTrue(hz);
     if (const cJSON *st = cJSON_GetObjectItemCaseSensitive(j, "subtitles")) {
@@ -270,6 +272,8 @@ static bool save_local_snapshot(const Local &l)
     cJSON_AddBoolToObject(j, "refresh120", l.refresh_120);
     cJSON_AddNumberToObject(j, "audioDelayMs", l.audio_delay_ms);
     cJSON_AddBoolToObject(j, "nightMode", l.night_mode);
+    cJSON_AddNumberToObject(j, "volumeBoost", l.volume_boost);
+    cJSON_AddNumberToObject(j, "networkBuffer", l.net_buffer);
     cJSON_AddBoolToObject(j, "hdmiBitstream", l.hdmi_bitstream);
     cJSON_AddBoolToObject(j, "themeMusic", l.theme_music);
     cJSON_AddStringToObject(j, "interfaceLanguage", l.language.c_str());

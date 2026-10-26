@@ -16,6 +16,7 @@ Emby5 plays video with a native PS5 player and the console's hardware video deco
 - **Audio delay** and **night mode**.
 - Seeking, with **trickplay** thumbnails when the server has them. **L1 / R1** seek back and forward; **L2 / R2** rewind and fast-forward with the adaptive triggers.
 - **L3** shows playback information: codecs, how it's delivered, the buffer.
+- **Network buffer** (**Settings › Playback**): how far ahead Emby5 reads a stream from the server, **30 s** (the default), **1 min**, **2 min** or **5 min**. A longer buffer rides out longer drops in the connection, which helps most with a server reached over the internet or a weak Wi-Fi. It's limited by memory: a very high bitrate (a 4K remux) still gets about 30 to 40 seconds. Live TV can't be read ahead of the live broadcast, so it gains little. Files on the console aren't affected.
 - Progress, resume points and watched status are sent to your server, and the affected rows refresh.
 - After a network or stream interruption, Emby5 tries to reconnect. It can't recover from every failure.
 
