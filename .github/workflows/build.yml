@@ -1,0 +1,88 @@
+# Builds Emby5 from source on GitHub's machines (scripts/setup-toolchain.sh, then
+# app/scripts/build.sh --release) and, when asked, makes a draft release of it: the tag is the
+# version from app/sce_sys/param.json's contentVersion (01.002.010 is 1.2.10), the notes are
+# release-notes/<version>.md, and the asset is Emby5-<version>.zip. The draft is checked and
+# published by hand. Without a draft, the zip is kept as the run's artifact.
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_release:
+        description: "Make a draft release <version> with Emby5-<version>.zip (otherwise it is kept as the run's artifact)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # the draft release
+
+concurrency:
+  group: emby5-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18 zip wget make python3
+          # setup-toolchain.sh takes the newest llvm-config there is: make it 18's.
+          echo "LLVM_CONFIG=llvm-config-18" >> "$GITHUB_ENV"
+
+      - name: The version
+        id: version
+        run: |
+          ver=$(python3 -c 'import json; p=[int(x) for x in json.load(open("app/sce_sys/param.json"))["contentVersion"].split(".")]; print(f"{p[0]}.{p[1]}.{p[2]}")')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Emby5 $ver"
+          if [ '${{ inputs.draft_release }}' = true ] && [ ! -f "release-notes/$ver.md" ]; then
+            echo "::error::release-notes/$ver.md is missing: write the release notes before making the draft"
+            exit 1
+          fi
+
+      - name: Toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchain
+            toolkit/.deps
+          key: toolchain-${{ hashFiles('scripts/setup-toolchain.sh', 'toolkit/scripts/*.sh') }}
+
+      - name: Toolchain
+        run: bash scripts/setup-toolchain.sh
+
+      - name: Build
+        run: |
+          eval "$(scripts/setup-toolchain.sh --env)"
+          cd app
+          ./scripts/build.sh --release
+          ls -la build/app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Emby5-${{ steps.version.outputs.version }}
+          path: app/build/app/Emby5-${{ steps.version.outputs.version }}.zip
+          if-no-files-found: error
+
+      - name: Draft release
+        if: inputs.draft_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="$VERSION"
+          state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          if [ "$state" = false ]; then
+            echo "::error::$tag is already published: raise contentVersion in app/sce_sys/param.json for a new release"
+            exit 1
+          fi
+          if [ "$state" = true ]; then
+            gh release delete "$tag" --yes
+          fi
+          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Emby5 $VERSION" \
+            --notes-file "release-notes/$VERSION.md" "app/build/app/Emby5-$VERSION.zip"
+          echo "::notice title=Draft release::Emby5 $VERSION is ready to check and publish"

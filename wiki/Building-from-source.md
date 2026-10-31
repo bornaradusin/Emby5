@@ -30,4 +30,4 @@ The fonts are checked against `app/assets/font-assets.json`. A complete checkout
 
 ## Releasing
 
-Raise `contentVersion` in `app/sce_sys/param.json` (the app's version and the update check) and `kVersion` in `app/src/jf/jf_client.cpp` (what Emby5 tells the server), build with `--release`, and attach `Emby5-<version>.zip` to a release tagged with the version (`1.2.9`).
+Releases are built on GitHub: raise `contentVersion` in `app/sce_sys/param.json` (the app's version and the update check) and `kVersion` in `app/src/jf/jf_client.cpp` (what Emby5 tells the server), write the notes in `release-notes/<version>.md`, push, then run **Actions › Build** with **Make a draft release** ticked. It builds with `--release` on GitHub's machines and makes a draft release tagged with the version (`1.2.10`), with `Emby5-<version>.zip` attached, to check and publish.

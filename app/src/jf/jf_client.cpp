@@ -39,7 +39,7 @@ HttpResponse tracked_request(const std::string &method, const std::string &url,
 }
 
 constexpr int kTimeout = 15;
-constexpr const char *kVersion = "1.2.9";
+constexpr const char *kVersion = "1.2.10";
 constexpr const char *kFields = "Overview,Genres";            /* rows: what the UI shows */
 constexpr const char *kItemFields =
     "Overview,Genres,MediaStreams,Taglines,People,Studios,ChildCount,ProductionLocations,SpecialFeatureCount,"
@@ -393,7 +393,15 @@ bool Client::public_info(std::string *name, std::string *version, std::string *i
         ServerKind detected = server_kind();
         if (product.find("jellyfin") != std::string::npos) detected = ServerKind::Jellyfin;
         else if (product.empty() || product.find("emby") != std::string::npos) detected = ServerKind::Emby;
-        else { cJSON_Delete(j); set_error("This is not an Emby or Jellyfin server"); return false; }
+        else {
+            // A server with its own name (an unofficial build, a rebrand) that answers this
+            // request is Emby- or Jellyfin-compatible: tell which by what its answer has.
+            // Jellyfin's says whether its setup wizard is done and counts versions from 10;
+            // Emby's lists its addresses and counts from 4.
+            const int major = std::atoi(ver.c_str());
+            const bool jellyfin_like = cJSON_GetObjectItemCaseSensitive(j, "StartupWizardCompleted") || major >= 10;
+            detected = jellyfin_like ? ServerKind::Jellyfin : ServerKind::Emby;
+        }
         // The client becomes immutable once its session is published to playback/UI workers.
         kind_ = detected;
         server_id_ = sid;
