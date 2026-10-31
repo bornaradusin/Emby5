@@ -18,6 +18,8 @@ distributed. Their original copyright notices are kept in the source files.
 | NanoSVG - Copyright (c) 2013-14 Mikko Mononen | `app/third_party/nanosvg/` | zlib |
 | QR Code generator library - Copyright (c) Project Nayuki | `app/src/qrcodegen.*` | MIT |
 | The refraction profile of the glass shader follows [OverShifted/LiquidGlass](https://github.com/OverShifted/LiquidGlass) - Copyright (c) 2026 Sepehr Kalanaki | `app/shaders/liquid_glass.pipe` | MIT |
+| FSRCNNX x2 8-0-4-1, the "Film" upscaler: the mpv shader and its weights from [igv/FSRCNN-TensorFlow](https://github.com/igv/FSRCNN-TensorFlow) release 1.1 - Copyright (C) 2017-2021 igv; compiled into AGC passes | `app/engine/shaders/cnn/FSRCNNX_x2_8-0-4-1.glsl`, `app/engine/shaders/agc/upscale_fsrcnnx_*` | LGPL-3.0-or-later |
+| ArtCNN C4F8, the "Anime" upscaler: the mpv shader and its weights from [Artoriuz/ArtCNN](https://github.com/Artoriuz/ArtCNN) (`GLSL/ArtCNN_C4F8.glsl` as of commit 3e40fe3, the last before C4F8 was retired upstream) - Copyright (c) 2024 Joao Chrisostomo; compiled into AGC passes | `app/engine/shaders/cnn/ArtCNN_C4F8.glsl`, `app/engine/shaders/agc/upscale_artcnn_*` | MIT |
 
 ## Fonts (bundled in the program)
 

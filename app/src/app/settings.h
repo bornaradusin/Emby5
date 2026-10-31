@@ -49,7 +49,7 @@ constexpr int kCustomThemes = 3;
 
 struct Local : Appearance {
     std::array<SavedAppearance, kCustomThemes> custom_themes{};
-    int upscale_mode = 0;       /* 0 Off, 1 Auto, 2 FSR 1, 3 Anime4K */
+    int upscale_mode = 0;       /* 0 Off, 1 Auto, 2 FSR 1 (Fast), 3 Anime4K, 4 Film (FSRCNNX), 5 Anime (ArtCNN): an UpscaleMode */
     int max_mbps = 0;            /* 0 = no cap (direct play whatever the network allows) */
     bool auto_skip_intro = false;
     bool autoplay_next_override_valid = false;
@@ -99,6 +99,31 @@ inline float volume_boost_factor(int level)
     static const float k[] = {1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
     return level >= 0 && level <= 4 ? k[level] : 1.0f;
 }
+/* Upscaling (Settings › Playback and the player's button). The saved values of
+ * 1.2.10 and earlier (0 Off, 1 Auto, 2 FSR 1, 3 Anime4K) keep their meaning, so
+ * an old settings file needs no rewrite; Film and Anime came in 1.2.11 and are
+ * saved as 4 and 5. Settings lists them in kUpscaleOrder's order. */
+enum UpscaleMode { UpscaleOff = 0, UpscaleAuto = 1, UpscaleFast = 2, UpscaleAnime4K = 3,
+                   UpscaleFilm = 4, UpscaleAnime = 5, UpscaleModes = 6 };
+inline int upscale_mode_valid(int mode)
+{
+    return mode >= 0 && mode < UpscaleModes ? mode : UpscaleOff;
+}
+/* The choice after `mode` in the order Settings shows them: Off, Auto, Fast,
+ * Film, Anime, Anime4K, then Off again. */
+inline int next_upscale_mode(int mode)
+{
+    static const int order[UpscaleModes] = {UpscaleOff, UpscaleAuto, UpscaleFast,
+                                            UpscaleFilm, UpscaleAnime, UpscaleAnime4K};
+    mode = upscale_mode_valid(mode);
+    for (int i = 0; i < UpscaleModes; i++)
+        if (order[i] == mode)
+            return order[(i + 1) % UpscaleModes];
+    return UpscaleOff;
+}
+/* The renderer's mode (EVO_AGC_UPSCALE_* in evo_agc_runtime.h) for a saved one. */
+int upscale_engine_mode(int mode);
+
 /* The network buffer setting in seconds: 30 s, 1, 2 or 5 minutes. */
 inline int net_buffer_seconds(int level)
 {

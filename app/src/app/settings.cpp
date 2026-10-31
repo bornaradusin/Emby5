@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 
+#include "evo_agc_runtime.h"
 #include "evo_boot_trace.h"
 #include "evo_data_path.h"
 
@@ -176,7 +177,9 @@ void load_local()
     if (!j)
         return;
     std::lock_guard<std::mutex> g(s_lock);
-    s_all.local.upscale_mode=read_int(j,"upscaling",s_all.local.upscale_mode,0,3);
+    /* 0..3 are the values 1.2.10 and earlier saved, with the same meaning;
+     * 4 Film and 5 Anime are new (UpscaleMode). */
+    s_all.local.upscale_mode=read_int(j,"upscaling",s_all.local.upscale_mode,0,UpscaleModes-1);
     s_all.local.max_mbps=read_int(j,"maxMbps",s_all.local.max_mbps,0,std::numeric_limits<int>::max());
     s_all.local.auto_skip_intro = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "autoSkipIntro"));
     // Missing/malformed legacy values use the enabled default. A real saved false
@@ -372,6 +375,18 @@ void set_server(jf::Client &c, const jf::UserPrefs &p)
     set_local(local);
     jf::Client *cp = &c;
     std::thread([cp, p] { cp->set_prefs(p); }).detach();
+}
+
+int upscale_engine_mode(int mode)
+{
+    switch (upscale_mode_valid(mode)) {
+    case UpscaleAuto: return EVO_AGC_UPSCALE_AUTO;
+    case UpscaleFast: return EVO_AGC_UPSCALE_SHARP;
+    case UpscaleAnime4K: return EVO_AGC_UPSCALE_AI;
+    case UpscaleFilm: return EVO_AGC_UPSCALE_FILM;
+    case UpscaleAnime: return EVO_AGC_UPSCALE_ANIME;
+    default: return EVO_AGC_UPSCALE_OFF;
+    }
 }
 
 } // namespace settings

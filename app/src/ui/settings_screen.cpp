@@ -184,8 +184,10 @@ std::string SettingsScreen::value(Row r) const
     case IPTVPassword: return m_iptv_creds.password.empty() ? T("X to enter") : "********";
     case IPTVCategories: return TF("{count} categories - X to manage",{{"count",std::to_string(m_iptv_store.categories().size())}});
     case Upscaling: {
-        const char *const modes[] = {T("Av"), T("Auto"), "FSR 1", "Anime4K"};
-        return modes[std::max(0, std::min(3, s.local.upscale_mode))];
+        /* Indexed by the saved value (settings::UpscaleMode), not by the order shown. */
+        const char *const modes[] = {T("Av"), T("Auto"), T("Fast (FSR 1)"), "Anime4K",
+                                     T("Film (FSRCNNX)"), T("Anime (ArtCNN)")};
+        return modes[settings::upscale_mode_valid(s.local.upscale_mode)];
     }
     case Quality:
         return s.local.max_mbps == 0 ? T("Automatisk (maks)") : std::to_string(s.local.max_mbps) + " Mbit/s";
@@ -371,11 +373,9 @@ void SettingsScreen::change(Row r, int dir)
         break;
     }
     case Upscaling:
-        s.local.upscale_mode = cycle(s.local.upscale_mode, 4);
+        s.local.upscale_mode = settings::next_upscale_mode(s.local.upscale_mode);
         settings::set_local(s.local);
-        evo_agc_upscale_set_mode(s.local.upscale_mode == 0 ? EVO_AGC_UPSCALE_OFF
-            : s.local.upscale_mode == 1 ? EVO_AGC_UPSCALE_AUTO
-            : s.local.upscale_mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+        evo_agc_upscale_set_mode(settings::upscale_engine_mode(s.local.upscale_mode));
         break;
     case Quality: {
         int i = 0;

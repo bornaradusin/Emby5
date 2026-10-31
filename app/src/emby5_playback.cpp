@@ -259,6 +259,8 @@ std::string request_json(jf::Client &c, const jf::Item &it, const jf::Playback &
         cJSON_AddStringToObject(o, "rating", r);
     }
     cJSON_AddStringToObject(o, "itemType", episode ? "series" : audio ? "audio" : "movie");
+    if (it.type == "LiveTvChannel" || it.type == "TvChannel")   /* upscaling's Auto: FSR 1 for live TV */
+        cJSON_AddBoolToObject(o, "live", true);
     iptv_navigation::Selection live;
     if(it.type=="LiveTvChannel" && iptv_navigation::current(&live) &&
        live.channel.source==c.server_product() && live.channel.emby_id==it.id) {
@@ -830,6 +832,27 @@ void emby5_playback_prepare()
     evo_demux_set_net_readahead_s(settings::net_buffer_seconds(l.net_buffer));
 }
 
+/* An episode's genres are usually only on its series: the series' then, so the
+ * player's upscaling (Auto) can tell an anime episode. One lookup per series. */
+static std::vector<std::string> series_genres(jf::Client &client, const std::string &series_id)
+{
+    static std::mutex lock;
+    static std::string cached_id;
+    static std::vector<std::string> cached;
+    {
+        std::lock_guard<std::mutex> g(lock);
+        if (series_id == cached_id)
+            return cached;
+    }
+    jf::Item series;
+    if (!client.item(series_id, &series))
+        return {};
+    std::lock_guard<std::mutex> g(lock);
+    cached_id = series_id;
+    cached = series.genres;
+    return cached;
+}
+
 static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf::Item> episodes, std::string *error)
 {
     int unattended_count = 0;
@@ -866,6 +889,8 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
         }
         if (ex.trickplay.valid())
             evo_bt("emby5: trickplay %dx%d, %d thumbnails", ex.trickplay.width, ex.trickplay.height, ex.trickplay.count);
+        if (item.type == "Episode" && item.genres.empty() && !item.series_id.empty())
+            item.genres = series_genres(client, item.series_id);
         const std::string req = request_json(client, item, pb, episodes, ex, unattended_count, unattended_seconds);
 
         s_session.client = &client;

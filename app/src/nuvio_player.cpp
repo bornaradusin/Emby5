@@ -52,6 +52,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -555,6 +556,8 @@ std::vector<std::pair<std::string, std::string>> playback_stats(const Session &s
         if (active == "Sharp") active = T("FSR 1 - Active");
         else if (active.rfind("Sharp (",0)==0) active=std::string(T("FSR 1 - Active"))+" "+active.substr(6);
         else if (active.rfind("AI (", 0) == 0) active = std::string(T("Anime4K - Active")) + " " + active.substr(3);
+        else if (active == "Film") active = T("FSRCNNX - Active");
+        else if (active == "Anime") active = T("ArtCNN - Active");
         else if (active == "Off") active = T("Native - Off");
         else if (active.rfind("Off (", 0) == 0) {
             active = std::string(T("Native")) + " - " + active.substr(5);
@@ -865,6 +868,36 @@ extern "C" void nuvio_player_init(int user_id)
  * One-way for this playback - g_vdec_force_ffmpeg stays set until the next
  * request - so a seek cannot land back on the decoder that failed.
  */
+/* What Auto upscaling picks a network for (evo_agc_upscale_set_content): live
+ * TV (the server's channels and IPTV) gets FSR 1, which keeps up with any
+ * channel; a title whose genres include Anime or Animation (an episode's are
+ * its series', see emby5_playback) gets ArtCNN; anything else FSRCNNX. The
+ * genres are the server's, in its metadata language, lower-cased here
+ * (std::tolower leaves UTF-8 bytes alone). */
+static int upscale_content(const NuvioRequest &req)
+{
+    if (req.live || !req.live_channel_id.empty())
+        return EVO_AGC_UPCONTENT_LIVE;
+    std::string g = req.genres;
+    for (char &c : g)
+        c = (char)std::tolower((unsigned char)c);
+    for (size_t start = 0; start <= g.size();) {   /* "Action, Anime, Fantasy" */
+        size_t end = g.find(',', start);
+        if (end == std::string::npos)
+            end = g.size();
+        std::string genre = g.substr(start, end - start);
+        genre.erase(0, genre.find_first_not_of(' '));
+        genre.erase(genre.find_last_not_of(' ') + 1);
+        /* Anime, Animation and the server languages' own words for it
+         * (Animación, Animação, Animazione, Animatie, Animasjon ...). */
+        if ((genre.compare(0, 4, "anim") == 0 && genre.compare(0, 6, "animal") != 0) ||
+            genre == "zeichentrick" || genre.compare(0, 9, "\xE3\x82\xA2\xE3\x83\x8B\xE3\x83\xA1") == 0)
+            return EVO_AGC_UPCONTENT_ANIME;
+        start = end + 1;
+    }
+    return EVO_AGC_UPCONTENT_FILM;
+}
+
 static void reopen_at(Session &s, double at)
 {
     s_pb->stopPlayback();
@@ -947,9 +980,10 @@ extern "C" void nuvio_player_run(const char *json)
 
     const bool headless = s_headless;
     if (!headless) {
-        const int mode = settings::get().local.upscale_mode;
-        evo_agc_upscale_set_mode(mode == 0 ? EVO_AGC_UPSCALE_OFF : mode == 1 ? EVO_AGC_UPSCALE_AUTO
-                                  : mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+        evo_agc_upscale_set_mode(settings::upscale_engine_mode(settings::get().local.upscale_mode));
+        /* What Auto upscales with: Anime (ArtCNN) for anime and animation,
+         * Film (FSRCNNX) for other films and episodes, Fast (FSR 1) for live TV. */
+        evo_agc_upscale_set_content(upscale_content(s.req));
         evo_agc_upscale_begin_session();
     }
     if (!headless)

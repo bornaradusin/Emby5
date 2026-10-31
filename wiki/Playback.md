@@ -7,7 +7,15 @@ Emby5 plays video with a native PS5 player and the console's hardware video deco
 - **Direct Play, Direct Stream**, or a **transcode by the server**, on Emby and Jellyfin. Emby5 tells the server exactly what the PS5 can play.
 - **AV1**: Emby5 tells the server it can play AV1 up to 4K, 10-bit and 30 fps. It's decoded in software (FFmpeg), so how well it plays depends on the video; anything beyond that is left to the server to transcode.
 - **Several versions** of a title: choose which one to play.
-- **Upscaling** (**Settings › Playback**): Off, Auto, FSR 1 or Anime4K. What is used depends on the video, the output and the GPU memory available; where it can't run, the picture is scaled normally.
+- **Upscaling** (**Settings › Playback**, or the player's upscaling button):
+  - **Off**: the picture is scaled normally.
+  - **Fast (FSR 1)**: AMD FidelityFX Super Resolution 1, light on the GPU.
+  - **Film (FSRCNNX)**: a small neural network (FSRCNNX x2) made for live action.
+  - **Anime (ArtCNN)**: a small neural network (ArtCNN C4F8) made for anime and other drawn pictures.
+  - **Anime4K**: the Anime4K networks of earlier versions.
+  - **Auto** (the choice to keep): **Anime** when the title's genres include Anime or Animation (for an episode, its series' genres), **Film** for other films and episodes, and **Fast** for Live TV.
+
+  Upscaling works on SDR video up to 1080p; HDR, 10-bit and larger videos are shown as they are. Film and Anime double the picture, and go the rest of the way to a 4K screen (from 720p, say) the normal way; below 1.3× they use Fast instead. If the console can't keep up for a few seconds, Emby5 steps down to Fast, and then to Off, until the next video. Emby5 sets aside 106 MiB of graphics memory for upscaling once, when upscaling is first on, and keeps it, so changing videos never interrupts it. **L3** shows what is in use (**Upscaling**) and that memory (**GPU scratch**).
 
 ## While playing
 

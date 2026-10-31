@@ -92,6 +92,7 @@ struct NuvioRequest {
     std::string id, url, headers, user_agent;
     std::string live_channel_id, live_group_name, live_navigation_token;
     std::string title, episode_title, year, description, genres, runtime, rating, item_type;
+    bool live = false;                                  /* Emby5: a live TV channel (upscaling's Auto) */
     std::string logo, poster, backdrop, thumbnail;
     std::string artist, album, cover, cover_blurhash;   /* Emby5: music */
     uint32_t light_color = 0;                           /* Emby5: the DualSense light bar, 0 = leave it */

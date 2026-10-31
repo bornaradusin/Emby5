@@ -4,6 +4,7 @@
 #endif
 #include "evo_agc_shader_header.h"
 #include "evo_agc_pipes.h"
+#include "upscale_cnn_pipes.h"   /* Emby5: FSRCNNX and ArtCNN (app/scripts/gen_cnn_pipes.py) */
 /* Emby5: built by tools/shaders/build.sh; until then the glass is drawn without it. */
 #if defined(__has_include)
 #if __has_include("liquid_glass_pipe.h")
@@ -330,34 +331,31 @@ typedef struct evo_agc_device {
     /* #103 upscaler. See agc_upscale_* below. */
     struct {
         int          requested;        /* EVO_AGC_UPSCALE_* from Settings */
-        int          cap;              /* highest mode GPU time allows */
+        int          cap;              /* GPU time allows: 2 any mode (EVO_AGC_UPSCALE_AI),
+                                          1 Sharp at most (EVO_AGC_UPSCALE_SHARP), 0 Off */
         int          downgrade_notice; /* -1, or the mode just capped to */
         int          net_pref;         /* EVO_AGC_UPNET_* from Settings */
         int          net_cap;          /* largest network GPU time allows: 0 S, 1 M, 2 UL */
+        int          content;          /* EVO_AGC_UPCONTENT_*, what Auto picks for */
         const char  *label;            /* what the last frame used */
-        /* Two base scratch tiers permit switching small -> large video
-         * without resizing GPU memory still referenced by in-flight draws.
-         * Block 2 contains the Anime4K UL extension surfaces. */
-        int          alloc_state[3];
-        int          active_base;
-        unsigned     reclaim_mask;    /* serviced only before recording a frame */
-        uint32_t     block_fence[3][EVO_AGC_FRAME_SLOTS]; /* last submit USING each block */
-        unsigned     frame_blocks;      /* scratch referenced by the current DCB */
+        /* The scratch pool (agc_upscale_pool_*): one reservation for the life
+         * of the renderer, never unmapped or resized while it runs. */
+        int          pool_state;       /* 0 not tried, 1 reserved, -1 failed (one retry
+                                          pending), -2 failed again (given up) */
+        int          pool_attempts;    /* failed reservations since the last fresh choice */
+        int          pool_stage;       /* the failed call: 3 allocate, 4 map */
+        int          pool_rc;
+        uint64_t     pool_retry_frame; /* frame_serial of the one retry */
+        uint8_t     *pool_base;
+        int64_t      pool_offset;
+        size_t       pool_bytes;
+        int64_t      orphan_offset;    /* an allocation whose map and release both failed */
+        size_t       orphan_bytes;
+        uint32_t     pool_fence[EVO_AGC_FRAME_SLOTS]; /* last submit USING the pool */
+        unsigned     frame_uses_pool;  /* the current DCB references the pool */
         unsigned     session_number;
-        int          allocation_failure; /* 1 dimensions, 2 busy, 3 alloc, 4 map, 5 release */
-        int          allocation_rc;
-        size_t       allocation_bytes;
-        size_t       failed_bytes[3];  /* a smaller fallback may retry without defeating backoff */
-        uint64_t     memory_retry_frame;
-        int          memory_mode, memory_net;
         char         memory_status[160];
         uint64_t     frame_serial;
-        uint64_t     retry_after[3];   /* bounded allocation retry, not every frame */
-        int64_t      mem_offset[3];
-        uint8_t     *mem_base[3];
-        size_t       mem_bytes[3];
-        size_t       slot_offset[18];
-        size_t       slot_capacity[18];
         /* The last plan, so a change of source or mode is logged once. */
         int          last_key[6];
         /* This frame carried upscale passes; frame_end times its GPU work. */
@@ -1093,7 +1091,8 @@ int evo_agc_runtime_init(int width, int height, int hdr)
     g_agc_dev.up.downgrade_notice = -1;
     g_agc_dev.up.net_cap = 2;
     g_agc_dev.up.label = "Off";
-    g_agc_dev.up.mem_offset[0] = g_agc_dev.up.mem_offset[1] = g_agc_dev.up.mem_offset[2] = -1;
+    g_agc_dev.up.pool_offset = -1;
+    g_agc_dev.up.orphan_offset = -1;
 
     /* 1. Allocate Direct Memory Pool */
     int ret = sceKernelAllocateDirectMemory(
@@ -1334,6 +1333,7 @@ int evo_agc_runtime_init(int width, int height, int hdr)
         {EVO_AGC_PIPE_UP_M_ACC0 + 6, &upscale_a4k_m_acc6_metadata, "upscale_a4k_m_acc6"},
         {EVO_AGC_PIPE_UP_RGB_FINAL, &upscale_a4k_rgb_final_metadata, "upscale_a4k_rgb_final"},
 #include "upscale_wide_pipes.inc"
+#include "upscale_cnn_pipes.inc"
     };
     for (unsigned i = 0; i < sizeof(video_pipes) / sizeof(video_pipes[0]); ++i) {
         int vrc = compile_agc_pipeline(&g_agc_dev.pipelines[video_pipes[i].pipe_id],
@@ -1692,9 +1692,10 @@ void evo_agc_runtime_frame_begin(void)
     if (!g_agc_dev.initialized || g_agc_dev.frame_active)
         return;
 
-    /* Scratch recycling must happen before this frame records any GPU address. */
+    /* Counts frames for the scratch pool's one retry; the pool itself is never
+     * recycled (agc_upscale_pool_reserve). */
     agc_upscale_maintenance();
-    g_agc_dev.up.frame_blocks=0;
+    g_agc_dev.up.frame_uses_pool=0;
     const uint32_t slot = g_agc_dev.current_slot;
 
     /* Diagnostic trace for the first dozen frames only - enough to cross every
@@ -3281,35 +3282,80 @@ void evo_agc_runtime_clear_black(void)
  *   AI (S)  L0 -conv0..3-> F (RGBA16F, ping-pong) ; L0 + F -final-> scanout
  *   AI (M)  L0 -conv0..6-> F, and after each conv acc_k = acc_{k-1} +
  *           W_k * crelu(f_k) into A (ping-pong) ; L0 + A -final-> scanout
+ *   Film    L0 -FSRCNNX x2 8-0-4-1, 13 passes-> R ; L0 + R -final-> scanout
+ *   Anime   L0 -ArtCNN C4F8, 13 passes-> R ; L0 + R -final-> scanout
+ *
+ * Film and Anime are luma networks (app/scripts/gen_cnn_pipes.py): their first
+ * passes take the BT.709 luma of L0 and their last leaves R, the 2x luma minus
+ * the bilinear source luma, in the same depth-to-space layout as Anime4K's F/A,
+ * so upscale_a4k_final finishes all four: x2 by the network, the rest of the
+ * way (720p to 2160p) bilinearly, the chroma bilinear.
  *
  * The chain writes only the visible image rectangle - the same pixels the
  * Off quad covers - with the Fit/Fill/Stretch scale folded into that rect and
  * the source UV sub-rect it shows, so letterbox bars behave exactly as before.
  *
- * Scratch surfaces are a dedicated lazily-allocated block, not the RmlUi layer
- * pool: RmlUi CPU-clears a layer on acquire, and doing that to a surface the
- * GPU is still upscaling the previous frame from would corrupt one or the
- * other. Like every colour target setup_color_target() builds, they are
- * rendered 64KB_R_X TILED, so they are sampled back with a tiled T#
- * (evo_agc_build_tsharp_render_target) sized to the exact target - a linear
- * T# reads them as scrambled blocks, which was the first hardware run.
+ * Scratch surfaces are a dedicated block, not the RmlUi layer pool: RmlUi
+ * CPU-clears a layer on acquire, and doing that to a surface the GPU is still
+ * upscaling the previous frame from would corrupt one or the other. Like every
+ * colour target setup_color_target() builds, they are rendered 64KB_R_X TILED,
+ * so they are sampled back with a tiled T# (evo_agc_build_tsharp_render_target)
+ * sized to the exact target - a linear T# reads them as scrambled blocks,
+ * which was the first hardware run.
  *
  * Passes are separated by evo_agc_flush_color_target(): RELEASE_MEM event 45
  * with GCR 0xC = CB flush + GLV/GL1 invalidate, the same barrier the RmlUi
  * blur relies on between its H and V passes.
  * ========================================================================= */
 
-#define EVO_AGC_UP_SURFACES   5
-#define EVO_AGC_UP_EXT_SURFACES 8   /* Anime4K UL only */
-/* 36 MB: colour targets are 64KB_R_X tiled, so a 4K RGBA8 image takes
- * 30 x 17 blocks of 64 KB = 33.4 MB, not its 31.6 MB linear size. */
-#define EVO_AGC_UP_SLOT_BYTES UINT64_C(0x02400000)
+/* The scratch pool. ONE reservation, made once - at start-up when upscaling is
+ * on (evo_agc_upscale_set_mode), else when it is first used - and kept for the
+ * life of the renderer: never unmapped, resized or replaced while the app
+ * runs. Up to 1.2.10 the block was allocated per video size (tiers 0/1/2 with
+ * a reclaim mask), so a new video size meant retiring a block the GPU might
+ * still own and allocating another while the decoder held its memory - and
+ * either could fail mid-session ("Off (GPU scratch ... retrying)").
+ *
+ * It is sized for the worst case Emby5 upscales, a source of up to 1920x1088
+ * (larger ones are not upscaled) to an image of up to 3840x2160 in any mode,
+ * from the tiled footprints of up_surface_bytes():
+ *
+ *   slot 0      L0, the source, RGBA8          1920x1088: 15x9 blocks   10 MiB
+ *   slots 1..6  RGBA16F maps at source size    1920x1088: 15x17 blocks  16 MiB each
+ *               FSRCNNX and ArtCNN use all 6 (upscale_cnn_pipes.h), Anime4K M
+ *               4, S 2; FSR 1's EASU target E (3840x2160 RGBA8, 30x17 blocks,
+ *               32 MiB) takes the place of slots 1-2.
+ *                                                                total 106 MiB
+ *
+ * Every surface has a fixed offset (slot k at 10 MiB + (k - 1) * 16 MiB), so a
+ * new video size or mode reuses the same memory. Frames never overlap on the
+ * GPU (frame_end waits for each frame's fence before the flip) and the passes
+ * of a frame are ordered by the flush between them, so nothing is reused while
+ * the GPU still reads it. If the reservation fails it is retried once, about
+ * ten seconds later; after that upscaling shows "Off (GPU scratch unavailable)"
+ * until a mode is chosen again in Settings (one more try) or Emby5 restarts.
+ *
+ * Anime4K UL (Maximum: 12 maps, 202 MiB) is not covered: Settings never picks
+ * it, and the plan runs M instead. */
+#define EVO_AGC_UP_MAX_SRC_W        1920u
+#define EVO_AGC_UP_MAX_SRC_H        1088u
+#define EVO_AGC_UP_MAX_DST_W        3840u
+#define EVO_AGC_UP_MAX_DST_H        2160u
+#define EVO_AGC_UP_POOL_FP16_SLOTS  6
+#define EVO_AGC_UP_POOL_RETRY_FRAMES 600u   /* the one retry: ~10 s at 60 Hz */
 enum {
     UP_SLOT_L0 = 0, UP_SLOT_E = 1, UP_SLOT_F0 = 1, UP_SLOT_A0 = 3,
-    /* UL: two sets of 3 feature maps, two sets of 3 accumulators. Slots 5+
-     * live in the second block. */
+    /* UL: two sets of 3 feature maps, two sets of 3 accumulators (slots 1..12,
+     * more than the pool has: see above). */
     UP_SLOT_UL_F = 1, UP_SLOT_UL_A = 7,
 };
+_Static_assert(EVO_AGC_UP_FSRCNNX_SLOTS <= EVO_AGC_UP_POOL_FP16_SLOTS &&
+               EVO_AGC_UP_ARTCNN_SLOTS <= EVO_AGC_UP_POOL_FP16_SLOTS &&
+               UP_SLOT_A0 + 1 <= EVO_AGC_UP_POOL_FP16_SLOTS,
+               "every mode's maps must fit the scratch pool");
+_Static_assert(EVO_AGC_PIPE_UP_FSRCNNX0 + EVO_AGC_UP_FSRCNNX_PASSES == EVO_AGC_PIPE_UP_ARTCNN0 &&
+               EVO_AGC_PIPE_UP_ARTCNN0 + EVO_AGC_UP_ARTCNN_PASSES <= EVO_AGC_PIPE_COUNT,
+               "pipe ids of the generated FSRCNNX/ArtCNN passes");
 
 /* Whole-frame GPU time (submit -> retire) of an upscaled frame. A 60 fps
  * frame has 16.7 ms; leave room for the UI, the flip and poll granularity. */
@@ -3331,7 +3377,7 @@ typedef struct {
 } agc_up_tex_t;
 
 typedef struct {
-    int      mode;                        /* SHARP or AI, after every fallback */
+    int      mode;                        /* SHARP, AI, FILM or ANIME, after every fallback */
     int      net;                         /* AI: 0 = S, 1 = M, 2 = UL */
     uint32_t src_w, src_h;
     int      x0, y0, x1, y1;              /* visible image rect on the scanout */
@@ -3342,40 +3388,8 @@ typedef struct {
  * evo_agc_set_layer_target() always re-emits its target. */
 static const evo_agc_layer_surface_t s_up_target_sentinel;
 
-
-static agc_up_surface_t up_surface(int slot, uint32_t w, uint32_t h, int fp16)
-{
-    agc_up_surface_t t;
-    memset(&t, 0, sizeof(t));
-    const int blk = slot >= EVO_AGC_UP_SURFACES ? 2 : g_agc_dev.up.active_base;
-    const int offset_slot = slot >= EVO_AGC_UP_SURFACES ? slot + EVO_AGC_UP_SURFACES
-                                                           : slot + blk * EVO_AGC_UP_SURFACES;
-    g_agc_dev.up.frame_blocks |= 1u << blk;
-    t.addr = (uint64_t)(uintptr_t)g_agc_dev.up.mem_base[blk] +
-             (uint64_t)g_agc_dev.up.slot_offset[offset_slot];
-    t.width = w;
-    t.height = h;
-    t.fp16 = fp16;
-    return t;
-}
-
-/* Tiled footprint: 64 KB blocks of 128x128 pixels at 4 bpp, 128x64 at 8. */
-static int up_fits(uint32_t w, uint32_t h, uint32_t bpp)
-{
-    const uint32_t bh = bpp == 8u ? 64u : 128u;
-    const uint64_t blocks = (uint64_t)((w + 127u) / 128u) * ((h + bh - 1u) / bh);
-    return blocks * 0x10000u <= EVO_AGC_UP_SLOT_BYTES;
-}
-
-static agc_up_tex_t up_tex(const agc_up_surface_t *s, int bilinear)
-{
-    agc_up_tex_t t = { s->addr, s->width, s->height, s->fp16, bilinear };
-    return t;
-}
-
-/* Tiled 64-KB surface footprint with 2-MB alignment for each suballocation.
- * Allocate for the actual video frame, not five worst-case 4K buffers.
- * Reuse across playback; recycle unsuitable tiers only after their GPU fences. */
+/* Tiled footprint: 64 KB blocks of 128x128 pixels at 4 bpp, 128x64 at 8,
+ * rounded up to the 2 MB direct-memory alignment. */
 static size_t up_surface_bytes(uint32_t w, uint32_t h, uint32_t bpp)
 {
     const uint32_t bh = bpp == 8u ? 64u : 128u;
@@ -3385,249 +3399,170 @@ static size_t up_surface_bytes(uint32_t w, uint32_t h, uint32_t bpp)
                     ~(EVO_AGC_DIRECT_MEM_ALIGN - 1u));
 }
 
-static int agc_upscale_alloc_for_network(int blk, uint32_t sw, uint32_t sh,
-                            uint32_t dw, uint32_t dh, int mode, int network)
+/* The pool's parts, from the worst case above. */
+static size_t up_pool_l0_bytes(void)  { return up_surface_bytes(EVO_AGC_UP_MAX_SRC_W, EVO_AGC_UP_MAX_SRC_H, 4u); }
+static size_t up_pool_map_bytes(void) { return up_surface_bytes(EVO_AGC_UP_MAX_SRC_W, EVO_AGC_UP_MAX_SRC_H, 8u); }
+static size_t up_pool_e_bytes(void)   { return up_surface_bytes(EVO_AGC_UP_MAX_DST_W, EVO_AGC_UP_MAX_DST_H, 4u); }
+static size_t up_pool_total_bytes(void)
 {
-    g_agc_dev.up.allocation_failure=0;
-    const int ai=mode==EVO_AGC_UPSCALE_AI;
-    size_t capacity[8] = {0};
-    const int count = blk ? EVO_AGC_UP_EXT_SURFACES : EVO_AGC_UP_SURFACES;
-    const size_t rgba_src = up_surface_bytes(sw, sh, 4u);
-    const size_t fp16_src = up_surface_bytes(sw, sh, 8u);
-    const size_t rgba_dst = up_surface_bytes(dw, dh, 4u);
-    if (!sw || !sh || !dw || !dh || !rgba_src || !fp16_src || !rgba_dst ||
-        !up_fits(sw, sh, 8u) || !up_fits(dw, dh, 4u))
-        {g_agc_dev.up.allocation_failure=1;return -1;}
-    for (int i = 0; i < count; ++i) {
-        if (blk)
-            capacity[i] = fp16_src;
-        else if (i == 0)
-            capacity[i] = rgba_src;
-        else if (i == 1)
-            capacity[i] = ai ? fp16_src : rgba_dst;
-        else
-            capacity[i] = ai && (network>0 || i==2) ? fp16_src : 0; // S uses two feature maps; M/UL four.
-    }
-    // Reserve ONLY the requested tiled footprints. The former 1080p/4K floor
-    // charged small IPTV streams for unused output and feature-map surfaces.
-    // AI's final pass renders straight to scanout: it needs no 4K EASU target.
-    size_t requested_bytes=0;
-    for(int i=0;i<count;++i)requested_bytes+=capacity[i];
-    for(int i=0;i<3;++i) {
-        if(g_agc_dev.up.alloc_state[i]<0 && !g_agc_dev.up.mem_bytes[i] &&
-           g_agc_dev.up.failed_bytes[i] && requested_bytes<g_agc_dev.up.failed_bytes[i]) {
-            g_agc_dev.up.alloc_state[i]=0;g_agc_dev.up.retry_after[i]=0;
-        }
-    }
-    /* A real allocation failure is retried at a bounded rate. It is not a
-     * permanent 'Off' flag until the application is relaunched. */
-    for (int i = 0; i < 3; ++i)
-        if (g_agc_dev.up.alloc_state[i] < 0 && !g_agc_dev.up.mem_base[i] && !g_agc_dev.up.mem_bytes[i] &&
-            g_agc_dev.up.frame_serial >= g_agc_dev.up.retry_after[i])
-            g_agc_dev.up.alloc_state[i] = 0;
+    const size_t maps = (size_t)EVO_AGC_UP_POOL_FP16_SLOTS * up_pool_map_bytes();
+    const size_t e = up_pool_e_bytes();
+    return up_pool_l0_bytes() + (maps > e ? maps : e);
+}
 
-    /* Existing blocks may be reused for any smaller stream. For a larger
-     * source choose the spare base tier; never remap an in-flight surface.
-     * The first small IPTV stream must not lock out a later 1080p movie. */
-    int selected = blk ? 2 : 0;
-    if (!blk) {
-        for (int candidate = 0; candidate < 2; ++candidate) {
-            if (g_agc_dev.up.alloc_state[candidate] != 1 || !g_agc_dev.up.mem_base[candidate] ||
-                (g_agc_dev.up.reclaim_mask & (1u << candidate)))
-                continue;
-            int fits = 1;
-            for (int i = 0; i < count; ++i)
-                if (capacity[i] > g_agc_dev.up.slot_capacity[candidate * EVO_AGC_UP_SURFACES + i])
-                    fits = 0;
-            if (fits) {
-                g_agc_dev.up.active_base = candidate;
-                return 0;
-            }
-        }
-        if (g_agc_dev.up.alloc_state[0] != 0)
-            selected = 1;
-        if (g_agc_dev.up.alloc_state[selected] != 0) {
-            /* Both tiers can contain perfectly valid, but too-small targets.
-             * Queue recycling of one tier; never unmap while a frame uses it.
-             * Also free an unsuitable survivor after the spare allocation fails
-             * so an unused old target does not itself keep the device out of memory. */
-            const int live0 = g_agc_dev.up.alloc_state[0] == 1;
-            const int live1 = g_agc_dev.up.alloc_state[1] == 1;
-            if (live0 || live1) {
-                const int victim = live0 && live1 ?
-                    (g_agc_dev.up.mem_bytes[0] <= g_agc_dev.up.mem_bytes[1] ? 0 : 1) :
-                    (live0 ? 0 : 1);
-                g_agc_dev.up.reclaim_mask |= 1u << victim;
-                g_agc_dev.up.allocation_failure=2;
-            } else g_agc_dev.up.allocation_failure=3;
-            return -1;
-        }
-    } else if (g_agc_dev.up.reclaim_mask & (1u << 2)) {
-        g_agc_dev.up.allocation_failure=2;
-        return -1;
-    } else if (g_agc_dev.up.alloc_state[2]) {
-        if (g_agc_dev.up.alloc_state[2] < 0) {g_agc_dev.up.allocation_failure=3;return -1;}
-        for (int i = 0; i < count; ++i)
-            if (capacity[i] > g_agc_dev.up.slot_capacity[10 + i]) {
-                g_agc_dev.up.reclaim_mask |= 1u << 2;
-                g_agc_dev.up.allocation_failure=2;
-                return -1;
-            }
+/* What the pool holds: a source up to 1080p, an image up to 2160p. */
+static int up_source_fits(uint32_t w, uint32_t h)
+{
+    return w && h && w <= EVO_AGC_UP_MAX_SRC_W && h <= EVO_AGC_UP_MAX_SRC_H;
+}
+static int up_target_fits(uint32_t w, uint32_t h)
+{
+    return w && h && w <= EVO_AGC_UP_MAX_DST_W && h <= EVO_AGC_UP_MAX_DST_H;
+}
+
+/* A surface of the pool at its fixed offset; address 0 (refused by
+ * agc_up_pass) without a pool or for a slot the pool does not have. */
+static agc_up_surface_t up_surface(int slot, uint32_t w, uint32_t h, int fp16)
+{
+    agc_up_surface_t t;
+    memset(&t, 0, sizeof(t));
+    if (!g_agc_dev.up.pool_base || slot < 0 || slot > EVO_AGC_UP_POOL_FP16_SLOTS)
+        return t;
+    const size_t offset = slot == UP_SLOT_L0 ? 0
+        : up_pool_l0_bytes() + (size_t)(slot - 1) * up_pool_map_bytes();
+    g_agc_dev.up.frame_uses_pool = 1;
+    t.addr = (uint64_t)(uintptr_t)g_agc_dev.up.pool_base + (uint64_t)offset;
+    t.width = w;
+    t.height = h;
+    t.fp16 = fp16;
+    return t;
+}
+
+static agc_up_tex_t up_tex(const agc_up_surface_t *s, int bilinear)
+{
+    agc_up_tex_t t = { s->addr, s->width, s->height, s->fp16, bilinear };
+    return t;
+}
+
+/* Reserve the pool, once. Returns 0 when it is there. A failure is retried
+ * once, EVO_AGC_UP_POOL_RETRY_FRAMES later; after a second failure it stays
+ * off (pool_state -2) until evo_agc_upscale_set_mode() gets a fresh choice. */
+static int agc_upscale_pool_reserve(const char *why)
+{
+    if (g_agc_dev.up.pool_base)
         return 0;
-    }
-    const int base = selected == 2 ? 10 : selected * EVO_AGC_UP_SURFACES;
-    size_t bytes = 0;
-    for (int i = 0; i < count; ++i) {
-        g_agc_dev.up.slot_offset[base + i] = bytes;
-        g_agc_dev.up.slot_capacity[base + i] = capacity[i];
-        bytes += capacity[i];
-    }
+    if (!g_agc_dev.initialized || g_agc_dev.up.pool_state == -2 ||
+        (g_agc_dev.up.pool_state == -1 && g_agc_dev.up.frame_serial < g_agc_dev.up.pool_retry_frame))
+        return -1;
+    const size_t bytes = up_pool_total_bytes();
     int64_t off = -1;
     void *va = NULL;
-    int stage=3;
+    int stage = 3;
     int rc = sceKernelAllocateDirectMemory(0, (off_t)16 * 1024 * 1024 * 1024ULL, bytes,
                                            EVO_AGC_DIRECT_MEM_ALIGN,
                                            EVO_AGC_DIRECT_MEM_TYPE, &off);
     if (rc == 0 && off >= 0) {
-        stage=4;
+        stage = 4;
         rc = sceKernelMapDirectMemory(&va, bytes, EVO_AGC_MAP_PROTECTION, 0, off,
                                       EVO_AGC_DIRECT_MEM_ALIGN);
         if (rc != 0 || !va) {
-            // Retain the physical allocation record if release fails, so a later
-            // retry cleans it up rather than leaking one block per failed map.
-            const int released=sceKernelReleaseDirectMemory(off,bytes);
-            if(released!=0) {
-                g_agc_dev.up.mem_offset[selected]=off;g_agc_dev.up.mem_bytes[selected]=bytes;
-                g_agc_dev.up.reclaim_mask|=1u<<selected;stage=5;rc=released;
+            /* Hand the physical pages back; if even that fails, keep the
+             * record so shutdown tries again rather than leaking it. */
+            if (sceKernelReleaseDirectMemory(off, bytes) != 0) {
+                g_agc_dev.up.orphan_offset = off;
+                g_agc_dev.up.orphan_bytes = bytes;
             }
-            va=NULL;
+            va = NULL;
         }
+    } else if (rc == 0) {
+        rc = -1;
     }
     if (!va) {
-        g_agc_dev.up.alloc_state[selected] = -1;
-        g_agc_dev.up.retry_after[selected] = g_agc_dev.up.frame_serial + 120u;
-        g_agc_dev.up.allocation_failure=stage;g_agc_dev.up.allocation_rc=rc;
-        g_agc_dev.up.allocation_bytes=bytes;g_agc_dev.up.failed_bytes[selected]=bytes;
-        evo_boot_log("agc upscale: session=%u block=%d %s failed rc=%#x bytes=%zu src=%ux%u dst=%ux%u reclaim=%u",
-            g_agc_dev.up.session_number,selected,stage==3?"allocate":stage==4?"map":"release",(unsigned)rc,
-            bytes,sw,sh,dw,dh,g_agc_dev.up.reclaim_mask);
-        // Unused UL maps must not starve the base FSR/Anime4K path.
-        if(!blk && g_agc_dev.up.mem_bytes[2] && !(g_agc_dev.up.frame_blocks&(1u<<2)))
-            g_agc_dev.up.reclaim_mask|=1u<<2;
+        ++g_agc_dev.up.pool_attempts;
+        g_agc_dev.up.pool_state = g_agc_dev.up.pool_attempts >= 2 ? -2 : -1;
+        g_agc_dev.up.pool_retry_frame = g_agc_dev.up.frame_serial + EVO_AGC_UP_POOL_RETRY_FRAMES;
+        g_agc_dev.up.pool_stage = stage;
+        g_agc_dev.up.pool_rc = rc;
+        evo_boot_log("agc upscale: scratch pool (%s) %s failed rc=%#x bytes=%zu - %s",
+                     why, stage == 3 ? "allocate" : "map", (unsigned)rc, bytes,
+                     g_agc_dev.up.pool_state == -1 ? "one retry in ~10 s"
+                                                   : "upscaling off until a mode is chosen again");
         return -1;
     }
-    g_agc_dev.up.mem_offset[selected] = off;
-    g_agc_dev.up.mem_base[selected] = (uint8_t *)va;
-    g_agc_dev.up.mem_bytes[selected] = bytes;
-    g_agc_dev.up.alloc_state[selected] = 1;
-    g_agc_dev.up.failed_bytes[selected]=0;
-    if (!blk) g_agc_dev.up.active_base = selected;
-    evo_boot_log("agc upscale: session=%u block=%d ready bytes=%zu src=%ux%u dst=%ux%u mode=%d",
-        g_agc_dev.up.session_number,selected,bytes,sw,sh,dw,dh,mode);
+    g_agc_dev.up.pool_base = (uint8_t *)va;
+    g_agc_dev.up.pool_offset = off;
+    g_agc_dev.up.pool_bytes = bytes;
+    g_agc_dev.up.pool_state = 1;
+    g_agc_dev.up.pool_attempts = 0;
+    g_agc_dev.up.pool_rc = 0;
+    memset(g_agc_dev.up.pool_fence, 0, sizeof g_agc_dev.up.pool_fence);
+    evo_boot_log("agc upscale: scratch pool reserved (%s): %zu bytes (%zu MiB) = L0 %ux%u RGBA8 %zu MiB"
+                 " + %d maps %ux%u RGBA16F %zu MiB each (FSR 1 target %ux%u %zu MiB within)",
+                 why, bytes, bytes >> 20, EVO_AGC_UP_MAX_SRC_W, EVO_AGC_UP_MAX_SRC_H,
+                 up_pool_l0_bytes() >> 20, EVO_AGC_UP_POOL_FP16_SLOTS,
+                 EVO_AGC_UP_MAX_SRC_W, EVO_AGC_UP_MAX_SRC_H, up_pool_map_bytes() >> 20,
+                 EVO_AGC_UP_MAX_DST_W, EVO_AGC_UP_MAX_DST_H, up_pool_e_bytes() >> 20);
     return 0;
 }
 
-// Compatibility entry for fixed FSR or M allocations. The plan passes the
-// network explicitly, avoiding unneeded M/UL buffers for Standard Anime4K.
-static int agc_upscale_alloc(int blk,uint32_t sw,uint32_t sh,uint32_t dw,uint32_t dh,int mode)
-{
-    return agc_upscale_alloc_for_network(blk,sw,sh,dw,dh,mode,1);
-}
-
-/* Unmap a block only once a caller has established GPU ownership is over. */
-static int agc_upscale_release_block(int blk)
-{
-    const size_t bytes = g_agc_dev.up.mem_bytes[blk];
-    if (g_agc_dev.up.mem_base[blk]) {
-        if (sceKernelMunmap(g_agc_dev.up.mem_base[blk], bytes) != 0)
-            return -1; /* do not hand mapped pages back to the kernel */
-        g_agc_dev.up.mem_base[blk] = NULL;
-    }
-    if (bytes && g_agc_dev.up.mem_offset[blk] >= 0) {
-        if (sceKernelReleaseDirectMemory(g_agc_dev.up.mem_offset[blk], bytes) != 0)
-            return -1;
-    }
-    g_agc_dev.up.mem_offset[blk] = -1;
-    g_agc_dev.up.mem_bytes[blk] = 0;
-    g_agc_dev.up.alloc_state[blk] = 0;
-    g_agc_dev.up.retry_after[blk] = 0;
-    g_agc_dev.up.failed_bytes[blk] = 0;
-    memset(g_agc_dev.up.block_fence[blk],0,sizeof g_agc_dev.up.block_fence[blk]);
-    const int base = blk == 2 ? 10 : blk * EVO_AGC_UP_SURFACES;
-    const int count = blk == 2 ? EVO_AGC_UP_EXT_SURFACES : EVO_AGC_UP_SURFACES;
-    memset(g_agc_dev.up.slot_offset + base, 0, (size_t)count * sizeof(size_t));
-    memset(g_agc_dev.up.slot_capacity + base, 0, (size_t)count * sizeof(size_t));
-    return 0;
-}
-
-// A fence belongs to the last DCB that referenced a particular scratch block,
-// not to all later menu/video DCBs. Completed ownership is remembered before the
-// shared fence slot is reset to zero for its next submit.
+// A fence belongs to the last DCB that referenced the pool, not to all later
+// menu/video DCBs. Completed ownership is remembered before the shared fence
+// slot is reset to zero for its next submit. Only shutdown needs it: the pool
+// is released then, and only once the GPU is proved done with it.
 static void agc_upscale_observe_fence(unsigned slot,uint32_t value)
 {
     if(slot>=EVO_AGC_FRAME_SLOTS || !value)return;
-    for(int block=0;block<3;++block) {
-        const uint32_t want=g_agc_dev.up.block_fence[block][slot];
-        // Markers are monotonic modulo uint32_t; a later marker in the SAME slot
-        // proves its earlier work retired. Zero is the CPU's reset, not completion.
-        if(want && (int32_t)(value-want)>=0)g_agc_dev.up.block_fence[block][slot]=0;
-    }
+    const uint32_t want=g_agc_dev.up.pool_fence[slot];
+    // Markers are monotonic modulo uint32_t; a later marker in the SAME slot
+    // proves its earlier work retired. Zero is the CPU's reset, not completion.
+    if(want && (int32_t)(value-want)>=0)g_agc_dev.up.pool_fence[slot]=0;
 }
 static void agc_upscale_note_submit(unsigned slot,uint32_t marker)
 {
-    for(int block=0;block<3;++block)
-        if(g_agc_dev.up.frame_blocks&(1u<<block))g_agc_dev.up.block_fence[block][slot]=marker;
+    if(g_agc_dev.up.frame_uses_pool && slot<EVO_AGC_FRAME_SLOTS)g_agc_dev.up.pool_fence[slot]=marker;
 }
-static int agc_upscale_block_idle(int block)
+static int agc_upscale_pool_idle(void)
 {
     for(unsigned slot=0;slot<EVO_AGC_FRAME_SLOTS;++slot) {
         if(g_agc_dev.fences[slot]) {
             evo_agc_runtime_cache_flush((const void *)g_agc_dev.fences[slot],4);
             agc_upscale_observe_fence(slot,*g_agc_dev.fences[slot]);
         }
-        if(g_agc_dev.up.block_fence[block][slot])return 0;
+        if(g_agc_dev.up.pool_fence[slot])return 0;
     }
     return 1;
 }
+/* Before recording a frame: counts frames (the pool's one retry is timed in
+ * them). Nothing is recycled here any more. */
 static void agc_upscale_maintenance(void)
 {
     ++g_agc_dev.up.frame_serial;
-    if(g_agc_dev.frame_active)return;
-    // Observe even when no recycling is requested; later unrelated frames may
-    // reset their fence slots while these surfaces still await a future resize.
-    for(unsigned slot=0;slot<EVO_AGC_FRAME_SLOTS;++slot)
-        if(g_agc_dev.fences[slot]) {
-            evo_agc_runtime_cache_flush((const void *)g_agc_dev.fences[slot],4);
-            agc_upscale_observe_fence(slot,*g_agc_dev.fences[slot]);
-        }
-    for(int block=0;block<3;++block) {
-        if(!(g_agc_dev.up.reclaim_mask&(1u<<block)))continue;
-        if(!agc_upscale_block_idle(block)) {
-            if(g_agc_dev.up.frame_serial%240u==0)
-                evo_boot_log("agc upscale: session=%u block=%d waiting for GPU retirement",
-                    g_agc_dev.up.session_number,block);
-            continue;
-        }
-        if(g_agc_dev.up.frame_serial<g_agc_dev.up.retry_after[block])continue;
-        const size_t bytes=g_agc_dev.up.mem_bytes[block];
-        if(agc_upscale_release_block(block)==0) {
-            g_agc_dev.up.reclaim_mask&=~(1u<<block);
-            evo_boot_log("agc upscale: session=%u released idle block=%d bytes=%zu",
-                g_agc_dev.up.session_number,block,bytes);
-        } else {
-            g_agc_dev.up.retry_after[block]=g_agc_dev.up.frame_serial+120u;
-            g_agc_dev.up.allocation_failure=5;
-            evo_boot_log("agc upscale: release retry queued for block=%d bytes=%zu",block,bytes);
-        }
-    }
 }
-/* Do not free scratch that a timed-out GPU still owns. Process teardown will
- * reclaim it; active-session maintenance retries only after proved completion. */
+/* Shutdown, after the GPU drained: unmap and hand back the pool. Do not free
+ * scratch that a timed-out GPU still owns - process teardown reclaims it. */
 static void agc_upscale_release(void)
 {
-    g_agc_dev.up.reclaim_mask|=7u;
-    for(int block=0;block<3;++block)g_agc_dev.up.retry_after[block]=0;
-    agc_upscale_maintenance();
+    if(g_agc_dev.up.orphan_bytes && g_agc_dev.up.orphan_offset>=0 &&
+       sceKernelReleaseDirectMemory(g_agc_dev.up.orphan_offset,g_agc_dev.up.orphan_bytes)==0) {
+        g_agc_dev.up.orphan_offset=-1;
+        g_agc_dev.up.orphan_bytes=0;
+    }
+    if(!g_agc_dev.up.pool_base)return;
+    if(!agc_upscale_pool_idle()) {
+        evo_boot_log("agc upscale: scratch pool still owned by the GPU at shutdown; left to teardown");
+        return;
+    }
+    const size_t bytes=g_agc_dev.up.pool_bytes;
+    if(sceKernelMunmap(g_agc_dev.up.pool_base,bytes)!=0) {
+        evo_boot_log("agc upscale: scratch pool unmap failed at shutdown");
+        return;   /* do not hand mapped pages back to the kernel */
+    }
+    g_agc_dev.up.pool_base=NULL;
+    if(g_agc_dev.up.pool_offset>=0 && sceKernelReleaseDirectMemory(g_agc_dev.up.pool_offset,bytes)!=0)
+        evo_boot_log("agc upscale: scratch pool release failed at shutdown");
+    g_agc_dev.up.pool_offset=-1;
+    g_agc_dev.up.pool_bytes=0;
+    g_agc_dev.up.pool_state=0;
 }
 
 static void up_viewport_scissor(int x, int y, int w, int h, int lim_w, int lim_h)
@@ -3690,6 +3625,12 @@ static int agc_up_pass(int pipe_id, const agc_up_surface_t *dst,
 
     if (!g_agc_dev.pipelines[pipe_id].valid)
         return -1;
+    /* A surface outside the scratch pool (up_surface() gave no address). */
+    if (!dst->scanout && !dst->addr)
+        return -1;
+    for (int i = 0; i < n; ++i)
+        if (!tex[i].addr)
+            return -1;
     const evo_agc_user_data_layout_t ud = evo_agc_runtime_get_user_data_layout(pipe_id);
     if (!ud.vs_count || ud.vs_const_table_dword < 0 || ud.ps_texture_table_dword < 0 ||
         ud.vs_count > 16 || ud.ps_count > 16)
@@ -3756,7 +3697,13 @@ static int up_pipes_valid(int first, int count)
     return 1;
 }
 
-static const char *const k_up_mode_name[] = { "Off", "Sharp", "AI", "Auto" };
+static const char *const k_up_mode_name[] = { "Off", "Sharp", "AI", "Auto", "Film", "Anime" };
+
+/* How much GPU a mode takes, as `cap` counts it: 0 Off, 1 Sharp, 2 a network. */
+static int up_mode_level(int mode)
+{
+    return mode == EVO_AGC_UPSCALE_OFF ? 0 : mode == EVO_AGC_UPSCALE_SHARP ? 1 : 2;
+}
 
 /*
  * Decide what this frame gets. `sx`/`sy` are the Off quad's NDC half-extents,
@@ -3768,11 +3715,8 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
 {
     int mode = g_agc_dev.up.requested;
     const int automatic = mode == EVO_AGC_UPSCALE_AUTO;
-    if (!automatic && mode > g_agc_dev.up.cap)
-        mode = g_agc_dev.up.cap;
     const char *reason = NULL;
     int net = 0;
-    int memory_fallback = 0;
 
     const float W = (float)g_agc_dev.width, H = (float)g_agc_dev.height;
     const float img_w = sx * W, img_h = sy * H;
@@ -3781,12 +3725,18 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
                                                        : img_h / (float)src_h)
         : 0.0f;
 
-    /* Auto chooses only one effect: FSR for smaller enlargement, Anime4K
-     * for >=1.7x enlargement. This is scale-aware, not anime detection. */
+    /* Auto picks by what is playing (evo_agc_upscale_set_content): FSR 1 for
+     * live TV, which has to keep up with any channel, and below 1.3x, where an
+     * x2 network would mostly be scaled back down; otherwise ArtCNN for anime
+     * and animation, FSRCNNX for every other film and episode. */
     if (automatic)
-        mode = (ratio >= 1.7f && g_agc_dev.up.cap >= EVO_AGC_UPSCALE_AI)
-            ? EVO_AGC_UPSCALE_AI : EVO_AGC_UPSCALE_SHARP;
-    if (mode > g_agc_dev.up.cap) mode = g_agc_dev.up.cap;
+        mode = (g_agc_dev.up.content == EVO_AGC_UPCONTENT_LIVE || ratio < 1.3f)
+            ? EVO_AGC_UPSCALE_SHARP
+            : g_agc_dev.up.content == EVO_AGC_UPCONTENT_ANIME ? EVO_AGC_UPSCALE_ANIME
+                                                              : EVO_AGC_UPSCALE_FILM;
+    /* The GPU-time cap (agc_upscale_note_gpu_time): a network -> Sharp -> Off. */
+    if (up_mode_level(mode) > g_agc_dev.up.cap)
+        mode = g_agc_dev.up.cap >= 1 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_OFF;
     /* Visible part of the image, in whole pixels, and the source UV it shows. */
     const float fx0 = (W - img_w) * 0.5f, fy0 = (H - img_h) * 0.5f;
     int x0 = (int)(fx0 + 0.5f), y0 = (int)(fy0 + 0.5f);
@@ -3801,11 +3751,12 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
             reason = "HDR source";
         else if (ratio <= 1.05f)
             reason = "source >= output";
-        else if (x1 <= x0 || y1 <= y0 || !up_fits(src_w, src_h, 4u) ||
-                 !up_fits((uint32_t)(x1 - x0), (uint32_t)(y1 - y0), 4u))
+        else if (!up_source_fits(src_w, src_h))
+            reason = "source above 1080p";   /* the pool is sized for 1920x1088 */
+        else if (x1 <= x0 || y1 <= y0 || !up_target_fits((uint32_t)(x1 - x0), (uint32_t)(y1 - y0)))
             reason = "size";
     }
-    /* AI: Anime4K only engages above 1.2x, and needs its feature maps to fit. */
+    /* AI: Anime4K only engages above 1.2x. */
     if (!reason && mode == EVO_AGC_UPSCALE_AI) {
         /* Auto follows detection; Standard/Large/Maximum are the Settings
          * override, which is how a PS5 Pro the probe cannot identify still
@@ -3817,65 +3768,31 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
             : evo_hw_is_ps5_pro();
         if (net > g_agc_dev.up.net_cap)
             net = g_agc_dev.up.net_cap;
-        if (net == 2 && !(up_pipes_valid(EVO_AGC_PIPE_UP_UL_CONV0, EVO_AGC_UP_UL_CONVS) &&
-                          up_pipes_valid(EVO_AGC_PIPE_UP_UL_ACC0, EVO_AGC_UP_UL_ACCS) &&
-                          up_pipes_valid(EVO_AGC_PIPE_UP_RGB_FINAL, 1)))
+        /* UL needs 12 maps; the scratch pool has EVO_AGC_UP_POOL_FP16_SLOTS. */
+        if (net == 2)
             net = 1;
         if (net == 1 && !(up_pipes_valid(EVO_AGC_PIPE_UP_M_CONV0, EVO_AGC_UP_M_CONVS) &&
                           up_pipes_valid(EVO_AGC_PIPE_UP_M_ACC0, EVO_AGC_UP_M_CONVS)))
             net = 0;
-        if (ratio < 1.2f || !up_fits(src_w, src_h, 8u) ||
-            (net < 2 && !up_pipes_valid(EVO_AGC_PIPE_UP_A4K_FINAL, 1)) ||
+        if (ratio < 1.2f || !up_pipes_valid(EVO_AGC_PIPE_UP_A4K_FINAL, 1) ||
             (net == 0 && !up_pipes_valid(EVO_AGC_PIPE_UP_S_CONV0, EVO_AGC_UP_S_CONVS)))
             mode = EVO_AGC_UPSCALE_SHARP;
     }
-    // Memory policy is separate from the performance cap and the saved choice.
-    // Retry the preferred effect periodically, not once per frame or only after relaunch.
-    const int preferred_mode=mode, preferred_net=net;
-    if(!reason && mode!=EVO_AGC_UPSCALE_OFF &&
-       g_agc_dev.up.frame_serial<g_agc_dev.up.memory_retry_frame) {
-        if(mode==EVO_AGC_UPSCALE_AI && g_agc_dev.up.memory_mode==EVO_AGC_UPSCALE_AI &&
-           net>g_agc_dev.up.memory_net){net=g_agc_dev.up.memory_net;memory_fallback=1;}
-        else if(automatic && mode==EVO_AGC_UPSCALE_AI &&
-                g_agc_dev.up.memory_mode==EVO_AGC_UPSCALE_SHARP){mode=EVO_AGC_UPSCALE_SHARP;net=0;memory_fallback=1;}
+    /* Film and Anime: x2 networks, from 1.3x up (the threshold their mpv
+     * shaders have); below that, or without their pipes, FSR 1. */
+    if (!reason && (mode == EVO_AGC_UPSCALE_FILM || mode == EVO_AGC_UPSCALE_ANIME)) {
+        const int film = mode == EVO_AGC_UPSCALE_FILM;
+        if (ratio < 1.3f || !up_pipes_valid(EVO_AGC_PIPE_UP_A4K_FINAL, 1) ||
+            !up_pipes_valid(film ? EVO_AGC_PIPE_UP_FSRCNNX0 : EVO_AGC_PIPE_UP_ARTCNN0,
+                            film ? EVO_AGC_UP_FSRCNNX_PASSES : EVO_AGC_UP_ARTCNN_PASSES))
+            mode = EVO_AGC_UPSCALE_SHARP;
     }
     if (!reason && mode == EVO_AGC_UPSCALE_SHARP &&
         !(up_pipes_valid(EVO_AGC_PIPE_UP_EASU, 1) && up_pipes_valid(EVO_AGC_PIPE_UP_RCAS, 1)))
         reason = "pipeline missing";
-    if (!reason && mode != EVO_AGC_UPSCALE_OFF) {
-        int ok = (mode==EVO_AGC_UPSCALE_AI && net!=1)
-            ? agc_upscale_alloc_for_network(0,src_w,src_h,x1-x0,y1-y0,mode,net)
-            : agc_upscale_alloc(0,src_w,src_h,x1-x0,y1-y0,mode);
-        // M -> S can shed the two accumulators. UL adds separate maps below.
-        if(ok!=0 && mode==EVO_AGC_UPSCALE_AI && net>0 &&
-           up_pipes_valid(EVO_AGC_PIPE_UP_A4K_FINAL,1) && up_pipes_valid(EVO_AGC_PIPE_UP_S_CONV0,EVO_AGC_UP_S_CONVS)) {
-            net=0;ok=agc_upscale_alloc_for_network(0,src_w,src_h,x1-x0,y1-y0,mode,net);
-            if(!ok)memory_fallback=1;
-        }
-        if(ok!=0 && automatic && mode==EVO_AGC_UPSCALE_AI &&
-           up_pipes_valid(EVO_AGC_PIPE_UP_EASU,1) && up_pipes_valid(EVO_AGC_PIPE_UP_RCAS,1)) {
-            mode=EVO_AGC_UPSCALE_SHARP;net=0;
-            ok=agc_upscale_alloc(0,src_w,src_h,x1-x0,y1-y0,mode);
-            if(!ok)memory_fallback=1;
-        }
-        if(ok!=0)reason="no memory";
-    }
-    if(!reason && mode==EVO_AGC_UPSCALE_AI && net==2 &&
-       agc_upscale_alloc_for_network(1,src_w,src_h,x1-x0,y1-y0,mode,2)!=0) {
-        net=(up_pipes_valid(EVO_AGC_PIPE_UP_M_CONV0,EVO_AGC_UP_M_CONVS) &&
-             up_pipes_valid(EVO_AGC_PIPE_UP_M_ACC0,EVO_AGC_UP_M_CONVS))?1:0;
-        memory_fallback=1;
-        if(!up_pipes_valid(EVO_AGC_PIPE_UP_A4K_FINAL,1) ||
-           (net==0 && !up_pipes_valid(EVO_AGC_PIPE_UP_S_CONV0,EVO_AGC_UP_S_CONVS)))reason="pipeline missing";
-    }
-    if(!reason && memory_fallback && g_agc_dev.up.frame_serial>=g_agc_dev.up.memory_retry_frame) {
-        g_agc_dev.up.memory_mode=mode;g_agc_dev.up.memory_net=net;
-        g_agc_dev.up.memory_retry_frame=g_agc_dev.up.frame_serial+300u;
-        evo_boot_log("agc upscale: memory fallback %d/%d -> %d/%d; preferred retry after 300 rendered frames",
-            preferred_mode,preferred_net,mode,net);
-    } else if(!reason && !memory_fallback)g_agc_dev.up.memory_retry_frame=0;
-    if(mode!=EVO_AGC_UPSCALE_AI || net!=2)
-        if(g_agc_dev.up.mem_bytes[2])g_agc_dev.up.reclaim_mask|=1u<<2;
+    /* Every mode fits the one pool; it only has to be there. */
+    if (!reason && mode != EVO_AGC_UPSCALE_OFF && agc_upscale_pool_reserve("first use") != 0)
+        reason = "no memory";
 
     if (reason || mode == EVO_AGC_UPSCALE_OFF) {
         /* Preserve the exact bypass reason for Playback Information.
@@ -3884,20 +3801,19 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
             (g_agc_dev.up.requested == EVO_AGC_UPSCALE_OFF ? "Off" : "Off (GPU performance fallback)")
             : !strcmp(reason, "HDR source") ? "Off (HDR or 10-bit source)"
             : !strcmp(reason, "source >= output") ? "Off (no enlargement needed)"
+            : !strcmp(reason, "source above 1080p") ? "Off (source above 1080p)"
             : !strcmp(reason, "size") ? "Off (frame dimensions unsupported)"
             : !strcmp(reason, "pipeline missing") ? "Off (FSR shader pipeline missing)"
             : !strcmp(reason, "no memory") ?
-                (g_agc_dev.up.allocation_failure==2 ? "Off (waiting for GPU scratch retirement)" :
-                 g_agc_dev.up.allocation_failure==4 ? "Off (GPU scratch mapping failed; retrying)" :
-                 g_agc_dev.up.allocation_failure==5 ? "Off (GPU scratch cleanup pending)" :
-                 "Off (GPU scratch allocation failed; retrying)")
+                (g_agc_dev.up.pool_state == -1 ? "Off (GPU scratch reservation failed; retrying once)"
+                                               : "Off (GPU scratch unavailable)")
             : "Off (unknown renderer error)";
         mode = EVO_AGC_UPSCALE_OFF;
     } else {
         static const char *const k_net_label[] = { "AI (Standard)", "AI (Large)", "AI (Maximum)" };
-        static const char *const fallback_labels[]={"AI (Standard; memory fallback)","AI (Large; memory fallback)","AI (Maximum; memory fallback)"};
-        g_agc_dev.up.label=mode!=EVO_AGC_UPSCALE_AI ? (memory_fallback?"Sharp (memory fallback)":"Sharp") :
-            memory_fallback?fallback_labels[net]:k_net_label[net];
+        g_agc_dev.up.label = mode == EVO_AGC_UPSCALE_AI ? k_net_label[net]
+            : mode == EVO_AGC_UPSCALE_FILM ? "Film"
+            : mode == EVO_AGC_UPSCALE_ANIME ? "Anime" : "Sharp";
     }
 
     /* Log a change of plan once, not per frame. */
@@ -3913,13 +3829,15 @@ static int agc_upscale_plan(uint32_t src_w, uint32_t src_h, int ten_bit,
                              src_w, src_h, (int)img_w, (int)img_h, ten_bit);
             else
                 evo_boot_log("agc upscale: mode=%s net=%s src=%ux%u -> rect=%d,%d %dx%d "
-                             "(image %dx%d, %.2fx) cap=%s",
+                             "(image %dx%d, %.2fx) cap=%s content=%d",
                              k_up_mode_name[mode],
-                             mode != EVO_AGC_UPSCALE_AI ? "fsr1"
+                             mode == EVO_AGC_UPSCALE_FILM ? "fsrcnnx-x2-8-0-4-1"
+                             : mode == EVO_AGC_UPSCALE_ANIME ? "artcnn-c4f8"
+                             : mode != EVO_AGC_UPSCALE_AI ? "fsr1"
                              : net == 2 ? "anime4k-UL" : net ? "anime4k-M" : "anime4k-S",
                              src_w, src_h, x0, y0, x1 - x0, y1 - y0,
                              (int)img_w, (int)img_h, (double)ratio,
-                             k_up_mode_name[g_agc_dev.up.cap]);
+                             k_up_mode_name[g_agc_dev.up.cap], g_agc_dev.up.content);
         }
     }
     if (mode == EVO_AGC_UPSCALE_OFF)
@@ -3986,6 +3904,40 @@ static int agc_upscale_run_ul(const agc_up_plan_t *pl, const agc_up_tex_t *l0_te
     return rc;
 }
 
+/* Film (FSRCNNX) and Anime (ArtCNN): every pass of the network at source
+ * size, in the order and on the pool slots app/scripts/gen_cnn_pipes.py
+ * planned (upscale_cnn_pipes.h; slot 0 is L0). The last pass leaves the 2x
+ * luma residual in depth-to-space layout, which upscale_a4k_final adds to the
+ * bilinear source at the image's size, as for Anime4K S and M. */
+static int agc_upscale_run_cnn(const agc_up_plan_t *pl, const agc_up_tex_t *l0_tex,
+                               const agc_up_surface_t *scan)
+{
+    static const float full[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+    const int film = pl->mode == EVO_AGC_UPSCALE_FILM;
+    const evo_agc_up_cnn_pass_t *passes = film ? k_up_fsrcnnx_passes : k_up_artcnn_passes;
+    const int count = film ? EVO_AGC_UP_FSRCNNX_PASSES : EVO_AGC_UP_ARTCNN_PASSES;
+    const int first = film ? EVO_AGC_PIPE_UP_FSRCNNX0 : EVO_AGC_PIPE_UP_ARTCNN0;
+    const uint32_t sw = pl->src_w, sh = pl->src_h;
+    int rc = 0;
+    for (int i = 0; i < count && rc == 0; ++i) {
+        agc_up_tex_t in[sizeof passes[i].in_slot];
+        const int n = passes[i].n_in;
+        for (int k = 0; k < n; ++k) {
+            const agc_up_surface_t s = up_surface(passes[i].in_slot[k], sw, sh, 1);
+            in[k] = passes[i].in_slot[k] == UP_SLOT_L0 ? *l0_tex : up_tex(&s, 0);
+        }
+        const agc_up_surface_t out = up_surface(passes[i].out_slot, sw, sh, 1);
+        rc = agc_up_pass(first + i, &out, 0, 0, (int)sw, (int)sh, full, in, n);
+    }
+    if (rc == 0) {
+        const agc_up_surface_t r = up_surface(passes[count - 1].out_slot, sw, sh, 1);
+        const agc_up_tex_t fin[2] = { *l0_tex, up_tex(&r, 0) };
+        rc = agc_up_pass(EVO_AGC_PIPE_UP_A4K_FINAL, scan, pl->x0, pl->y0,
+                         pl->x1 - pl->x0, pl->y1 - pl->y0, pl->uv, fin, 2);
+    }
+    return rc;
+}
+
 /* Everything after the YUV pass has filled L0. */
 static int agc_upscale_run(const agc_up_plan_t *pl)
 {
@@ -4006,6 +3958,8 @@ static int agc_upscale_run(const agc_up_plan_t *pl)
         rc = agc_up_pass(EVO_AGC_PIPE_UP_EASU, &e, 0, 0, vw, vh, pl->uv, &l0_tex, 1);
         if (rc == 0)
             rc = agc_up_pass(EVO_AGC_PIPE_UP_RCAS, &scan, pl->x0, pl->y0, vw, vh, full, &e_tex, 1);
+    } else if (pl->mode == EVO_AGC_UPSCALE_FILM || pl->mode == EVO_AGC_UPSCALE_ANIME) {
+        rc = agc_upscale_run_cnn(pl, &l0_tex, &scan);
     } else {
         agc_up_surface_t f[2] = { up_surface(UP_SLOT_F0, sw, sh, 1),
                                   up_surface(UP_SLOT_F0 + 1, sw, sh, 1) };
@@ -4060,7 +4014,7 @@ done:
 
 /* frame_end hands over the GPU time of every upscaled frame. Two windows in a
  * row over budget (~4 s at 60 fps, so one slow frame cannot trip it) cap the
- * mode one step: AI -> Sharp -> Off, for the rest of the session. */
+ * mode one step: AI/Film/Anime -> Sharp -> Off, for the rest of the session. */
 static void agc_upscale_note_gpu_time(uint64_t us)
 {
     g_agc_dev.up.window_us += us;
@@ -4092,22 +4046,32 @@ static void agc_upscale_note_gpu_time(uint64_t us)
         return;
     }
     const int from = g_agc_dev.up.last_key[1];
-    const int to = from > EVO_AGC_UPSCALE_OFF ? from - 1 : EVO_AGC_UPSCALE_OFF;
-    g_agc_dev.up.cap = to;
+    if (from < EVO_AGC_UPSCALE_OFF || from > EVO_AGC_UPSCALE_ANIME)
+        return;
+    const int to = up_mode_level(from) >= 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_OFF;
+    g_agc_dev.up.cap = up_mode_level(to);
     g_agc_dev.up.downgrade_notice = to;
     evo_boot_log("agc upscale: over budget (us=%llu > %u) - %s -> %s for this session",
                  (unsigned long long)avg, EVO_AGC_UP_BUDGET_US,
                  k_up_mode_name[from], k_up_mode_name[to]);
 }
 
+void evo_agc_upscale_set_content(int content)
+{
+    if (content < EVO_AGC_UPCONTENT_FILM || content > EVO_AGC_UPCONTENT_LIVE)
+        content = EVO_AGC_UPCONTENT_FILM;
+    g_agc_dev.up.content = content;
+}
+
 void evo_agc_upscale_begin_session(void)
 {
     ++g_agc_dev.up.session_number;
-    g_agc_dev.up.memory_retry_frame=0;
     agc_upscale_maintenance();
-    evo_boot_log("agc upscale: begin session=%u retained=%zu/%zu/%zu reclaim=%u",
-        g_agc_dev.up.session_number,g_agc_dev.up.mem_bytes[0],g_agc_dev.up.mem_bytes[1],
-        g_agc_dev.up.mem_bytes[2],g_agc_dev.up.reclaim_mask);
+    evo_boot_log("agc upscale: begin session=%u pool=%s %zu bytes content=%d",
+        g_agc_dev.up.session_number,
+        g_agc_dev.up.pool_base ? "reserved" : g_agc_dev.up.pool_state == 0 ? "not yet"
+        : g_agc_dev.up.pool_state == -1 ? "retry pending" : "unavailable",
+        g_agc_dev.up.pool_bytes, g_agc_dev.up.content);
     g_agc_dev.up.cap = EVO_AGC_UPSCALE_AI;
     g_agc_dev.up.net_cap = 2;
     g_agc_dev.up.downgrade_notice = -1;
@@ -4117,42 +4081,39 @@ void evo_agc_upscale_begin_session(void)
     g_agc_dev.up.this_frame = 0;
     memset(g_agc_dev.up.last_key, -1, sizeof g_agc_dev.up.last_key);
     g_agc_dev.up.label = "Off (waiting for video)";
-    // An allocation failure on the previous stream is not permanent. Existing
-    // scratch buffers remain allocated and untouched for in-flight GPU work.
-    for (int i = 0; i < 3; ++i)
-        if (!g_agc_dev.up.mem_base[i] && !g_agc_dev.up.mem_bytes[i]) {
-            g_agc_dev.up.alloc_state[i] = 0;
-            g_agc_dev.up.retry_after[i] = 0;
-        }
 }
 
 void evo_agc_upscale_end_session(void)
 {
-    // Decoder teardown has finished. Hand scratch back once its final submit is
-    // retired, before the next decoder competes for physical memory. This is
-    // render-thread only and never frees an in-flight surface or blocks the UI.
-    for(int block=0;block<3;++block) {
-        if(g_agc_dev.up.mem_bytes[block])g_agc_dev.up.reclaim_mask|=1u<<block;
-        g_agc_dev.up.retry_after[block]=0;
-    }
-    agc_upscale_maintenance();
-    evo_boot_log("agc upscale: end session=%u pending cleanup=%u",g_agc_dev.up.session_number,g_agc_dev.up.reclaim_mask);
+    /* The scratch pool stays: the next video uses the same surfaces, so
+     * nothing is retired, unmapped or allocated between videos. */
+    evo_boot_log("agc upscale: end session=%u (scratch pool %s)", g_agc_dev.up.session_number,
+                 g_agc_dev.up.pool_base ? "kept" : "not reserved");
 }
 
 void evo_agc_upscale_set_mode(int mode)
 {
-    if (mode < EVO_AGC_UPSCALE_OFF || mode > EVO_AGC_UPSCALE_AUTO)
+    if (mode < EVO_AGC_UPSCALE_OFF || mode > EVO_AGC_UPSCALE_ANIME)
         mode = EVO_AGC_UPSCALE_OFF;
     if (mode == g_agc_dev.up.requested)
         return;
     /* A fresh choice in Settings is a fresh chance: drop the GPU-time cap. */
     g_agc_dev.up.requested = mode;
-    g_agc_dev.up.memory_retry_frame=0;
     g_agc_dev.up.cap = EVO_AGC_UPSCALE_AI;
     g_agc_dev.up.net_cap = 2;
     g_agc_dev.up.over_budget_windows = 0;
     g_agc_dev.up.window_frames = 0;
     g_agc_dev.up.window_us = 0;
+    /* ... and for a scratch pool that could not be reserved twice: one more try. */
+    if (g_agc_dev.up.pool_state == -2) {
+        g_agc_dev.up.pool_state = -1;
+        g_agc_dev.up.pool_attempts = 1;
+        g_agc_dev.up.pool_retry_frame = 0;
+    }
+    /* Reserve the pool as soon as upscaling is on - at start-up with a saved
+     * mode, while memory is plentiful - rather than when a video starts. */
+    if (mode != EVO_AGC_UPSCALE_OFF)
+        agc_upscale_pool_reserve(g_agc_dev.up.session_number ? "mode chosen" : "start-up");
 }
 
 void evo_agc_upscale_set_network(int pref)
@@ -4162,7 +4123,6 @@ void evo_agc_upscale_set_network(int pref)
     if (pref == g_agc_dev.up.net_pref)
         return;
     g_agc_dev.up.net_pref = pref;
-    g_agc_dev.up.memory_retry_frame=0;
     g_agc_dev.up.net_cap = 2;
     g_agc_dev.up.over_budget_windows = 0;
     g_agc_dev.up.window_frames = 0;
@@ -4174,16 +4134,34 @@ const char *evo_agc_upscale_label(void)
     return g_agc_dev.up.label ? g_agc_dev.up.label : "Off";
 }
 
+/* Playback information's "GPU scratch" line: the pool's size and state, with
+ * the error code first on a failure (never hidden by a truncated value column). */
 const char *evo_agc_upscale_memory_status(void)
 {
-    const size_t retained=g_agc_dev.up.mem_bytes[0]+g_agc_dev.up.mem_bytes[1]+g_agc_dev.up.mem_bytes[2];
-    if(g_agc_dev.up.allocation_rc) {
-        snprintf(g_agc_dev.up.memory_status,sizeof g_agc_dev.up.memory_status,
-            "Last rc=%08x; request %zu MiB", // error code first: never hidden by a truncated value column
-            (unsigned)g_agc_dev.up.allocation_rc,g_agc_dev.up.allocation_bytes>>20);
-    } else {
-        snprintf(g_agc_dev.up.memory_status,sizeof g_agc_dev.up.memory_status,
-            "Reserved %zu MiB; pending cleanup=%u",retained>>20,g_agc_dev.up.reclaim_mask);
+    const size_t mib = up_pool_total_bytes() >> 20;
+    const char *call = g_agc_dev.up.pool_stage == 4 ? "map" : "allocate";
+    switch (g_agc_dev.up.pool_state) {
+    case 1:
+        snprintf(g_agc_dev.up.memory_status, sizeof g_agc_dev.up.memory_status,
+                 "Pool %zu MiB reserved", g_agc_dev.up.pool_bytes >> 20);
+        break;
+    case -1: {
+        const uint64_t left = g_agc_dev.up.pool_retry_frame > g_agc_dev.up.frame_serial
+            ? g_agc_dev.up.pool_retry_frame - g_agc_dev.up.frame_serial : 0;
+        snprintf(g_agc_dev.up.memory_status, sizeof g_agc_dev.up.memory_status,
+                 "rc=%08x (%s); %zu MiB pool, retry in %u s",
+                 (unsigned)g_agc_dev.up.pool_rc, call, mib, (unsigned)((left + 59u) / 60u));
+        break;
+    }
+    case -2:
+        snprintf(g_agc_dev.up.memory_status, sizeof g_agc_dev.up.memory_status,
+                 "rc=%08x (%s); %zu MiB pool unavailable",
+                 (unsigned)g_agc_dev.up.pool_rc, call, mib);
+        break;
+    default:
+        snprintf(g_agc_dev.up.memory_status, sizeof g_agc_dev.up.memory_status,
+                 "Pool %zu MiB, reserved when upscaling starts", mib);
+        break;
     }
     return g_agc_dev.up.memory_status;
 }

@@ -2183,10 +2183,9 @@ int main()
     settings::load_local();
     update_service::set_automatic_enabled(settings::get().local.check_updates);
     {
-        const int mode = settings::get().local.upscale_mode;
-        evo_agc_upscale_set_mode(mode == 0 ? EVO_AGC_UPSCALE_OFF
-            : mode == 1 ? EVO_AGC_UPSCALE_AUTO
-            : mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+        /* With upscaling on, this also reserves the upscaler's scratch pool now,
+         * while memory is plentiful (evo_agc_upscale_set_mode). */
+        evo_agc_upscale_set_mode(settings::upscale_engine_mode(settings::get().local.upscale_mode));
     }
     accounts::set_ps5_user(s_user);
     browse_state::set_user(s_user);   /* each PS5 user keeps their own Emby account */

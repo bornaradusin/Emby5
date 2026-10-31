@@ -226,9 +226,11 @@ static std::string speed_label()
 /* Changes take effect on the currently playing video; the setting persists. */
 static const char *upscaling_button_label()
 {
-    static const char *names[] = {N_("Upscaling: Off"), N_("Upscaling: Auto"), N_("Upscaling: FSR 1"), N_("Upscaling: Anime4K")};
-    const int mode = settings::get().local.upscale_mode;
-    return T(names[mode >= 0 && mode < 4 ? mode : 0]);
+    /* Indexed by the saved value (settings::UpscaleMode). */
+    static const char *names[] = {N_("Upscaling: Off"), N_("Upscaling: Auto"), N_("Upscaling: Fast (FSR 1)"),
+                                  N_("Upscaling: Anime4K"), N_("Upscaling: Film (FSRCNNX)"),
+                                  N_("Upscaling: Anime (ArtCNN)")};
+    return T(names[settings::upscale_mode_valid(settings::get().local.upscale_mode)]);
 }
 
 std::vector<PlayerUi::Button> PlayerUi::buttons() const
@@ -861,12 +863,9 @@ void PlayerUi::input_local(const nuvio_input_state &in, const NuvioStatus &st, s
             }
             case Button::Upscaling: {
                 settings::All prefs = settings::get();
-                prefs.local.upscale_mode = (prefs.local.upscale_mode + 1) % 4;
+                prefs.local.upscale_mode = settings::next_upscale_mode(prefs.local.upscale_mode);
                 settings::set_local(prefs.local);
-                const int mode = prefs.local.upscale_mode;
-                evo_agc_upscale_set_mode(mode == 0 ? EVO_AGC_UPSCALE_OFF
-                    : mode == 1 ? EVO_AGC_UPSCALE_AUTO
-                    : mode == 2 ? EVO_AGC_UPSCALE_SHARP : EVO_AGC_UPSCALE_AI);
+                evo_agc_upscale_set_mode(settings::upscale_engine_mode(prefs.local.upscale_mode));
                 toast(upscaling_button_label(), now);
                 show_controls(now, Zone::Buttons);
                 break;

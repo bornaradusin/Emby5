@@ -167,6 +167,7 @@ bool nuvio_request_parse(const char *json, NuvioRequest &r)
     r.runtime = str_of(root, "runtime");
     r.rating = str_of(root, "rating");
     r.item_type = str_of(root, "itemType");
+    r.live = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "live"));
     r.live_channel_id = str_of(root,"liveChannelId");
     r.live_group_name = str_of(root,"liveGroupName");
     r.live_navigation_token = str_of(root,"liveNavigationToken");
