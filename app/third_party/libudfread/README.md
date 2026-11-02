@@ -40,12 +40,10 @@ replaceable set of source files under `third_party/libudfread/`.
 
 ## Usage here
 
-Nothing calls the library in this change; it only adds the sources and puts
-them on the build. `app/engine/media/src/evo_udf.c` (a follow-up PR) supplies a
-`udfread_block_input` backed by FFmpeg's avio, so a disc image can be read over
-HTTP range requests instead of a local file.
+`app/engine/media/src/evo_udf.c` supplies a `udfread_block_input` backed by
+FFmpeg's avio, so a disc image is read over HTTP range requests instead of a
+local file, and finds the main title for `evo_stream_io.c` to play.
 
-The `app/Makefile` change is three lines: `-Ithird_party/libudfread/src` on the
-include path, `-DHAVE_CONFIG_H=1` so the sources pick up the hand-written
-`config.h`, and the directory added to `ENGINE_C`. `HAVE_CONFIG_H` is not read
-anywhere else in the tree.
+The `app/Makefile` adds `-Ithird_party/libudfread/src` to the include path,
+`-DHAVE_CONFIG_H=1` so the sources pick up the hand-written `config.h`, and the
+directory to `ENGINE_C`. `HAVE_CONFIG_H` is not read anywhere else in the tree.

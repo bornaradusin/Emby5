@@ -9,6 +9,8 @@
  */
 #include "emby5_bitstream.h"
 #include "evo_demux.h"
+#include "evo_stream_io.h"
+#include "evo_udf.h"
 #include "evo_thread.h"
 
 #include <errno.h>
@@ -358,20 +360,26 @@ packet_queue_clear(
     }
     const int64_t seek_t0 = av_gettime_relative();
 
-    int result =
-        av_seek_frame(
-            play_fmt,
-            seek_stream,
-            seek_timestamp,
-            AVSEEK_FLAG_BACKWARD
-        );
+    int result;
 
-    /* Big files (14 GB GTA trailer) whose stream index doesn't cover the byte
-     * range can fail the timestamp seek; fall back to a byte seek. */
-    if (result < 0) {
+    /*
+     * A disc-image window cannot be seeked by timestamp here: mpegts has no
+     * index and av_seek_frame() returns success without moving the byte
+     * stream. evo_stream_io_seek_iso() handles that case by byte position and
+     * declines for anything else, so ordinary streams keep the old path.
+     */
+    if (evo_stream_io_seek_iso(play_fmt, target_seconds) == 0) {
+        result = 0;
+    } else {
         result = av_seek_frame(play_fmt, seek_stream, seek_timestamp,
-                               AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+                               AVSEEK_FLAG_BACKWARD);
+        /* Big files (14 GB GTA trailer) whose stream index doesn't cover the
+         * byte range can fail the timestamp seek. */
+        if (result < 0)
+            result = av_seek_frame(play_fmt, seek_stream, seek_timestamp,
+                                   AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
     }
+
     {
         char d[112];
         snprintf(d, sizeof d, "rc=%d ts=%lld strm=%d target=%.3f ms=%lld",

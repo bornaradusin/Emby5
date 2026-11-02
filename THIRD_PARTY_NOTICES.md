@@ -16,6 +16,7 @@ distributed. Their original copyright notices are kept in the source files.
 | Dolby Vision RPU maths, following FFmpeg (`libavcodec/dovi_rpudec.c`) and libplacebo | `app/src/dv_rpu.c` | LGPL-2.1-or-later |
 | cJSON 1.7.18 - Copyright (c) 2009-2017 Dave Gamble and cJSON contributors | `app/engine/addons/` | MIT |
 | NanoSVG - Copyright (c) 2013-14 Mikko Mononen | `app/third_party/nanosvg/` | zlib |
+| libudfread 1.2.0 (VideoLAN, commit b0bc695), the UDF reader that opens Blu-ray disc images - Copyright (C) 2014-2026 VLC authors and VideoLAN; unmodified but for its hand-written `config.h` and `udfread-version.h` | `app/third_party/libudfread/` | LGPL-2.1-or-later (`COPYING` there) |
 | QR Code generator library - Copyright (c) Project Nayuki | `app/src/qrcodegen.*` | MIT |
 | The refraction profile of the glass shader follows [OverShifted/LiquidGlass](https://github.com/OverShifted/LiquidGlass) - Copyright (c) 2026 Sepehr Kalanaki | `app/shaders/liquid_glass.pipe` | MIT |
 | FSRCNNX x2 8-0-4-1, the "Film" upscaler: the mpv shader and its weights from [igv/FSRCNN-TensorFlow](https://github.com/igv/FSRCNN-TensorFlow) release 1.1 - Copyright (C) 2017-2021 igv; compiled into AGC passes | `app/engine/shaders/cnn/FSRCNNX_x2_8-0-4-1.glsl`, `app/engine/shaders/agc/upscale_fsrcnnx_*` | LGPL-3.0-or-later |

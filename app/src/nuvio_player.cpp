@@ -309,7 +309,15 @@ bool start_job(OpenJob &j)
 {
     j.done = false;
     j.cancel = false;
-    j.deadline = now_s() + 45.0;
+    /*
+     * How long an open may take before the watchdog cancels it. 45 s was right
+     * for a normal stream; a Blu-ray disc image is opened, its UDF filesystem
+     * walked to find the title, and the title's first byte reached, each a
+     * range request through whatever fronts the file: 11 s on a good run and
+     * 46 s on a slow one for an 87 GB image (bornaradusin/Emby5#7). Back still
+     * cancels at once.
+     */
+    j.deadline = now_s() + 90.0;
     j.ok = false;
     j.running = true;
     if (evo_thread_create(&j.thread, open_thread, &j) != 0) {

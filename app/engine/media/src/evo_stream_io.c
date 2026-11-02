@@ -5,8 +5,11 @@
  * prefetching (posix_fadvise) and optimized dictionary options for 100+ Mbps 4K media.
  */
 #include "evo_stream_io.h"
+#include "evo_udf.h"
+#include "evo_boot_log.h"
 #include "evo_direct_mem.h"
 #include <libavutil/error.h>
+#include <libavutil/mathematics.h>
 
 #ifdef EVO_APP_MODULE
 extern void pp_stage_bc(const char *stage_id, const char *detail);
@@ -57,6 +60,15 @@ struct evo_stream_io_ctx {
     volatile int aborted;      /* accessed atomically, including UI-triggered abort */
     int (*external_interrupt)(void *);
     void *external_opaque;
+    /* Set when the stream came out of a disc image: the window over the main
+     * title's bytes, and its handle. Owned here, released by
+     * evo_stream_io_close(). NULL for an ordinary stream. */
+    void *udf_pb;
+    void *udf_handle;
+    /* What the image's playlist says about the title: length in 45 kHz ticks
+     * and the language of every audio/subtitle stream. Applied to the demuxer
+     * and its streams in evo_stream_io_probe(). */
+    evo_udf_title udf_title;
 };
 
 static _Thread_local int (*s_open_interrupt)(void *);
@@ -83,12 +95,85 @@ int evo_stream_io_is_aborted(evo_stream_io_ctx_t *ctx)
     return 0;
 }
 
+int evo_stream_io_seek_iso(AVFormatContext *fmt, double seconds)
+{
+    int64_t win_size;
+    double frac;
+    int64_t byte;
+
+    if (!fmt || !fmt->pb)
+        return -1;
+    win_size = evo_udf_window_size_of(fmt->pb);
+    if (win_size <= 0 || fmt->duration <= 0 || seconds <= 0.0)
+        return -1;
+
+    frac = seconds / ((double)fmt->duration / (double)AV_TIME_BASE);
+    if (frac < 0.0) frac = 0.0;
+    if (frac > 1.0) frac = 1.0;
+    byte = (int64_t)(frac * (double)win_size) & ~(int64_t)2047;
+
+    {
+        char d[96];
+        snprintf(d, sizeof d, "byte=%lld frac=%.4f", (long long)byte, frac);
+        SIO_BC("SEEK_BYTE", d);
+    }
+    return av_seek_frame(fmt, -1, byte, AVSEEK_FLAG_BYTE) >= 0 ? 0 : -1;
+}
+
 int evo_stream_io_probe(evo_stream_io_ctx_t *ctx, AVFormatContext *fmt, double seconds)
 {
     if (!fmt || evo_stream_io_is_aborted(ctx)) return AVERROR_EXIT;
     evo_stream_io_set_deadline(ctx, seconds);
     const int rc = avformat_find_stream_info(fmt, NULL);
     evo_stream_io_set_deadline(ctx, 0.0);
+    /*
+     * A disc-image window is non-seekable while avformat probes, so the probe
+     * cannot wander off to the end of the image for a duration estimate. Now
+     * that the probe is over, let it seek: without this every av_seek_frame()
+     * is refused and the player restarts the title from 0.
+     */
+    if (ctx && ctx->udf_pb)
+        evo_udf_window_enable_seek(ctx->udf_pb);
+    /*
+     * Give the demuxer the length the playlist states. mpegts has no index and
+     * seeks by estimating a byte position from (target / duration) * size; with
+     * duration 0 the estimate is always 0, so every seek reported success and
+     * restarted the title. Only fills a duration that is still missing.
+     */
+    if (ctx && ctx->udf_title.duration_45k > 0 && fmt->duration <= 0) {
+        fmt->duration = av_rescale(ctx->udf_title.duration_45k, AV_TIME_BASE, 45000);
+        for (unsigned i = 0; i < fmt->nb_streams; i++) {
+            AVStream *st = fmt->streams[i];
+            if (st && st->duration <= 0 && st->time_base.num > 0)
+                st->duration = av_rescale_q(fmt->duration, AV_TIME_BASE_Q, st->time_base);
+        }
+        evo_boot_log("ISO: demuxer duration set to %.3f s from the playlist",
+                     (double)fmt->duration / AV_TIME_BASE);
+    }
+    /*
+     * The playlist knows the language of every stream; the PMT of a Blu-ray
+     * image usually does not, so FFmpeg reports none and the player labels all
+     * of them "unknown language". Streams are matched by PID - for mpegts
+     * AVStream.id is the PID the playlist refers to.
+     */
+    if (ctx && ctx->udf_title.ntracks > 0) {
+        int applied = 0;
+
+        for (int t = 0; t < ctx->udf_title.ntracks; t++) {
+            const evo_udf_track *tr = &ctx->udf_title.tracks[t];
+            for (unsigned i = 0; i < fmt->nb_streams; i++) {
+                AVStream *st = fmt->streams[i];
+                if (!st || st->id != tr->pid)
+                    continue;
+                if (!tr->lang[0])
+                    continue;
+                av_dict_set(&st->metadata, "language", tr->lang, 0);
+                applied++;
+                break;
+            }
+        }
+        evo_boot_log("ISO: applied %d track language(s) from the playlist", applied);
+    }
     /* find_stream_info may return success after an interrupted read. */
     return evo_stream_io_is_aborted(ctx) ? AVERROR_EXIT : rc;
 }
@@ -461,6 +546,72 @@ int evo_stream_io_open(const char *path,
     av_dict_free(&opts);
 
     if (rc < 0) {
+        /*
+         * A disc image (.iso) is a UDF filesystem, not a container, so
+         * avformat rejects it with AVERROR_INVALIDDATA and the caller only
+         * ever sees "unsupported". Look for a BDMV/STREAM title inside it and,
+         * if there is one, reopen a window over just that title's bytes.
+         *
+         * Only for a stream avformat read and didn't recognise: a failed
+         * connection, a server error or an open the viewer cancelled isn't a
+         * disc image, and looking inside it would cost another connection
+         * and a read of its first megabytes.
+         */
+        evo_udf_title iso;
+        int have_title;
+
+        memset(&iso, 0, sizeof iso);
+        have_title = (path && rc == AVERROR_INVALIDDATA && !evo_stream_io_is_aborted(ctx) &&
+                      evo_udf_main_title(path, &iso) == 0);
+
+        if (have_title) {
+            void *pb = NULL, *handle = NULL;
+
+            if (evo_udf_open_window(path, iso.offset, iso.size, &pb, &handle) == 0) {
+                AVFormatContext *fmt2 = avformat_alloc_context();
+
+                if (fmt2) {
+                    fmt2->pb = (AVIOContext *)pb;
+                    fmt2->flags |= AVFMT_FLAG_CUSTOM_IO;
+                    fmt2->interrupt_callback.callback = sio_interrupt_cb;
+                    fmt2->interrupt_callback.opaque   = ctx;
+
+                    evo_stream_io_set_deadline(ctx, EVO_STREAM_IO_OPEN_DEADLINE_SEC);
+                    rc = avformat_open_input(&fmt2, NULL, NULL, NULL);
+                    evo_stream_io_set_deadline(ctx, 0.0);
+
+                    if (rc >= 0 && fmt2) {
+                        /*
+                         * Set the length before avformat_find_stream_info().
+                         * With no duration mpegts estimates one by seeking to
+                         * the end of the image and back - two range requests
+                         * into an 87 GB file, seconds of startup, and nothing
+                         * we need since the playlist already states it.
+                         */
+                        if (iso.duration_45k > 0) {
+                            fmt2->duration = av_rescale(iso.duration_45k, AV_TIME_BASE, 45000);
+                            for (unsigned i = 0; i < fmt2->nb_streams; i++) {
+                                AVStream *st = fmt2->streams[i];
+                                if (st && st->duration <= 0 && st->time_base.num > 0)
+                                    st->duration = av_rescale_q(fmt2->duration, AV_TIME_BASE_Q,
+                                                                st->time_base);
+                            }
+                        }
+                        ctx->udf_pb     = pb;
+                        ctx->udf_handle = handle;
+                        ctx->udf_title  = iso;
+                        *out_fmt_ctx = fmt2;
+                        if (out_io_ctx) *out_io_ctx = ctx;
+                        SIO_BC("P8_01f_ISO_TITLE", "opened main title from image");
+                        return 0;
+                    }
+                    /* avformat_open_input freed fmt2 on failure. */
+                    evo_boot_log("ISO: the title inside the image did not open (%d)", rc);
+                }
+                evo_udf_close_window(pb, handle);
+            }
+        }
+
         evo_direct_mem_free(ctx);
         return rc;
     }
@@ -473,5 +624,10 @@ int evo_stream_io_open(const char *path,
 void evo_stream_io_close(evo_stream_io_ctx_t *ctx)
 {
     if (!ctx) return;
+    if (ctx->udf_pb || ctx->udf_handle) {
+        evo_udf_close_window(ctx->udf_pb, ctx->udf_handle);
+        ctx->udf_pb = NULL;
+        ctx->udf_handle = NULL;
+    }
     evo_direct_mem_free(ctx);
 }
