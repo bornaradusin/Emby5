@@ -16,7 +16,9 @@
 #include <zlib.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <iconv.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +56,7 @@ typedef struct strack {
     int need_flush;
     char *url, *headers;      /* external */
     int loading;
+    int scripts;              /* SCRIPT_* seen in its text, for the fonts it needs */
 } strack;
 
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -91,19 +94,25 @@ static void add_font_asset(const char *name, ui_asset a)
 }
 
 /* The console's CJK / Thai fonts, added when a track needs them. */
-static void add_system_font(const char *path)
+static char s_fonts_added[8][64];
+static int s_nfonts_added;
+
+static int font_added(const char *path)
 {
-    static char added[8][64];
-    static int nadded;
+    for (int i = 0; i < s_nfonts_added; i++)
+        if (!strcmp(s_fonts_added[i], path))
+            return 1;
+    return s_nfonts_added >= 8;
+}
+
+static char *read_font_file(const char *path, size_t *size)
+{
     struct stat st;
-    for (int i = 0; i < nadded; i++)
-        if (!strcmp(added[i], path))
-            return;
-    if (nadded >= 8 || stat(path, &st) != 0 || st.st_size <= 0)
-        return;
+    if (stat(path, &st) != 0 || st.st_size <= 0)
+        return NULL;
     int fd = open(path, O_RDONLY);
     if (fd < 0)
-        return;
+        return NULL;
     char *buf = (char *)malloc((size_t)st.st_size);
     size_t got = 0;
     while (buf && got < (size_t)st.st_size) {
@@ -112,12 +121,34 @@ static void add_system_font(const char *path)
         got += (size_t)n;
     }
     close(fd);
-    if (buf && got == (size_t)st.st_size) {
-        ass_add_font(s_lib, path, buf, (int)got);
-        ass_set_fonts(s_rend, NULL, "Roboto", ASS_FONTPROVIDER_NONE, NULL, 0);
-        snprintf(added[nadded++], sizeof added[0], "%s", path);
-        evo_bt("subs: added font %s", path);
+    if (!buf || got != (size_t)st.st_size) {
+        free(buf);
+        return NULL;
     }
+    *size = got;
+    return buf;
+}
+
+/* Caller holds s_lock. */
+static void add_font_data(const char *path, const char *buf, size_t size)
+{
+    if (font_added(path))
+        return;
+    ass_add_font(s_lib, path, (char *)buf, (int)size);
+    ass_set_fonts(s_rend, NULL, "Roboto", ASS_FONTPROVIDER_NONE, NULL, 0);
+    snprintf(s_fonts_added[s_nfonts_added++], sizeof s_fonts_added[0], "%s", path);
+    evo_bt("subs: added font %s", path);
+}
+
+/* Reads and adds a console font now. Caller holds s_lock. */
+static void add_system_font(const char *path)
+{
+    if (font_added(path))
+        return;
+    size_t size = 0;
+    char *buf = read_font_file(path, &size);
+    if (buf)
+        add_font_data(path, buf, size);
     free(buf);
 }
 
@@ -133,8 +164,91 @@ static void fonts_for_language(const char *lang)
              !strncasecmp(lang, "zho", 3) || !strncasecmp(lang, "cmn", 3) ||
              !strncasecmp(lang, "yue", 3))
         add_system_font("/preinst/common/font/DFHEI5-SONY.ttf");
-    else if (!strncasecmp(lang, "th", 2))
+    else if (!strncasecmp(lang, "th", 2))   /* "th" and "tha" */
         add_system_font("/preinst/common/font/SSTThai-Roman.otf");
+}
+
+/* ---- writing systems in the text ------------------------------------------ */
+
+/* Which scripts a subtitle uses, so the console font with those glyphs is loaded even when the
+ * track has no language (a fansub .ass named after the film, say): Roboto has no CJK or Thai, and
+ * without the right font every character draws as a box. */
+enum { SCRIPT_HAN = 1, SCRIPT_KANA = 2, SCRIPT_HANGUL = 4, SCRIPT_THAI = 8 };
+
+static int scripts_in(const char *p, size_t n)
+{
+    int found = 0;
+    const unsigned char *u = (const unsigned char *)p;
+    for (size_t i = 0; i < n;) {
+        uint32_t c = u[i];
+        int len = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 : (c & 0xf0) == 0xe0 ? 3 : (c & 0xf8) == 0xf0 ? 4 : 1;
+        if (len > 1) {
+            if (i + len > n)
+                break;
+            c &= 0x7f >> len;
+            for (int k = 1; k < len; k++)
+                c = (c << 6) | (u[i + k] & 0x3f);
+        }
+        i += len;
+        if (c < 0x0e00)
+            continue;
+        if (c <= 0x0e7f)
+            found |= SCRIPT_THAI;
+        else if ((c >= 0x3040 && c <= 0x30ff) || (c >= 0x31f0 && c <= 0x31ff) || (c >= 0xff66 && c <= 0xff9f))
+            found |= SCRIPT_KANA;
+        else if ((c >= 0xac00 && c <= 0xd7af) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f))
+            found |= SCRIPT_HANGUL;
+        else if ((c >= 0x3400 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0x20000 && c <= 0x3134f) ||
+                 (c >= 0x3000 && c <= 0x303f) || (c >= 0xff00 && c <= 0xff65))
+            found |= SCRIPT_HAN;   /* ideographs, and CJK / full-width punctuation */
+    }
+    return found;
+}
+
+/* The console fonts a mix of scripts needs; returns how many. */
+static int font_paths(int scripts, const char *out[4])
+{
+    int n = 0;
+    if (scripts & SCRIPT_KANA)
+        out[n++] = "/preinst/common/font/SSTJpPro-Regular.otf";
+    if (scripts & SCRIPT_HANGUL)
+        out[n++] = "/preinst/common/font/YoonGothicProSIE760.otf";
+    /* Chinese: ideographs with no kana (Japanese text has its kanji in the Japanese font) */
+    if ((scripts & SCRIPT_HAN) && !(scripts & SCRIPT_KANA))
+        out[n++] = "/preinst/common/font/DFHEI5-SONY.ttf";
+    if (scripts & SCRIPT_THAI)
+        out[n++] = "/preinst/common/font/SSTThai-Roman.otf";
+    return n;
+}
+
+/* Adds them now (choosing a track, or a loaded external one). Caller holds s_lock. */
+static void fonts_for_scripts(int scripts)
+{
+    const char *paths[4];
+    const int n = font_paths(scripts, paths);
+    for (int i = 0; i < n; i++)
+        add_system_font(paths[i]);
+}
+
+static int s_font_pending;     /* scripts whose fonts the loader thread should add */
+static void start_loader(void);
+
+/*
+ * Notes the scripts in a piece of a track's text. A newly seen one on the track being shown gets
+ * its font from the loader thread: the font file is never read on the playback thread.
+ * Caller holds s_lock.
+ */
+static void note_scripts(strack *t, const char *text, size_t n)
+{
+    const int now = t->scripts | scripts_in(text, n);
+    if (now == t->scripts)
+        return;
+    t->scripts = now;
+    if (s_selected >= 0 && t == &s_tracks[s_selected]) {
+        s_font_pending |= now;
+        start_loader();
+        pthread_cond_signal(&s_ext_cond);
+    }
 }
 
 static void ass_log(int level, const char *fmt, va_list va, void *data)
@@ -444,6 +558,7 @@ void nuvio_subs_select(int id)
     if (id >= 0) {
         strack *t = &s_tracks[id];
         fonts_for_language(t->info.lang);
+        fonts_for_scripts(t->scripts);
         if (t->info.bitmap) {
             /* Bitmap tracks decode only while selected: start clean. */
             free_events(t);
@@ -558,8 +673,10 @@ static void feed(strack *t, const AVPacket *pkt, AVRational tb, int64_t offset_m
         return;
 
     if (t->ass_raw && t->ass) {
-        if (pkt->data && pkt->size > 0)
+        if (pkt->data && pkt->size > 0) {
+            note_scripts(t, (const char *)pkt->data, (size_t)pkt->size);
             ass_process_chunk(t->ass, (char *)pkt->data, pkt->size, start, dur > 0 ? dur : 5000);
+        }
         return;
     }
     if (!t->dec)
@@ -585,9 +702,11 @@ static void feed(strack *t, const AVPacket *pkt, AVRational tb, int64_t offset_m
     } else if (t->ass) {
         for (unsigned k = 0; k < sub.num_rects; k++) {
             const AVSubtitleRect *r = sub.rects[k];
-            if (r->type == SUBTITLE_ASS && r->ass)
+            if (r->type == SUBTITLE_ASS && r->ass) {
+                note_scripts(t, r->ass, strlen(r->ass));
                 ass_process_chunk(t->ass, r->ass, (int)strlen(r->ass), s0,
                                   end == INT64_MAX ? 4000 : end - s0);
+            }
         }
     }
     avsubtitle_free(&sub);
@@ -637,24 +756,140 @@ static int valid_utf8(const uint8_t *p, size_t n)
     return 1;
 }
 
-/* The likely legacy code page for a subtitle that is not UTF-8. */
+/* The likely legacy code page for a subtitle that is not UTF-8, from its language: two-letter
+ * codes ("zh") and the three-letter ones Emby and Jellyfin give ("chi", "zho"). NULL: unknown. */
 static const char *charset_for(const char *lang)
 {
     static const struct { const char *l; const char *cs; } k[] = {
-        {"ar", "CP1256"}, {"fa", "CP1256"}, {"ur", "CP1256"},
-        {"ru", "CP1251"}, {"uk", "CP1251"}, {"bg", "CP1251"}, {"sr", "CP1251"}, {"mk", "CP1251"},
-        {"be", "CP1251"},
-        {"el", "CP1253"}, {"he", "CP1255"}, {"iw", "CP1255"}, {"tr", "CP1254"},
-        {"pl", "CP1250"}, {"cs", "CP1250"}, {"sk", "CP1250"}, {"hu", "CP1250"}, {"ro", "CP1250"},
-        {"hr", "CP1250"}, {"sl", "CP1250"}, {"bs", "CP1250"},
-        {"lt", "CP1257"}, {"lv", "CP1257"}, {"et", "CP1257"},
-        {"vi", "CP1258"}, {"th", "CP874"},
-        {"zh", "GB18030"}, {"ja", "SHIFT_JIS"}, {"ko", "CP949"},
+        {"ar", "CP1256"}, {"ara", "CP1256"}, {"fa", "CP1256"}, {"fas", "CP1256"}, {"per", "CP1256"},
+        {"ur", "CP1256"}, {"urd", "CP1256"},
+        {"ru", "CP1251"}, {"rus", "CP1251"}, {"uk", "CP1251"}, {"ukr", "CP1251"}, {"bg", "CP1251"},
+        {"bul", "CP1251"}, {"sr", "CP1251"}, {"srp", "CP1251"}, {"mk", "CP1251"}, {"mkd", "CP1251"},
+        {"mac", "CP1251"}, {"be", "CP1251"}, {"bel", "CP1251"},
+        {"el", "CP1253"}, {"ell", "CP1253"}, {"gre", "CP1253"}, {"he", "CP1255"}, {"heb", "CP1255"},
+        {"iw", "CP1255"}, {"tr", "CP1254"}, {"tur", "CP1254"},
+        {"pl", "CP1250"}, {"pol", "CP1250"}, {"cs", "CP1250"}, {"ces", "CP1250"}, {"cze", "CP1250"},
+        {"sk", "CP1250"}, {"slk", "CP1250"}, {"slo", "CP1250"}, {"hu", "CP1250"}, {"hun", "CP1250"},
+        {"ro", "CP1250"}, {"ron", "CP1250"}, {"rum", "CP1250"}, {"hr", "CP1250"}, {"hrv", "CP1250"},
+        {"sl", "CP1250"}, {"slv", "CP1250"}, {"bs", "CP1250"}, {"bos", "CP1250"},
+        {"lt", "CP1257"}, {"lit", "CP1257"}, {"lv", "CP1257"}, {"lav", "CP1257"}, {"et", "CP1257"},
+        {"est", "CP1257"},
+        {"vi", "CP1258"}, {"vie", "CP1258"}, {"th", "CP874"}, {"tha", "CP874"},
+        {"zh", "GB18030"}, {"chi", "GB18030"}, {"zho", "GB18030"}, {"cmn", "GB18030"},
+        {"yue", "BIG5"}, {"ja", "SHIFT_JIS"}, {"jpn", "SHIFT_JIS"}, {"ko", "CP949"}, {"kor", "CP949"},
     };
-    for (unsigned i = 0; lang && i < sizeof k / sizeof k[0]; i++)
-        if (!strncasecmp(lang, k[i].l, 2))
+    if (!lang || !*lang)
+        return NULL;
+    /* "zh-TW", "zh-Hant", "chi-tw": traditional Chinese */
+    if ((!strncasecmp(lang, "zh", 2) || !strncasecmp(lang, "chi", 3) || !strncasecmp(lang, "zho", 3)) &&
+        (strcasestr(lang, "tw") || strcasestr(lang, "hk") || strcasestr(lang, "hant")))
+        return "BIG5";
+    char code[4] = {0};
+    for (int i = 0; i < 3 && isalpha((unsigned char)lang[i]); i++)
+        code[i] = (char)tolower((unsigned char)lang[i]);
+    for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++)
+        if (!strcmp(code, k[i].l))
             return k[i].cs;
-    return "CP1252";
+    return NULL;
+}
+
+/* Converts n bytes from a code page to UTF-8; NULL if they aren't valid in it. */
+static uint8_t *to_utf8(const uint8_t *in, size_t n, const char *from, size_t *out_len)
+{
+    iconv_t cd = iconv_open("UTF-8", from);
+    if (cd == (iconv_t)-1)
+        return NULL;
+    size_t cap = n * 4 + 16;
+    uint8_t *out = (uint8_t *)malloc(cap + 1);
+    char *ip = (char *)in, *op = (char *)out;
+    size_t il = n, ol = cap;
+    int ok = out && iconv(cd, &ip, &il, &op, &ol) != (size_t)-1 && il == 0;
+    iconv_close(cd);
+    if (!ok) {
+        free(out);
+        return NULL;
+    }
+    *out_len = cap - ol;
+    out[*out_len] = 0;
+    return out;
+}
+
+/* How much converted text reads like real Chinese, Japanese or Korean: common characters count. */
+static int cjk_score(const uint8_t *p, size_t n)
+{
+    static const char *common =
+        "的一是不了人我在有他这中大来上国个到说们为子和你地出道也时年得就那要下以生会自着去之过家学对可她里后小么"
+        "心多天而能好都然没日于起还发成事只作当想看文无开手十用主行方又如前所本见经头面公同三已老从动两长知样现分"
+        "這來國們說個為時會對與麼後過還從實兩點話種現開經長發問見間學東車門頭裡沒"
+        /* the most common hiragana and katakana */
+        "のにはをたがでてとしれさあいうえおかなすまんこそだよねもらるっくきけりアイスンルトラ"
+        /* and Hangul syllables */
+        "이는다하가에을를의고지요니서도습안녕세있한수것그나말해게어아오우리기로사대내보시되들면야잘좀네예";
+    /* Only common characters count: any double-byte text decodes "validly" as the others, but
+     * into rare characters. */
+    int score = 0;
+    const unsigned char *u = (const unsigned char *)p;
+    for (size_t i = 0; i + 2 < n; i++) {
+        if ((u[i] & 0xf0) != 0xe0)
+            continue;
+        char ch[4] = {(char)u[i], (char)u[i + 1], (char)u[i + 2], 0};
+        if (strstr(common, ch))
+            score++;
+        i += 2;
+    }
+    return score;
+}
+
+/*
+ * A subtitle that isn't UTF-8, turned into UTF-8 (so .ass files are covered too, and the text can be
+ * looked at for the fonts it needs). The code page comes from the track's language if that works,
+ * otherwise from the text: double-byte text is tried as Chinese, Traditional Chinese, Japanese and
+ * Korean and the one that reads best wins; anything else is taken as Western European.
+ */
+static uint8_t *legacy_to_utf8(const uint8_t *data, size_t n, const char *lang, size_t *out_len,
+                               const char **picked)
+{
+    const char *hint = charset_for(lang);
+    uint8_t *out = NULL;
+    if (hint && (out = to_utf8(data, n, hint, out_len))) {
+        *picked = hint;
+        return out;
+    }
+    size_t high = 0, pairs = 0;
+    for (size_t i = 0; i + 1 < n; i++) {
+        if (data[i] < 0x80)
+            continue;
+        high++;
+        if (data[i] >= 0x81 && data[i] <= 0xfe && data[i + 1] >= 0x40 && data[i + 1] != 0x7f) {
+            pairs++;
+            i++;
+        }
+    }
+    if (high && pairs * 10 >= high * 6) {
+        static const char *dbcs[] = {"GB18030", "BIG5", "SHIFT_JIS", "CP949"};
+        int best = -1;
+        for (unsigned i = 0; i < sizeof dbcs / sizeof dbcs[0]; i++) {
+            size_t len = 0;
+            uint8_t *u = to_utf8(data, n, dbcs[i], &len);
+            if (!u)
+                continue;
+            const int sc = cjk_score(u, len);
+            if (sc > best) {
+                free(out);
+                out = u;
+                *out_len = len;
+                *picked = dbcs[i];
+                best = sc;
+            } else {
+                free(u);
+            }
+        }
+        if (out)
+            return out;
+    }
+    if ((out = to_utf8(data, n, "CP1252", out_len)))
+        *picked = "CP1252";
+    return out;
 }
 
 typedef struct membuf {
@@ -776,10 +1011,25 @@ static int load_external(strack *t, const char *url, const char *headers)
         data = plain;
         n = m;
     }
+    /* Everything is made UTF-8 first: libass reads .ass/.ssa as it is, and the text is looked
+     * at below for the fonts it needs. */
     const char *charenc = NULL;
+    const char *picked = NULL;
     const int bom16 = n > 2 && ((data[0] == 0xff && data[1] == 0xfe) || (data[0] == 0xfe && data[1] == 0xff));
-    if (!bom16 && !valid_utf8(data, n))
-        charenc = charset_for(t->info.lang);
+    if (bom16 || !valid_utf8(data, n)) {
+        size_t m = 0;
+        uint8_t *utf = bom16 ? to_utf8(data, n, "UTF-16", &m) : legacy_to_utf8(data, n, t->info.lang, &m, &picked);
+        if (utf) {
+            free(data);
+            data = utf;
+            n = m;
+            if (bom16)
+                picked = "UTF-16";
+        } else if (!bom16) {
+            charenc = charset_for(t->info.lang);   /* let the decoder try */
+        }
+    }
+    t->scripts = scripts_in((const char *)data, n);
 
     membuf mb = {data, n, 0};
     uint8_t *iobuf = (uint8_t *)av_malloc(32768);
@@ -832,8 +1082,8 @@ static int load_external(strack *t, const char *url, const char *headers)
     if (t->dec && !t->info.bitmap)
         avcodec_free_context(&t->dec);     /* everything is in the libass track now */
     rc = events > 0 ? 0 : -1;
-    evo_bt("subs: external %s %s, %d cues%s%s", rc == 0 ? "ok" : "EMPTY", t->info.codec, events,
-           charenc ? " charset=" : "", charenc ? charenc : "");
+    evo_bt("subs: external %s %s, %d cues%s%s, scripts %x", rc == 0 ? "ok" : "EMPTY", t->info.codec, events,
+           picked || charenc ? " from " : "", picked ? picked : charenc ? charenc : "", t->scripts);
 out:
     if (fmt)
         avformat_close_input(&fmt);
@@ -852,6 +1102,24 @@ static void *ext_loader(void *arg)
         pthread_mutex_lock(&s_lock);
         int id = -1;
         while (id < 0) {
+            if (s_font_pending) {
+                /* Fonts for text seen during playback: read here, without the lock */
+                const char *paths[4];
+                const int nf = font_paths(s_font_pending, paths);
+                s_font_pending = 0;
+                for (int f = 0; f < nf; f++) {
+                    if (font_added(paths[f]))
+                        continue;
+                    pthread_mutex_unlock(&s_lock);
+                    size_t size = 0;
+                    char *buf = read_font_file(paths[f], &size);
+                    pthread_mutex_lock(&s_lock);
+                    if (buf)
+                        add_font_data(paths[f], buf, size);
+                    free(buf);
+                }
+                continue;
+            }
             for (int i = 0; i < s_ntracks; i++)
                 if (s_tracks[i].info.external && s_tracks[i].info.state == 0 && !s_tracks[i].loading) {
                     id = i;
@@ -891,8 +1159,10 @@ static void *ext_loader(void *arg)
                 info.bitmap = work.info.bitmap;
                 info.state = 1;
                 t->info = info;
-                if (s_selected == id)
+                if (s_selected == id) {
                     fonts_for_language(t->info.lang);
+                    fonts_for_scripts(t->scripts);
+                }
             } else {
                 free_track(&work);
                 t->info.state = -1;
@@ -903,6 +1173,18 @@ static void *ext_loader(void *arg)
     return NULL;
 }
 
+/* The loader thread, started once. Caller holds s_lock. */
+static void start_loader(void)
+{
+    if (s_loader_up)
+        return;
+    pthread_t th;
+    if (pthread_create(&th, NULL, ext_loader, NULL) == 0) {
+        pthread_detach(th);
+        s_loader_up = 1;
+    }
+}
+
 int nuvio_subs_add_external(const char *url, const char *lang, const char *label,
                             const char *headers)
 {
@@ -910,13 +1192,7 @@ int nuvio_subs_add_external(const char *url, const char *lang, const char *label
     if (!url || !*url)
         return -1;
     pthread_mutex_lock(&s_lock);
-    if (!s_loader_up) {
-        pthread_t th;
-        if (pthread_create(&th, NULL, ext_loader, NULL) == 0) {
-            pthread_detach(th);
-            s_loader_up = 1;
-        }
-    }
+    start_loader();
     if (s_ntracks < MAX_TRACKS) {
         id = s_ntracks++;
         strack *t = &s_tracks[id];
