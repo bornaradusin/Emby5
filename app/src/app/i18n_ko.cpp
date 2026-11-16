@@ -759,6 +759,7 @@ const Table &table_ko()
         {"Nattmodus", "야간 모드"},
         {"HDMI-bitstrøm", "HDMI 비트스트림"},
         {"Temamusikk", "테마 음악"},
+        {"Temavideoer", "테마 영상"},
         {"Bildefrekvens", "주사율"},
         {"Adresse", "주소"},
         {"Pålogging", "로그인"},

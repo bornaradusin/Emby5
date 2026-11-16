@@ -759,6 +759,7 @@ const Table &table_hr()
         {"Nattmodus", "Noćni način"},
         {"HDMI-bitstrøm", "HDMI bitstream"},
         {"Temamusikk", "Glazbena tema"},
+        {"Temavideoer", "Tematski videozapisi"},
         {"Bildefrekvens", "Frekvencija osvježavanja"},
         {"Adresse", "Adresa"},
         {"Pålogging", "Prijava"},

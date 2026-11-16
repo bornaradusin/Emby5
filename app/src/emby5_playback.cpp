@@ -817,6 +817,27 @@ bool emby5_play_theme(jf::Client &client, const jf::Item &song)
     return true;
 }
 
+bool emby5_play_theme_video(jf::Client &client, const jf::Item &video)
+{
+    jf::Playback pb;
+    const int mbps = settings::get().local.max_mbps;
+    if (!client.playback_info(video.id, 0, -1, -1, &pb, (int64_t)mbps * 1000000))
+        return false;
+    jf::Item item = video;
+    item.position_ticks = 0;   /* from the start, every time */
+    Extras ex;
+    const std::string req = request_json(client, item, pb, {}, ex);
+    evo_audio_set_night(0);
+    evo_audio_set_boost(1.0f);
+    evo_audio_set_gain(0.28f);   /* as quiet as a theme song */
+    evo_audio_set_speed(1.0f);
+    emby5_bs_set_allowed(0);
+    nuvio_player_run(req.c_str());
+    evo_audio_set_gain(1.0f);
+    client.stop_encoding(pb);
+    return nuvio_player_last_started() != 0;
+}
+
 void emby5_playback_prepare()
 {
     const settings::Local l = settings::get().local;

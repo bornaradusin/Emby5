@@ -53,6 +53,9 @@ void begin_frame();          /* frame_begin + clear */
  * renderer's state without starting a frame. */
 void begin_overlay();
 void end_frame();            /* present */
+/* After something else drew into this frame (a video picture): the renderer's
+ * clip set again, as the drawing that follows expects it. */
+void resume_after_external();
 
 /* Textures. Release is deferred until the GPU is done with the frames in flight. */
 Texture *texture_from_pixels(const uint32_t *rgba, int w, int h, int stride_px);

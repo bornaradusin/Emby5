@@ -759,6 +759,7 @@ const Table &table_th()
         {"Nattmodus", "โหมดกลางคืน"},
         {"HDMI-bitstrøm", "HDMI บิตสตรีม"},
         {"Temamusikk", "เพลงประกอบ"},
+        {"Temavideoer", "วิดีโอประกอบ"},
         {"Bildefrekvens", "อัตรารีเฟรช"},
         {"Adresse", "ที่อยู่"},
         {"Pålogging", "การลงชื่อเข้าใช้"},

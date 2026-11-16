@@ -119,6 +119,14 @@ ui::PlayerUi s_osd;
 /* Emby5: headless (music behind the menus) - nothing drawn, no controller; the
  * status and request are published for the app to draw. */
 std::atomic<bool> s_headless{false};
+/* Emby5: a theme video behind a title's page (nuvio_player_set_backdrop). The
+ * player thread decodes; the app's render thread draws the picture, under
+ * s_backdrop_lock, while s_backdrop_showing. */
+std::atomic<unsigned> s_backdrop_token{0};
+std::atomic<unsigned> s_backdrop_cut{0};
+std::atomic<bool> s_backdrop_showing{false};
+std::mutex s_backdrop_lock;
+std::atomic<bool> s_last_started{false};
 std::mutex s_now_lock;
 NuvioStatus s_now_status;
 NuvioRequest s_now_request;
@@ -827,6 +835,45 @@ void apply(Session &s, const OsdCommand &c)
 
 extern "C" void nuvio_player_set_headless(int headless) { s_headless = headless != 0; }
 
+extern "C" void nuvio_player_set_backdrop(unsigned token) { s_backdrop_token = token; }
+
+extern "C" void nuvio_player_stop_backdrops(unsigned below)
+{
+    s_backdrop_cut = below;
+    std::lock_guard<std::mutex> g(s_backdrop_lock);
+    s_backdrop_showing = false;   /* the page that asked for it is gone: not another frame of it */
+}
+
+extern "C" int nuvio_player_draw_backdrop(void)
+{
+    if (!s_backdrop_showing)
+        return 0;
+    std::lock_guard<std::mutex> g(s_backdrop_lock);
+    if (!s_backdrop_showing)
+        return 0;
+    pp_video_frame f;
+    std::memset(&f, 0, sizeof f);
+    if (!pp_playback_get_video_frame(&g_pp_pb, &f) || !f.ready)
+        return 0;
+    /* The menus are SDR: an HDR picture would come out washed out. The still stays. */
+    if (f.ten_bit || f.color_trc == 16 || f.color_trc == 18)
+        return 0;
+    const int is_direct =
+        (evo_pb_active_backend() == EVO_VDEC_BACKEND_NATIVE && !f.held && f.uv != nullptr) ? 1 : 0;
+    return evo_agc_blit_yuv(f.y, f.y_pitch, f.uv, f.uv_pitch, f.u, f.u_pitch, f.v, f.v_pitch,
+                            (int)f.coded_w, (int)f.coded_h, (int)f.disp_w, (int)f.disp_h,
+                            1 /* fill */, f.ten_bit, f.color_trc, is_direct, g_pp_pb.display_pts_us) == 0
+               ? 1 : 0;
+}
+
+extern "C" int nuvio_player_backdrop_pending(void)
+{
+    const unsigned t = s_backdrop_token;
+    return t != 0 && t >= s_backdrop_cut ? 1 : 0;
+}
+
+extern "C" int nuvio_player_last_started(void) { return s_last_started ? 1 : 0; }
+
 static bool s_left_in_player;   /* music: the last run kept player mode on */
 
 extern "C" void nuvio_player_leave(void)
@@ -987,6 +1034,13 @@ extern "C" void nuvio_player_run(const char *json)
     std::snprintf(nuvio_stream_user_agent, sizeof nuvio_stream_user_agent, "%s", s.req.user_agent.c_str());
 
     const bool headless = s_headless;
+    /* A theme video behind a page (0: none). The upscaler stays off for it: it is
+     * a backdrop under the page's text, and the upscaler draws into a surface of
+     * its own that the page's drawing does not expect. */
+    const unsigned backdrop = headless ? s_backdrop_token.load() : 0u;
+    s_last_started = false;
+    if (backdrop)
+        evo_agc_upscale_set_mode(EVO_AGC_UPSCALE_OFF);
     if (!headless) {
         evo_agc_upscale_set_mode(settings::upscale_engine_mode(settings::get().local.upscale_mode));
         /* What Auto upscales with: Anime (ArtCNN) for anime and animation,
@@ -1103,7 +1157,8 @@ extern "C" void nuvio_player_run(const char *json)
             std::memset(&in, 0, sizeof in);   /* the app has the controller */
         else
             nuvio_input_poll(&in);
-        if (nuvio_control_take_stop() || nuvio_control_quit_requested()) {
+        if (nuvio_control_take_stop() || nuvio_control_quit_requested() ||
+            (backdrop && (backdrop < s_backdrop_cut || s.failed))) {   /* a theme video: its page closed, or it failed */
             if (s.job.running && !s.opened) {
                 s.cancel = true;
                 s.job.cancel = true;
@@ -1213,7 +1268,10 @@ extern "C" void nuvio_player_run(const char *json)
                  (evo_pb_is_eof() && vq == 0 &&
                   (now - s.last_frame_at > 0.8 || (s.st.duration > 0 && s.st.position >= s.st.duration - 0.3))))) {
                 s.res.state = "ended";
-                s_osd.playback_ended(s.st, cmds);
+                if (backdrop)
+                    s.done = true;   /* a theme video: nothing comes after it here */
+                else
+                    s_osd.playback_ended(s.st, cmds);
             }
         } else if (!s.started) {
             s.st.open_stage = s.req.str("opening", T("Opening stream \xE2\x80\xA6"));
@@ -1262,7 +1320,9 @@ extern "C" void nuvio_player_run(const char *json)
         bool have = false, new_frame = false;
         int64_t pts = s.last_pts;
         if (engine_ready && !s.failed) {
-            have = !headless && pp_playback_get_video_frame(&g_pp_pb, &f) && f.ready;
+            /* A theme video: the frame is only looked at here (the page draws it), so
+             * the start and the end are seen as for any video. */
+            have = (!headless || backdrop) && pp_playback_get_video_frame(&g_pp_pb, &f) && f.ready;
             pts = g_pp_pb.display_pts_us;
             new_frame = have && (pts != s.last_pts || g_pp_pb.seek_discarding);
             if (have && !s.started) {
@@ -1270,6 +1330,11 @@ extern "C" void nuvio_player_run(const char *json)
                 s.st.started = true;
                 evo_bt("nuvio: first frame %ux%u ten_bit=%d trc=%d after %.2f s", f.disp_w, f.disp_h,
                        f.ten_bit, f.color_trc, now - s.open_started);
+                if (backdrop && backdrop >= s_backdrop_cut) {
+                    std::lock_guard<std::mutex> g(s_backdrop_lock);
+                    if (backdrop >= s_backdrop_cut)   /* not stopped in the meantime */
+                        s_backdrop_showing = true;
+                }
             }
             if (new_frame)
                 s.last_frame_at = now;
@@ -1388,6 +1453,16 @@ extern "C" void nuvio_player_run(const char *json)
     evo_bt("nuvio: %s at %.1f / %.1f s%s%s%s%s", s.res.state.c_str(), s.res.position, s.res.duration,
            s.res.action.empty() ? "" : " -> ", s.res.action.c_str(), s.res.error.empty() ? "" : " - ",
            s.res.error.c_str());
+    s_last_started = s.started;
+    if (backdrop) {
+        /* The page stops drawing the picture before the decoder's frames go; the
+         * frames already sent to the GPU are done with after a few vsyncs. */
+        {
+            std::lock_guard<std::mutex> g(s_backdrop_lock);
+            s_backdrop_showing = false;
+        }
+        usleep(120 * 1000);
+    }
     s_pb->stopPlayback();
     if(!headless)evo_agc_upscale_end_session();
     screen = kScreenNone;

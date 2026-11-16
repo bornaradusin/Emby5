@@ -759,6 +759,7 @@ const Table &table_hu()
         {"Nattmodus", "Éjszakai mód"},
         {"HDMI-bitstrøm", "HDMI-bitstream"},
         {"Temamusikk", "Főcímzene"},
+        {"Temavideoer", "Témavideók"},
         {"Bildefrekvens", "Frissítési gyakoriság"},
         {"Adresse", "Cím"},
         {"Pålogging", "Bejelentkezés"},

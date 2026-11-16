@@ -759,6 +759,7 @@ const Table &table_vi()
         {"Nattmodus", "Chế độ ban đêm"},
         {"HDMI-bitstrøm", "Bitstream HDMI"},
         {"Temamusikk", "Nhạc chủ đề"},
+        {"Temavideoer", "Video chủ đề"},
         {"Bildefrekvens", "Tần số quét"},
         {"Adresse", "Địa chỉ"},
         {"Pålogging", "Đăng nhập"},

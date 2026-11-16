@@ -759,6 +759,7 @@ const Table &table_ro()
         {"Nattmodus", "Mod nocturn"},
         {"HDMI-bitstrøm", "Bitstream HDMI"},
         {"Temamusikk", "Muzică tematică"},
+        {"Temavideoer", "Videoclipuri tematice"},
         {"Bildefrekvens", "Rată de reîmprospătare"},
         {"Adresse", "Adresă"},
         {"Pålogging", "Conectare"},

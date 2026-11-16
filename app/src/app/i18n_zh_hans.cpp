@@ -759,6 +759,7 @@ const Table &table_zh_hans()
         {"Nattmodus", "夜间模式"},
         {"HDMI-bitstrøm", "HDMI 直通输出"},
         {"Temamusikk", "主题音乐"},
+        {"Temavideoer", "主题视频"},
         {"Bildefrekvens", "刷新率"},
         {"Adresse", "地址"},
         {"Pålogging", "登录"},

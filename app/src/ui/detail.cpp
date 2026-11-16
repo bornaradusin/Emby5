@@ -16,6 +16,7 @@
 
 #include "gfx/art.h"
 #include "nuvio_input.h"
+#include "nuvio_player.h"
 #include "ui/item_menu.h"
 #include "ui/detail_icons.h"
 #include "ui/detail_layout.h"
@@ -1209,7 +1210,18 @@ void Detail::draw(double now, float dt)
 
     const gfx::Rect full{0, 0, gfx::W, gfx::H};
     gfx::fill(full, kBg);
-    if(theme_artwork_enabled() && !spoiler_hidden(it)) art::draw(full, m_client.image_url(it.backdrop_owner, "Backdrop", it.backdrop_tag, 1920), it.backdrop_blurhash,
+    /* The title's theme video, when one plays (Innstillinger: Temavideoer), in place
+     * of its backdrop; the backdrop until its first picture. */
+    bool theme_video = false;
+    if (theme_artwork_enabled() && !spoiler_hidden(it)) {
+        if (nuvio_player_draw_backdrop()) {
+            gfx::resume_after_external();
+            theme_video = true;
+        }
+        if (nuvio_player_backdrop_pending())
+            m_animating = true;   /* every new picture, the first one too */
+    }
+    if(!theme_video && theme_artwork_enabled() && !spoiler_hidden(it)) art::draw(full, m_client.image_url(it.backdrop_owner, "Backdrop", it.backdrop_tag, 1920), it.backdrop_blurhash,
               1920, 1080, 0, 1.f, kBg);
     gfx::fill_hgradient({0, 0, 576, gfx::H}, alpha(kBg, 0.92f), alpha(kBg, 0.72f));
     gfx::fill_hgradient({576, 0, 538, gfx::H}, alpha(kBg, 0.72f), alpha(kBg, 0.2f));

@@ -759,6 +759,7 @@ const Table &table_de()
         {"Nattmodus", "Nachtmodus"},
         {"HDMI-bitstrøm", "HDMI-Bitstream"},
         {"Temamusikk", "Titelmusik"},
+        {"Temavideoer", "Titelvideos"},
         {"Bildefrekvens", "Bildwiederholrate"},
         {"Adresse", "Adresse"},
         {"Pålogging", "Anmeldung"},

@@ -759,6 +759,7 @@ const Table &table_el()
         {"Nattmodus", "Νυχτερινή λειτουργία"},
         {"HDMI-bitstrøm", "HDMI bitstream"},
         {"Temamusikk", "Μουσική θέματος"},
+        {"Temavideoer", "Βίντεο θέματος"},
         {"Bildefrekvens", "Ρυθμός ανανέωσης"},
         {"Adresse", "Διεύθυνση"},
         {"Pålogging", "Σύνδεση"},

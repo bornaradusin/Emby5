@@ -759,6 +759,7 @@ const Table &table_ru()
         {"Nattmodus", "Ночной режим"},
         {"HDMI-bitstrøm", "HDMI-битстрим"},
         {"Temamusikk", "Тематическая музыка"},
+        {"Temavideoer", "Тематические видео"},
         {"Bildefrekvens", "Частота обновления"},
         {"Adresse", "Адрес"},
         {"Pålogging", "Вход"},

@@ -759,6 +759,7 @@ const Table &table_fi()
         {"Nattmodus", "Yötila"},
         {"HDMI-bitstrøm", "HDMI-bittivirta"},
         {"Temamusikk", "Tunnusmusiikki"},
+        {"Temavideoer", "Tunnusvideot"},
         {"Bildefrekvens", "Virkistystaajuus"},
         {"Adresse", "Osoite"},
         {"Pålogging", "Kirjautuminen"},

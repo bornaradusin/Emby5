@@ -248,6 +248,7 @@ std::string SettingsScreen::value(Row r) const
         return !s.local.hdmi_bitstream ? T("Av") : s.local.night_mode ? T("Av med nattmodus")
                : s.local.volume_boost ? T("Off with volume boost") : T("På");
     case ThemeMusic: return s.local.theme_music ? T("På") : T("Av");
+    case ThemeVideos: return s.local.theme_videos ? T("På") : T("Av");
     case UpdateNotes: { const auto u=update_service::snapshot(); return u.checking ? T("Checking release notes …") : T("X to read release notes"); }
     case AppVersion: {
         int major = 0, minor = 0, patch = 0;
@@ -413,6 +414,10 @@ void SettingsScreen::change(Row r, int dir)
         break;
     case ThemeMusic:
         s.local.theme_music = !s.local.theme_music;
+        settings::set_local(s.local);
+        break;
+    case ThemeVideos:
+        s.local.theme_videos = !s.local.theme_videos;
         settings::set_local(s.local);
         break;
     case AudioDelay:   /* 20 ms steps: a soundbar's delay is typically 40-200 ms */

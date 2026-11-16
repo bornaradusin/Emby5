@@ -759,6 +759,7 @@ const Table &table_id()
         {"Nattmodus", "Mode malam"},
         {"HDMI-bitstrøm", "Bitstream HDMI"},
         {"Temamusikk", "Musik tema"},
+        {"Temavideoer", "Video tema"},
         {"Bildefrekvens", "Kecepatan refresh"},
         {"Adresse", "Alamat"},
         {"Pålogging", "Masuk"},

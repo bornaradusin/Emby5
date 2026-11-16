@@ -1023,8 +1023,12 @@ bool s_group_play = false;              /* this Play came from the SyncPlay grou
  * On a film's or series' page its theme song plays quietly in the background
  * (Innstillinger: Temamusikk), as Emby's own apps do; it stops when the page
  * closes or anything else plays. The player runs headless for it on its own
- * thread; s_theme_gen tells a starting theme whether it is still wanted. */
+ * thread; s_theme_gen tells a starting theme whether it is still wanted.
+ * A title with a theme video (Innstillinger: Temavideoer) plays that instead,
+ * over and over while the page is open: its picture in place of the page's
+ * backdrop (Detail draws it), its sound as quiet as a theme song. */
 std::atomic<bool> s_theme_on{false};
+std::atomic<bool> s_theme_video{false};   /* what plays is a theme video */
 std::atomic<unsigned> s_theme_gen{0};
 std::string s_theme_for;   /* the page whose theme is wanted (main thread) */
 
@@ -1032,11 +1036,14 @@ void stop_theme(bool wait)
 {
     s_theme_for.clear();
     s_theme_gen++;
+    nuvio_player_stop_backdrops(s_theme_gen);   /* a theme video stops itself, its picture at once */
     if (!s_theme_on)
         return;
-    remote::Command c;
-    c.kind = remote::Command::Stop;
-    remote::send(c);
+    if (!s_theme_video) {   /* a theme video does not take this: left over, it would stop what plays next */
+        remote::Command c;
+        c.kind = remote::Command::Stop;
+        remote::send(c);
+    }
     for (int i = 0; wait && i < 300 && s_theme_on; i++)
         usleep(10 * 1000);
 }
@@ -1045,7 +1052,8 @@ void stop_theme(bool wait)
 void theme_follow()
 {
     std::string want;
-    if (!s_stack.empty() && !s_music_on && settings::get().local.theme_music)
+    const settings::Local local = settings::get().local;
+    if (!s_stack.empty() && !s_music_on && (local.theme_music || local.theme_videos))
         if (const auto *d = dynamic_cast<const ui::Detail *>(s_stack.back().get())) {
             const std::string &t = d->item().type;
             if (t == "Movie" || t == "Series" || t == "Season" || t == "Episode")
@@ -1064,6 +1072,32 @@ void theme_follow()
             usleep(10 * 1000);
         usleep(600 * 1000);   /* a page only passed through starts nothing */
         if (gen != s_theme_gen || s_theme_on)
+            return;
+        if (settings::get().local.theme_videos) {
+            const std::vector<jf::Item> videos = c->theme_videos(want);
+            if (!videos.empty() && gen == s_theme_gen && !s_music_on) {
+                s_theme_video = true;
+                s_theme_on = true;
+                if (gen != s_theme_gen) {   /* stopped as it started: stop_theme saw nothing to wait for */
+                    s_theme_on = false;
+                    s_theme_video = false;
+                    return;
+                }
+                nuvio_player_set_headless(1);
+                nuvio_player_set_backdrop(gen);
+                /* Over and over while the page is open (a clip that will not play
+                 * stops it; so does a long stay, as a guard). */
+                for (int i = 0; i < 100 && gen == s_theme_gen && !s_music_on; i++)
+                    if (!emby5_play_theme_video(*c, videos[i % videos.size()]))
+                        break;
+                nuvio_player_set_backdrop(0);
+                nuvio_player_set_headless(0);
+                s_theme_on = false;
+                s_theme_video = false;
+                return;
+            }
+        }
+        if (!settings::get().local.theme_music)
             return;
         const std::vector<jf::Item> songs = c->theme_songs(want);
         if (songs.empty() || gen != s_theme_gen || s_music_on)

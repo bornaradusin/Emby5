@@ -298,6 +298,7 @@ const Table &english_table()
         {"Nattmodus", "Night mode"},
         {"HDMI-bitstrøm", "HDMI bitstream"},
         {"Temamusikk", "Theme music"},
+        {"Temavideoer", "Theme videos"},
         {"Bildefrekvens", "Refresh rate"},
         {"Adresse", "Address"},
         {"Pålogging", "Sign-in"},

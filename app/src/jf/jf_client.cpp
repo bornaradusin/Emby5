@@ -878,6 +878,14 @@ std::vector<Item> Client::theme_songs(const std::string &id)
     return items_of(body);
 }
 
+std::vector<Item> Client::theme_videos(const std::string &id)
+{
+    std::string body;
+    if (!get_json("/Items/" + id + "/ThemeVideos?userId=" + user_id_ + "&inheritFromParent=true", &body))
+        return {};
+    return items_of(body);
+}
+
 bool Client::item(const std::string &id, Item *out, Detail *detail)
 {
     std::string body;

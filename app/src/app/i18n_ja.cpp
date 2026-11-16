@@ -759,6 +759,7 @@ const Table &table_ja()
         {"Nattmodus", "ナイトモード"},
         {"HDMI-bitstrøm", "HDMIビットストリーム"},
         {"Temamusikk", "テーマ音楽"},
+        {"Temavideoer", "テーマ動画"},
         {"Bildefrekvens", "リフレッシュレート"},
         {"Adresse", "アドレス"},
         {"Pålogging", "サインイン"},

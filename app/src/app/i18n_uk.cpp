@@ -759,6 +759,7 @@ const Table &table_uk()
         {"Nattmodus", "Нічний режим"},
         {"HDMI-bitstrøm", "HDMI-бітстрім"},
         {"Temamusikk", "Тематична музика"},
+        {"Temavideoer", "Тематичні відео"},
         {"Bildefrekvens", "Частота оновлення"},
         {"Adresse", "Адреса"},
         {"Pålogging", "Вхід"},

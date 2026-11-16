@@ -306,6 +306,17 @@ void begin_overlay()
     s_opacity = 1.f;
 }
 
+void resume_after_external()
+{
+    if (s_scissors.empty()) {
+        evo_agc_runtime_set_scissor(0, 0, s_pw, s_ph);
+        return;
+    }
+    const Rect &c = s_scissors.back();
+    evo_agc_runtime_set_scissor((int)std::floor(c.x * s_scale), (int)std::floor(c.y * s_scale),
+                                (int)std::ceil(c.w * s_scale), (int)std::ceil(c.h * s_scale));
+}
+
 void end_frame()
 {
     evo_agc_runtime_present();

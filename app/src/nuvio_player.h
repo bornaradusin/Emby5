@@ -31,6 +31,22 @@ void nuvio_player_run(const char *request_json);
  * draws (from nuvio_player_now_playing) and sends commands through app/remote.
  * Only for audio: there is no picture to show. */
 void nuvio_player_set_headless(int headless);
+/* Emby5: a title's theme video behind its page. With headless, before
+ * nuvio_player_run: the picture is decoded but the player draws nothing - the
+ * page draws it (nuvio_player_draw_backdrop) in place of its backdrop. token
+ * names the run (0: an ordinary headless run); nuvio_player_stop_backdrops
+ * ends every run named below a token and hides its picture at once. */
+void nuvio_player_set_backdrop(unsigned token);
+void nuvio_player_stop_backdrops(unsigned below);
+/* On the render thread, in a frame: the theme video's current picture over the
+ * whole screen (filled, cropped to fit). 0 when there is none to show (none
+ * playing, not started yet, or an HDR picture the menus cannot show). */
+int nuvio_player_draw_backdrop(void);
+/* Whether a theme video is wanted and not stopped (loading or playing): the page
+ * keeps drawing, so its first picture shows when it comes. */
+int nuvio_player_backdrop_pending(void);
+/* Whether the last run's picture or sound got going. */
+int nuvio_player_last_started(void);
 /* Emby5: after music, leave player mode (a music run keeps it on, so the next
  * track follows without a blank screen). Safe to call when nothing is pending. */
 void nuvio_player_leave(void);

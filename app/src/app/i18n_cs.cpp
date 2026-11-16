@@ -759,6 +759,7 @@ const Table &table_cs()
         {"Nattmodus", "Noční režim"},
         {"HDMI-bitstrøm", "Bitstream HDMI"},
         {"Temamusikk", "Ústřední melodie"},
+        {"Temavideoer", "Tematická videa"},
         {"Bildefrekvens", "Obnovovací frekvence"},
         {"Adresse", "Adresa"},
         {"Pålogging", "Přihlášení"},

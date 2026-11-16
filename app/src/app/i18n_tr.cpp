@@ -759,6 +759,7 @@ const Table &table_tr()
         {"Nattmodus", "Gece modu"},
         {"HDMI-bitstrøm", "HDMI bit akışı"},
         {"Temamusikk", "Tema müziği"},
+        {"Temavideoer", "Tema videoları"},
         {"Bildefrekvens", "Yenileme hızı"},
         {"Adresse", "Adres"},
         {"Pålogging", "Oturum açma"},

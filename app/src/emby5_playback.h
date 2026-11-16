@@ -22,6 +22,10 @@ bool emby5_play(jf::Client &client, const jf::Item &item, std::string *error, bo
 void emby5_wait_reports(int max_ms);
 /* A theme song, quietly and unreported (headless: the caller sets that). */
 bool emby5_play_theme(jf::Client &client, const jf::Item &song);
+/* A theme video behind its title's page, once through: headless and a backdrop
+ * (the caller sets both, nuvio_player_set_backdrop), quiet, unreported, the
+ * picture drawn by the page. False when it did not get going. */
+bool emby5_play_theme_video(jf::Client &client, const jf::Item &video);
 /* The sound and stream settings for a playback (Settings › Playback): full
  * volume, normal speed, night mode, volume boost, HDMI bitstream and the
  * network buffer. Every playback calls it before it opens. */

@@ -759,6 +759,7 @@ const Table &table_ar()
         {"Nattmodus", "الوضع الليلي"},
         {"HDMI-bitstrøm", "تمرير HDMI المباشر"},
         {"Temamusikk", "موسيقى الشارة"},
+        {"Temavideoer", "مقاطع فيديو الشارة"},
         {"Bildefrekvens", "معدل التحديث"},
         {"Adresse", "العنوان"},
         {"Pålogging", "تسجيل الدخول"},
