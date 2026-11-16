@@ -3,6 +3,12 @@
 # version from app/sce_sys/param.json's contentVersion (01.002.010 is 1.2.10), the notes are
 # release-notes/<version>.md, and the asset is Emby5-<version>.zip. The draft is checked and
 # published by hand. Without a draft, the zip is kept as the run's artifact.
+#
+# A test build (the "test" input, e.g. theme-videos) is a draft pre-release instead: tag
+# <name>-test, notes release-notes/<name>-test.md, asset Emby5-<name>-test.zip. The in-app
+# updater skips pre-releases, and the homebrew catalog skips a tag with no digit in it, so
+# neither offers a test build to anyone; it keeps the version of the release it follows, so
+# the next real release is offered over it.
 name: Build
 
 on:
@@ -12,6 +18,10 @@ on:
         description: "Make a draft release <version> with Emby5-<version>.zip (otherwise it is kept as the run's artifact)"
         type: boolean
         default: true
+      test:
+        description: "A test build's name, e.g. theme-videos (letters and dashes): a draft pre-release <name>-test instead of a release"
+        type: string
+        default: ""
 
 permissions:
   contents: write   # the draft release
@@ -35,12 +45,26 @@ jobs:
 
       - name: The version
         id: version
+        env:
+          TEST: ${{ inputs.test }}
         run: |
           ver=$(python3 -c 'import json; p=[int(x) for x in json.load(open("app/sce_sys/param.json"))["contentVersion"].split(".")]; print(f"{p[0]}.{p[1]}.{p[2]}")')
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "Emby5 $ver"
-          if [ '${{ inputs.draft_release }}' = true ] && [ ! -f "release-notes/$ver.md" ]; then
-            echo "::error::release-notes/$ver.md is missing: write the release notes before making the draft"
+          tag="$ver" zip="Emby5-$ver.zip"
+          if [ -n "$TEST" ]; then
+            # No digits: the homebrew catalog only looks at tags with a digit in them.
+            if ! [[ $TEST =~ ^[a-z]+(-[a-z]+)*$ ]]; then
+              echo "::error::A test build's name is lowercase letters and dashes (no digits), e.g. theme-videos"
+              exit 1
+            fi
+            tag="$TEST-test" zip="Emby5-$TEST-test.zip"
+            echo "Test build: $tag"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          if [ '${{ inputs.draft_release }}' = true ] && [ ! -f "release-notes/$tag.md" ]; then
+            echo "::error::release-notes/$tag.md is missing: write the release notes before making the draft"
             exit 1
           fi
 
@@ -61,11 +85,14 @@ jobs:
           cd app
           ./scripts/build.sh --release
           ls -la build/app
+          # A test build's zip carries the test's name, not the version.
+          src="build/app/Emby5-${{ steps.version.outputs.version }}.zip"
+          [ "$src" = "build/app/${{ steps.version.outputs.zip }}" ] || mv "$src" "build/app/${{ steps.version.outputs.zip }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Emby5-${{ steps.version.outputs.version }}
-          path: app/build/app/Emby5-${{ steps.version.outputs.version }}.zip
+          name: ${{ steps.version.outputs.zip }}
+          path: app/build/app/${{ steps.version.outputs.zip }}
           if-no-files-found: error
 
       - name: Draft release
@@ -73,16 +100,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ZIP: ${{ steps.version.outputs.zip }}
+          TEST: ${{ inputs.test }}
         run: |
-          tag="$VERSION"
+          tag="$TAG"
           state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo none)
           if [ "$state" = false ]; then
-            echo "::error::$tag is already published: raise contentVersion in app/sce_sys/param.json for a new release"
+            if [ -n "$TEST" ]; then
+              echo "::error::$tag is already published: delete that test release, or give the test another name"
+            else
+              echo "::error::$tag is already published: raise contentVersion in app/sce_sys/param.json for a new release"
+            fi
             exit 1
           fi
           if [ "$state" = true ]; then
             gh release delete "$tag" --yes
           fi
-          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Emby5 $VERSION" \
-            --notes-file "release-notes/$VERSION.md" "app/build/app/Emby5-$VERSION.zip"
-          echo "::notice title=Draft release::Emby5 $VERSION is ready to check and publish"
+          if [ -n "$TEST" ]; then
+            pre=--prerelease title="Emby5 test: ${TEST//-/ }"
+          else
+            pre= title="Emby5 $VERSION"
+          fi
+          gh release create "$tag" --draft $pre --target "$GITHUB_SHA" --title "$title" \
+            --notes-file "release-notes/$tag.md" "app/build/app/$ZIP"
+          echo "::notice title=Draft release::$title is ready to check and publish"
