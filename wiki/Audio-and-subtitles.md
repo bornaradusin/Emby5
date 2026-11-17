@@ -26,6 +26,7 @@ Optionally, Emby5 can send audio untouched to your receiver over HDMI:
 - Choose a track or turn subtitles off while playing.
 - **Search for subtitles** through your server's subtitle plugins (Open Subtitles and the like), when the server has them.
 - The subtitle mode of your Emby account decides which track is picked: **Default, Smart, Always, Only Forced, Hearing Impaired (SDH)** or **None**.
+- **Chinese, Japanese, Korean and Thai** subtitles are drawn with the PS5's own font for those characters, whether or not the track has a language set. A styled .ass file that asks for Windows fonts (which the PS5 doesn't have) is drawn in that font too. Subtitle files in older encodings (GBK, Big5, Shift-JIS and others) are converted.
 
 ### Customising subtitles
 

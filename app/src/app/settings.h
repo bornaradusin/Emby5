@@ -73,7 +73,7 @@ struct Local : Appearance {
     bool check_updates = true;  /* automatic release checks/notifications; never installation */
     std::string language;        /* "" follows the PS5's language, else an i18n::language_code */
     bool theme_music = true;     /* a title's theme song, quietly, on its page */
-    bool theme_videos = true;    /* a title's theme video behind its page, in place of the backdrop */
+    bool theme_videos = false;   /* a title's theme video behind its page, in place of the backdrop (off until tested) */
 };
 
 struct All {
