@@ -15,6 +15,11 @@
 #include <libavutil/mathematics.h>
 #include <zlib.h>
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include FT_SFNT_NAMES_H
+#include FT_TRUETYPE_IDS_H
+
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -93,9 +98,19 @@ static void add_font_asset(const char *name, ui_asset a)
         ass_add_font(s_lib, name, (const char *)a.data, (int)a.size);
 }
 
-/* The console's CJK / Thai fonts, added when a track needs them. */
+/* The console's CJK / Thai fonts, added when a track needs them, with the name libass knows
+ * each by (its PostScript name). */
 static char s_fonts_added[8][64];
+static char s_font_names[8][96];
 static int s_nfonts_added;
+
+/* Default fonts in use: libass looks a missing character up only in the style's font and then
+ * the default family, by name - with no system font provider it never searches the other fonts
+ * it has. So a console font only draws once it is the default (see apply_default_fonts). */
+static char s_default_family[96] = "Roboto";
+static char s_default_path[64];
+static int s_default_scripts;   /* the scripts the selected track needs: the defaults follow them */
+static void apply_default_fonts(void);
 
 static int font_added(const char *path)
 {
@@ -129,15 +144,65 @@ static char *read_font_file(const char *path, size_t *size)
     return buf;
 }
 
+/* The name libass matches a font by: its family name as libass itself reads it - the first
+ * Windows-platform family entry, UTF-16 made UTF-8 (a family name may be Chinese only, and a
+ * TrueType font's PostScript name isn't matched) - else FreeType's family name. */
+static void font_name_of(const char *buf, size_t size, char *out, size_t cap)
+{
+    static FT_Library ft;
+    out[0] = 0;
+    if (!ft && FT_Init_FreeType(&ft) != 0) {
+        ft = NULL;
+        return;
+    }
+    FT_Face face;
+    if (FT_New_Memory_Face(ft, (const FT_Byte *)buf, (FT_Long)size, 0, &face) != 0)
+        return;
+    const FT_UInt names = FT_Get_Sfnt_Name_Count(face);
+    for (FT_UInt i = 0; i < names && !out[0]; i++) {
+        FT_SfntName nm;
+        if (FT_Get_Sfnt_Name(face, i, &nm) || nm.platform_id != TT_PLATFORM_MICROSOFT ||
+            nm.name_id != TT_NAME_ID_FONT_FAMILY)
+            continue;
+        size_t o = 0;
+        for (FT_UInt k = 0; k + 1 < nm.string_len;) {
+            uint32_t c = ((uint32_t)nm.string[k] << 8) | nm.string[k + 1];
+            k += 2;
+            if (c >= 0xd800 && c < 0xdc00 && k + 1 < nm.string_len) {
+                const uint32_t lo = ((uint32_t)nm.string[k] << 8) | nm.string[k + 1];
+                if (lo >= 0xdc00 && lo < 0xe000) {
+                    c = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
+                    k += 2;
+                }
+            }
+            char u[4];
+            int len = c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+            if (len == 1) u[0] = (char)c;
+            else if (len == 2) { u[0] = (char)(0xc0 | (c >> 6)); u[1] = (char)(0x80 | (c & 0x3f)); }
+            else if (len == 3) { u[0] = (char)(0xe0 | (c >> 12)); u[1] = (char)(0x80 | ((c >> 6) & 0x3f)); u[2] = (char)(0x80 | (c & 0x3f)); }
+            else { u[0] = (char)(0xf0 | (c >> 18)); u[1] = (char)(0x80 | ((c >> 12) & 0x3f)); u[2] = (char)(0x80 | ((c >> 6) & 0x3f)); u[3] = (char)(0x80 | (c & 0x3f)); }
+            if (o + (size_t)len + 1 > cap)
+                break;
+            memcpy(out + o, u, (size_t)len);
+            o += (size_t)len;
+        }
+        out[o] = 0;
+    }
+    if (!out[0] && face->family_name)
+        snprintf(out, cap, "%s", face->family_name);
+    FT_Done_Face(face);
+}
+
 /* Caller holds s_lock. */
 static void add_font_data(const char *path, const char *buf, size_t size)
 {
     if (font_added(path))
         return;
     ass_add_font(s_lib, path, (char *)buf, (int)size);
-    ass_set_fonts(s_rend, NULL, "Roboto", ASS_FONTPROVIDER_NONE, NULL, 0);
+    font_name_of(buf, size, s_font_names[s_nfonts_added], sizeof s_font_names[0]);
     snprintf(s_fonts_added[s_nfonts_added++], sizeof s_fonts_added[0], "%s", path);
-    evo_bt("subs: added font %s", path);
+    evo_bt("subs: added font %s (%s)", path, s_font_names[s_nfonts_added - 1]);
+    apply_default_fonts();
 }
 
 /* Reads and adds a console font now. Caller holds s_lock. */
@@ -152,21 +217,7 @@ static void add_system_font(const char *path)
     free(buf);
 }
 
-static void fonts_for_language(const char *lang)
-{
-    if (!lang || !*lang)
-        return;
-    if (!strncasecmp(lang, "ja", 2) || !strncasecmp(lang, "jpn", 3))
-        add_system_font("/preinst/common/font/SSTJpPro-Regular.otf");
-    else if (!strncasecmp(lang, "ko", 2) || !strncasecmp(lang, "kor", 3))
-        add_system_font("/preinst/common/font/YoonGothicProSIE760.otf");
-    else if (!strncasecmp(lang, "zh", 2) || !strncasecmp(lang, "chi", 3) ||
-             !strncasecmp(lang, "zho", 3) || !strncasecmp(lang, "cmn", 3) ||
-             !strncasecmp(lang, "yue", 3))
-        add_system_font("/preinst/common/font/DFHEI5-SONY.ttf");
-    else if (!strncasecmp(lang, "th", 2))   /* "th" and "tha" */
-        add_system_font("/preinst/common/font/SSTThai-Roman.otf");
-}
+static int scripts_for_language(const char *lang);
 
 /* ---- writing systems in the text ------------------------------------------ */
 
@@ -221,13 +272,62 @@ static int font_paths(int scripts, const char *out[4])
     return n;
 }
 
-/* Adds them now (choosing a track, or a loaded external one). Caller holds s_lock. */
-static void fonts_for_scripts(int scripts)
+/* The scripts a track's language is written in, for a track tagged with one. */
+static int scripts_for_language(const char *lang)
+{
+    if (!lang || !*lang)
+        return 0;
+    if (!strncasecmp(lang, "ja", 2) || !strncasecmp(lang, "jpn", 3))
+        return SCRIPT_KANA | SCRIPT_HAN;
+    if (!strncasecmp(lang, "ko", 2) || !strncasecmp(lang, "kor", 3))
+        return SCRIPT_HANGUL;
+    if (!strncasecmp(lang, "zh", 2) || !strncasecmp(lang, "chi", 3) || !strncasecmp(lang, "zho", 3) ||
+        !strncasecmp(lang, "cmn", 3) || !strncasecmp(lang, "yue", 3))
+        return SCRIPT_HAN;
+    if (!strncasecmp(lang, "th", 2))   /* "th" and "tha" */
+        return SCRIPT_THAI;
+    return 0;
+}
+
+/*
+ * The renderer's defaults for the selected track: the console font its main script needs as the
+ * default family (libass takes a character the style's font lacks from it, if it has it), and the
+ * font of a second script as the last resort. Text in a style whose font the console doesn't have
+ * (a fansub's Windows fonts) is all drawn in the default family. Without such a script: Roboto.
+ * Caller holds s_lock.
+ */
+static void apply_default_fonts(void)
 {
     const char *paths[4];
-    const int n = font_paths(scripts, paths);
+    const int n = font_paths(s_default_scripts, paths);
+    const char *family = "Roboto", *last = NULL;
+    for (int i = 0; i < n; i++)
+        for (int k = 0; k < s_nfonts_added; k++) {
+            if (strcmp(s_fonts_added[k], paths[i]) || !s_font_names[k][0])
+                continue;
+            if (!strcmp(family, "Roboto"))
+                family = s_font_names[k];
+            else if (!last)
+                last = s_fonts_added[k];   /* by path: libass opens it itself when it gets there */
+        }
+    if (!strcmp(family, s_default_family) && !strcmp(last ? last : "", s_default_path))
+        return;
+    snprintf(s_default_family, sizeof s_default_family, "%s", family);
+    snprintf(s_default_path, sizeof s_default_path, "%s", last ? last : "");
+    ass_set_fonts(s_rend, last, family, ASS_FONTPROVIDER_NONE, NULL, 0);
+    evo_bt("subs: default font %s%s%s", family, last ? ", then " : "", last ? last : "");
+}
+
+/* The fonts the selected track needs, added now (choosing a track, or a loaded external one),
+ * and made the defaults. Caller holds s_lock. */
+static void fonts_for_track(const strack *t)
+{
+    s_default_scripts = t ? t->scripts | scripts_for_language(t->info.lang) : 0;
+    const char *paths[4];
+    const int n = font_paths(s_default_scripts, paths);
     for (int i = 0; i < n; i++)
         add_system_font(paths[i]);
+    apply_default_fonts();
 }
 
 static int s_font_pending;     /* scripts whose fonts the loader thread should add */
@@ -245,6 +345,7 @@ static void note_scripts(strack *t, const char *text, size_t n)
         return;
     t->scripts = now;
     if (s_selected >= 0 && t == &s_tracks[s_selected]) {
+        s_default_scripts |= now;
         s_font_pending |= now;
         start_loader();
         pthread_cond_signal(&s_ext_cond);
@@ -521,6 +622,10 @@ void nuvio_subs_close(void)
     s_selected = -1;
     s_delay_ms = 0;
     s_session++;
+    if (s_rend) {   /* the next film starts from Roboto */
+        s_default_scripts = 0;
+        apply_default_fonts();
+    }
     for (int i = 0; i < MAX_STREAMS; i++)
         s_stream_map[i] = -1;
     s_last.sel = -2;
@@ -555,10 +660,9 @@ void nuvio_subs_select(int id)
     pthread_mutex_lock(&s_lock);
     if (id < 0 || id >= s_ntracks)
         id = -1;
+    fonts_for_track(id >= 0 ? &s_tracks[id] : NULL);
     if (id >= 0) {
         strack *t = &s_tracks[id];
-        fonts_for_language(t->info.lang);
-        fonts_for_scripts(t->scripts);
         if (t->info.bitmap) {
             /* Bitmap tracks decode only while selected: start clean. */
             free_events(t);
@@ -1118,6 +1222,7 @@ static void *ext_loader(void *arg)
                         add_font_data(paths[f], buf, size);
                     free(buf);
                 }
+                apply_default_fonts();   /* a script whose font was already there */
                 continue;
             }
             for (int i = 0; i < s_ntracks; i++)
@@ -1159,10 +1264,8 @@ static void *ext_loader(void *arg)
                 info.bitmap = work.info.bitmap;
                 info.state = 1;
                 t->info = info;
-                if (s_selected == id) {
-                    fonts_for_language(t->info.lang);
-                    fonts_for_scripts(t->scripts);
-                }
+                if (s_selected == id)
+                    fonts_for_track(t);
             } else {
                 free_track(&work);
                 t->info.state = -1;
