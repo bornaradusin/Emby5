@@ -1208,6 +1208,19 @@ std::vector<Item> Client::children(const std::string &parent_id, const std::stri
     return items_of(body, ok);
 }
 
+std::vector<std::string> Client::child_ids(const std::string &parent_id, int limit, bool *ok)
+{
+    if (ok) *ok = false;
+    std::string body;
+    if (!get_json("/Items?userId=" + user_id_ + "&parentId=" + parent_id + "&Limit=" + std::to_string(limit) +
+                      "&EnableTotalRecordCount=false&EnableImages=false&EnableUserData=false&fields=", &body))
+        return {};
+    std::vector<std::string> out;
+    for (const Item &it : items_of(body, ok))
+        if (!it.id.empty()) out.push_back(it.id);
+    return out;
+}
+
 bool Client::media_extras(const std::string &item_id, const std::string &media_source_id,
                           std::vector<Chapter> *chapters, Trickplay *tp)
 {

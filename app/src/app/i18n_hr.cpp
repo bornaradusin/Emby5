@@ -974,6 +974,8 @@ const Table &table_hr()
         {"Catalogue connection made no progress", "Veza s katalogom ne napreduje"},
         {"Catalogue exceeds streaming safety limit", "Katalog premašuje sigurnosno ograničenje prijenosa"},
         {"Catalogue transfer stopped making progress", "Prijenos kataloga prestao je napredovati"},
+        {"Included in", "Dio kolekcije"},
+        {"Show \"Included in\" on film pages", "Prikaži kolekcije na stranicama filmova"},
     };
     return t;
 }

@@ -974,6 +974,8 @@ const Table &table_zh_hant()
         {"Catalogue connection made no progress", "目錄連線沒有進展"},
         {"Catalogue exceeds streaming safety limit", "目錄超出串流安全限制"},
         {"Catalogue transfer stopped making progress", "目錄傳輸已停止進展"},
+        {"Included in", "所屬合集"},
+        {"Show \"Included in\" on film pages", "在電影頁面顯示所屬合集"},
     };
     return t;
 }

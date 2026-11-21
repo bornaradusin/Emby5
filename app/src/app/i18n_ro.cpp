@@ -974,6 +974,8 @@ const Table &table_ro()
         {"Catalogue connection made no progress", "Conexiunea la catalog nu progresează"},
         {"Catalogue exceeds streaming safety limit", "Catalogul depășește limita de siguranță pentru streaming"},
         {"Catalogue transfer stopped making progress", "Transferul catalogului nu mai progresează"},
+        {"Included in", "Inclus în"},
+        {"Show \"Included in\" on film pages", "Afișează „Inclus în” pe paginile filmelor"},
     };
     return t;
 }

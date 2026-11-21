@@ -974,6 +974,8 @@ const Table &table_el()
         {"Catalogue connection made no progress", "Η σύνδεση με τον κατάλογο δεν σημείωσε πρόοδο"},
         {"Catalogue exceeds streaming safety limit", "Ο κατάλογος υπερβαίνει το όριο ασφαλείας ροής"},
         {"Catalogue transfer stopped making progress", "Η μεταφορά του καταλόγου σταμάτησε να προοδεύει"},
+        {"Included in", "Περιλαμβάνεται σε"},
+        {"Show \"Included in\" on film pages", "Εμφάνιση «Περιλαμβάνεται σε» στις σελίδες ταινιών"},
     };
     return t;
 }

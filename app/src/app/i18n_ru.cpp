@@ -974,6 +974,8 @@ const Table &table_ru()
         {"Catalogue connection made no progress", "Подключение к каталогу зависло"},
         {"Catalogue exceeds streaming safety limit", "Каталог превышает безопасный предел потоковой загрузки"},
         {"Catalogue transfer stopped making progress", "Загрузка каталога зависла"},
+        {"Included in", "Входит в"},
+        {"Show \"Included in\" on film pages", "Показывать «Входит в» на страницах фильмов"},
     };
     return t;
 }

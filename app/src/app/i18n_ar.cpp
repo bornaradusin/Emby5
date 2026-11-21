@@ -974,6 +974,8 @@ const Table &table_ar()
         {"Catalogue connection made no progress", "لم يحرز الاتصال بالكتالوج أي تقدم"},
         {"Catalogue exceeds streaming safety limit", "يتجاوز الكتالوج حد الأمان للبث"},
         {"Catalogue transfer stopped making progress", "توقف نقل الكتالوج عن التقدم"},
+        {"Included in", "ضمن المجموعات"},
+        {"Show \"Included in\" on film pages", "إظهار المجموعات في صفحات الأفلام"},
     };
     return t;
 }

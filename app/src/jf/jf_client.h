@@ -297,6 +297,8 @@ public:
     Page search_page(const std::string &query,int start,int limit);
     /* A folder's or collection's direct children, e.g. sort_by "PremiereDate,SortName". */
     std::vector<Item> children(const std::string &parent_id, const std::string &sort_by, int limit, bool *ok = nullptr);
+    /* The ids of a folder's or collection's direct children only (no images, no user data). */
+    std::vector<std::string> child_ids(const std::string &parent_id, int limit, bool *ok = nullptr);
     std::vector<Segment> segments(const std::string &item_id);
     /* Chapters and trickplay of what plays (media_source_id picks the version). */
     bool media_extras(const std::string &item_id, const std::string &media_source_id, std::vector<Chapter> *chapters,

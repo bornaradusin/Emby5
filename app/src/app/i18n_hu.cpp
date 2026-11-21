@@ -974,6 +974,8 @@ const Table &table_hu()
         {"Catalogue connection made no progress", "A katalóguskapcsolat nem halad előre"},
         {"Catalogue exceeds streaming safety limit", "A katalógus túllépi a streamelési biztonsági korlátot"},
         {"Catalogue transfer stopped making progress", "A katalógus átvitele elakadt"},
+        {"Included in", "Része ennek"},
+        {"Show \"Included in\" on film pages", "„Része ennek” megjelenítése a filmoldalakon"},
     };
     return t;
 }

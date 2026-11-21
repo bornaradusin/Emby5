@@ -974,6 +974,8 @@ const Table &table_fi()
         {"Catalogue connection made no progress", "Luetteloyhteys ei edistynyt"},
         {"Catalogue exceeds streaming safety limit", "Luettelo ylittää suoratoiston turvarajan"},
         {"Catalogue transfer stopped making progress", "Luettelon siirto lakkasi edistymästä"},
+        {"Included in", "Kuuluu kokoelmiin"},
+        {"Show \"Included in\" on film pages", "Näytä kokoelmat elokuvasivuilla"},
     };
     return t;
 }

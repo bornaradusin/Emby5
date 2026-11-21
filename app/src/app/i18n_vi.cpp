@@ -974,6 +974,8 @@ const Table &table_vi()
         {"Catalogue connection made no progress", "Kết nối kho nội dung không có tiến triển"},
         {"Catalogue exceeds streaming safety limit", "Kho nội dung vượt quá giới hạn an toàn khi truyền"},
         {"Catalogue transfer stopped making progress", "Quá trình truyền kho nội dung đã ngừng tiến triển"},
+        {"Included in", "Thuộc bộ sưu tập"},
+        {"Show \"Included in\" on film pages", "Hiện bộ sưu tập trên trang phim"},
     };
     return t;
 }

@@ -974,6 +974,8 @@ const Table &table_th()
         {"Catalogue connection made no progress", "การเชื่อมต่อแคตตาล็อกไม่มีความคืบหน้า"},
         {"Catalogue exceeds streaming safety limit", "แคตตาล็อกเกินขีดจำกัดความปลอดภัยของการสตรีม"},
         {"Catalogue transfer stopped making progress", "การถ่ายโอนแคตตาล็อกหยุดมีความคืบหน้า"},
+        {"Included in", "อยู่ในคอลเลกชัน"},
+        {"Show \"Included in\" on film pages", "แสดงคอลเลกชันในหน้าภาพยนตร์"},
     };
     return t;
 }

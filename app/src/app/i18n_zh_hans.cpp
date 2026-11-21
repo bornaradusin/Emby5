@@ -974,6 +974,8 @@ const Table &table_zh_hans()
         {"Catalogue connection made no progress", "目录连接没有进展"},
         {"Catalogue exceeds streaming safety limit", "目录超出串流安全限制"},
         {"Catalogue transfer stopped making progress", "目录传输已停止进展"},
+        {"Included in", "所属合集"},
+        {"Show \"Included in\" on film pages", "在电影页面显示所属合集"},
     };
     return t;
 }

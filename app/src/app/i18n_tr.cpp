@@ -974,6 +974,8 @@ const Table &table_tr()
         {"Catalogue connection made no progress", "Katalog bağlantısı ilerleme kaydetmedi"},
         {"Catalogue exceeds streaming safety limit", "Katalog, akış güvenlik sınırını aşıyor"},
         {"Catalogue transfer stopped making progress", "Katalog aktarımı ilerlemeyi durdurdu"},
+        {"Included in", "Yer aldığı koleksiyonlar"},
+        {"Show \"Included in\" on film pages", "Film sayfalarında koleksiyonları göster"},
     };
     return t;
 }

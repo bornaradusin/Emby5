@@ -974,6 +974,8 @@ const Table &table_cs()
         {"Catalogue connection made no progress", "Připojení ke katalogu nepostupuje"},
         {"Catalogue exceeds streaming safety limit", "Katalog překračuje bezpečnostní limit streamování"},
         {"Catalogue transfer stopped making progress", "Přenos katalogu se zastavil"},
+        {"Included in", "Součástí"},
+        {"Show \"Included in\" on film pages", "Zobrazit „Součástí“ na stránkách filmů"},
     };
     return t;
 }

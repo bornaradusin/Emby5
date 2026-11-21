@@ -974,6 +974,8 @@ const Table &table_nl()
         {"Catalogue connection made no progress", "Verbinding met catalogus maakte geen voortgang"},
         {"Catalogue exceeds streaming safety limit", "Catalogus overschrijdt de veiligheidslimiet voor streaming"},
         {"Catalogue transfer stopped making progress", "Overdracht van catalogus maakt geen voortgang meer"},
+        {"Included in", "Onderdeel van"},
+        {"Show \"Included in\" on film pages", "‘Onderdeel van’ tonen op filmpagina's"},
     };
     return t;
 }

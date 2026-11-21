@@ -51,6 +51,9 @@ public:
         std::vector<jf::Item> extras; /* behind the scenes, deleted scenes, featurettes */
         jf::Item trailer;             /* its first local trailer, when it has one */
         bool have_trailer = false;
+        /* A film's collections ("Included in", when Settings turns it on). */
+        std::vector<jf::Item> collections;
+        bool collections_ok = false;
     };
     Detail(jf::Client &client, const jf::Item &item);
     void initial_season(const std::string &id) {m_requested_season=id;}
@@ -74,8 +77,8 @@ public:
 private:
     std::string m_requested_season;
     friend struct DetailRegressionAccess; // host regression access, no runtime hook
-    enum Zone { Buttons, Seasons, Episodes, Extras, Cast, Similar, ZoneCount };
-    enum Button { PlayButton, RestartButton, TrailerButton, TrailerQrButton, WatchedButton, FavouriteButton };
+    enum Zone { Buttons, Seasons, Episodes, Extras, Cast, Collections, Similar, ZoneCount };
+    enum Button { PlayButton, RestartButton, ShuffleButton, TrailerButton, TrailerQrButton, WatchedButton, FavouriteButton };
 
     struct Data {
         std::mutex lock;
@@ -97,6 +100,8 @@ private:
     static void rebuild_content(Content &content);
     std::vector<Zone> zones() const;
     std::vector<Button> buttons() const;
+    /* A series' episodes Shuffle picks from: aired, numbered, not specials. */
+    std::vector<jf::Item> shuffle_episodes() const;
     void sync_button();
     bool can_ask_seerr() const;   /* Seerr has seasons of this series to ask for (a menu entry) */
     float zone_top(Zone z) const;     /* page y of a section */
@@ -114,7 +119,7 @@ private:
     /* Which button has the focus (its index can change: "Be om flere sesonger"
      * comes and goes when Seerr answers). sync_button() maps it back each time. */
     int m_button_id = -1;
-    int m_season = 0, m_episode = 0, m_extra = 0, m_cast = 0, m_similar = 0;
+    int m_season = 0, m_episode = 0, m_extra = 0, m_cast = 0, m_collection = 0, m_similar = 0;
     int m_episode_first = 0;          /* first whole episode card in the viewport */
     double m_now = 0;
     bool m_season_picked = false;      /* the viewer moved the picker (else follow the target) */

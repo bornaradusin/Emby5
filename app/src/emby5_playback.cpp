@@ -25,6 +25,7 @@
 #include <cstring>
 #include <mutex>
 #include <pthread.h>
+#include <random>
 #include <string>
 #include <set>
 #include <thread>
@@ -683,6 +684,22 @@ std::vector<jf::Item> album_queue(jf::Client &client, jf::Item *item, bool shuff
 
 static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf::Item> episodes, std::string *error);
 
+/* A series' episodes for Shuffle: this one first, then the series' other aired,
+ * numbered episodes (no specials) in random order. They keep their own season
+ * and episode numbers; the player's next episode is simply the next in the list. */
+static std::vector<jf::Item> shuffled_episodes(std::vector<jf::Item> all, const jf::Item &first)
+{
+    std::vector<jf::Item> eps{first};
+    for (jf::Item &e : all)
+        if (!e.id.empty() && e.id != first.id && !e.upcoming && e.parent_index > 0 && e.index > 0)
+            eps.push_back(std::move(e));
+    std::mt19937 rng((unsigned)time(nullptr) ^ (unsigned)clock());
+    std::shuffle(eps.begin() + 1, eps.end(), rng);
+    for (size_t i = 1; i < eps.size(); i++)
+        eps[i].position_ticks = 0;   /* each from its start, as a shuffle plays */
+    return eps;
+}
+
 /* The chain, then out of player mode (music keeps it on between tracks). */
 static bool play_chain(jf::Client &client, jf::Item item, std::vector<jf::Item> episodes, std::string *error)
 {
@@ -695,8 +712,11 @@ bool emby5_play(jf::Client &client, const jf::Item &first, std::string *error, b
 {
     jf::Item item = first;
     std::vector<jf::Item> episodes;
-    if (item.type == "Episode" && !item.series_id.empty())
+    if (item.type == "Episode" && !item.series_id.empty()) {
         episodes = client.episodes(item.series_id, std::string());
+        if (shuffle)
+            episodes = shuffled_episodes(std::move(episodes), item);
+    }
     if (item.type == "Audio" && !item.album_id.empty())
         episodes = album_queue(client, &item, shuffle);
     return play_chain(client, item, std::move(episodes), error);
@@ -1032,9 +1052,15 @@ static bool play_chain_tracks(jf::Client &client, jf::Item item, std::vector<jf:
             cJSON_Delete(r);
         }
         const jf::Item *next = nullptr;
-        for (const auto &e : episodes)
-            if (e.parent_index == season && e.index == number)
-                next = &e;
+        /* The one after this in the list when the player asked for that one (a
+         * shuffle's next episode, or one of two with the same number); else by number. */
+        for (size_t i = 0; i + 1 < episodes.size() && !next; i++)
+            if (episodes[i].id == item.id && episodes[i + 1].parent_index == season && episodes[i + 1].index == number)
+                next = &episodes[i + 1];
+        if (!next)
+            for (const auto &e : episodes)
+                if (e.parent_index == season && e.index == number)
+                    next = &e;
         if (!next)
             return true;
         item = *next;

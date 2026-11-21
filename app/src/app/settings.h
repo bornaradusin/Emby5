@@ -74,6 +74,7 @@ struct Local : Appearance {
     std::string language;        /* "" follows the PS5's language, else an i18n::language_code */
     bool theme_music = true;     /* a title's theme song, quietly, on its page */
     bool theme_videos = false;   /* a title's theme video behind its page, in place of the backdrop (off until tested) */
+    bool included_in = false;    /* a film's page lists the collections it is in (app/collections_index; off by default) */
 };
 
 struct All {

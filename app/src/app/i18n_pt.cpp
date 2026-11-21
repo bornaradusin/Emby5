@@ -974,6 +974,8 @@ const Table &table_pt()
         {"Catalogue connection made no progress", "A conexão com o catálogo não avançou"},
         {"Catalogue exceeds streaming safety limit", "O catálogo excede o limite de segurança de transmissão"},
         {"Catalogue transfer stopped making progress", "A transferência do catálogo parou de avançar"},
+        {"Included in", "Incluído em"},
+        {"Show \"Included in\" on film pages", "Mostrar «Incluído em» nas páginas de filmes"},
     };
     return t;
 }

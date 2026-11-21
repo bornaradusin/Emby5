@@ -49,7 +49,7 @@ struct Action {
         None,
         Play,       /* play item (a series plays its next episode) */
         PlayFromStart,
-        PlayShuffled, /* music: item first, the rest of its album in random order */
+        PlayShuffled, /* item first, then the rest of its album (music) or series (an episode) in random order */
         PlayIPTV,     /* direct IPTV/VOD item outside the Live TV navigator */
         PlayLiveTV,   /* session-scoped provider/group/channel navigation */
         PlayMix,      /* music: Emby's Instant Mix from item */

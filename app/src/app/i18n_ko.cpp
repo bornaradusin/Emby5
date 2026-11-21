@@ -974,6 +974,8 @@ const Table &table_ko()
         {"Catalogue connection made no progress", "카탈로그 연결이 진행되지 않았습니다"},
         {"Catalogue exceeds streaming safety limit", "카탈로그가 스트리밍 안전 한도를 초과했습니다"},
         {"Catalogue transfer stopped making progress", "카탈로그 전송이 더 이상 진행되지 않습니다"},
+        {"Included in", "포함된 컬렉션"},
+        {"Show \"Included in\" on film pages", "영화 페이지에 포함된 컬렉션 표시"},
     };
     return t;
 }

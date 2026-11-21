@@ -974,6 +974,8 @@ const Table &table_pl()
         {"Catalogue connection made no progress", "Połączenie z katalogiem nie robi postępów"},
         {"Catalogue exceeds streaming safety limit", "Katalog przekracza limit bezpieczeństwa strumieniowania"},
         {"Catalogue transfer stopped making progress", "Przesyłanie katalogu utknęło"},
+        {"Included in", "Należy do"},
+        {"Show \"Included in\" on film pages", "Pokazuj „Należy do” na stronach filmów"},
     };
     return t;
 }

@@ -56,6 +56,7 @@ inline const char *label_of(int row)
         T("HDMI-bitstr\xC3\xB8m"),
         T("Temamusikk"),
         T("Temavideoer"),
+        T("Show \"Included in\" on film pages"),
         T("Bildefrekvens"),
         T("Seerr"),
         T("Adresse"),

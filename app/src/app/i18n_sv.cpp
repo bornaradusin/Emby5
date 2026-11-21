@@ -974,6 +974,8 @@ const Table &table_sv()
         {"Catalogue connection made no progress", "Anslutningen till katalogen kom inte vidare"},
         {"Catalogue exceeds streaming safety limit", "Katalogen överskrider säkerhetsgränsen för strömning"},
         {"Catalogue transfer stopped making progress", "Överföringen av katalogen avstannade"},
+        {"Included in", "Ingår i"},
+        {"Show \"Included in\" on film pages", "Visa ”Ingår i” på filmsidor"},
     };
     return t;
 }

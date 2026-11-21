@@ -974,6 +974,8 @@ const Table &table_id()
         {"Catalogue connection made no progress", "Koneksi katalog tidak ada kemajuan"},
         {"Catalogue exceeds streaming safety limit", "Katalog melebihi batas keamanan streaming"},
         {"Catalogue transfer stopped making progress", "Transfer katalog berhenti berjalan"},
+        {"Included in", "Termasuk dalam"},
+        {"Show \"Included in\" on film pages", "Tampilkan “Termasuk dalam” di halaman film"},
     };
     return t;
 }

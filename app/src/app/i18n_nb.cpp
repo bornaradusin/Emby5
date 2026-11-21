@@ -626,6 +626,8 @@ const Table &table_nb()
         {"Catalogue connection made no progress", "Tilkoblingen til katalogen kom ikke videre"},
         {"Catalogue exceeds streaming safety limit", "Katalogen overskrider sikkerhetsgrensen for overføring"},
         {"Catalogue transfer stopped making progress", "Overføringen av katalogen stoppet opp"},
+        {"Included in", "Inkludert i"},
+        {"Show \"Included in\" on film pages", "Vis «Inkludert i» på filmsider"},
     };
     return t;
 }

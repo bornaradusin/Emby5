@@ -13,6 +13,8 @@
 #include "emby5_playback.h"
 #include "app/i18n.h"
 #include "app/seerr_service.h"
+#include "app/collections_index.h"
+#include "app/settings.h"
 
 #include "gfx/art.h"
 #include "nuvio_input.h"
@@ -28,7 +30,9 @@
 #include <future>
 #include <list>
 #include <map>
+#include <ctime>
 #include <mutex>
+#include <random>
 #include <set>
 #include <thread>
 
@@ -51,6 +55,13 @@ std::string runtime_label(int64_t ticks)
     else
         std::snprintf(b, sizeof b, T("%d min"), min);
     return b;
+}
+
+/* An episode Shuffle may play (emby5_play's shuffle takes the same ones). */
+bool shufflable(const jf::Item &e, const std::string &series_id)
+{
+    return !e.id.empty() && !e.upcoming && e.parent_index > 0 && e.index > 0 &&
+           (e.series_id.empty() || e.series_id == series_id);
 }
 
 std::string ep_code(const jf::Item &e)
@@ -161,6 +172,14 @@ Detail::Content Detail::fetch(jf::Client &c, const jf::Item &base)
         jobs.emplace_back([&] { out.upcoming_episodes = c.upcoming_episodes(base.id, &out.upcoming_ok); });
     }
     emby5::run_io_jobs(jobs);
+    if (base.type == "Movie") {
+        /* Off: an empty list that clears what an earlier page showed. On: the index
+         * if it is there already; activate() reads it once the page is up. */
+        if (settings::get().local.included_in)
+            out.collections_ok = collections_index::lookup(c, base.id, &out.collections);
+        else
+            out.collections_ok = true;
+    }
     if (got) {
         out.item = std::move(item);
         out.detail = std::move(detail);
@@ -197,6 +216,7 @@ void Detail::merge_content(Content &current, Content fresh)
     }
     if (fresh.resume_ok) { current.resume_items = std::move(fresh.resume_items); current.resume_ok = true; }
     if (fresh.next_ok) { current.next_items = std::move(fresh.next_items); current.next_ok = true; }
+    if (fresh.collections_ok) { current.collections = std::move(fresh.collections); current.collections_ok = true; }
     rebuild_content(current);
 }
 
@@ -331,7 +351,8 @@ void Detail::reconcile_user_data(const jf::Item &fresh)
         emby5::reconcile_user_data(c.item, fresh);
         emby5::reconcile_user_data(c.target, fresh);
         for (auto *items : {&c.seasons, &c.available_episodes, &c.upcoming_episodes,
-                            &c.all_episodes, &c.resume_items, &c.next_items, &c.similar, &c.extras})
+                            &c.all_episodes, &c.resume_items, &c.next_items, &c.similar, &c.extras,
+                            &c.collections})
             for (auto &it : *items) emby5::reconcile_user_data(it, fresh);
     };
     ++m_data->generation; // an older request cannot undo the confirmed button action
@@ -363,6 +384,7 @@ void Detail::activate()
     if (!emby5::spawn_io([d, c, base, generation, cache_generation] {
         emby5_wait_reports(4000);
         Content fresh = fetch(*c, base);
+        const bool collections_later = base.type == "Movie" && !fresh.collections_ok;
         {
             std::lock_guard<std::mutex> g(d->lock);
             d->loading = false;
@@ -372,6 +394,17 @@ void Detail::activate()
             cache_put(cache_key(*c, base.id), d->c, cache_generation);
         }
         if (base.type == "Series") look_up_in_seerr(d, base);
+        /* "Included in": the first film page reads the collections index (after
+         * the page is up, so it never waits for it), then shows the row. */
+        std::vector<jf::Item> sets;
+        if (collections_later && collections_index::build(*c) && collections_index::lookup(*c, base.id, &sets)) {
+            std::lock_guard<std::mutex> g(d->lock);
+            if (d->c.item.id != base.id) return;
+            d->c.collections = std::move(sets);
+            d->c.collections_ok = true;
+            ++d->revision;
+            cache_put(cache_key(*c, base.id), d->c, cache_generation);
+        }
     }, failed)) failed();
 }
 
@@ -454,6 +487,8 @@ std::vector<Detail::Zone> Detail::zones() const
         z.push_back(Extras);
     if (!cast_of(m_view.detail).empty())
         z.push_back(Cast);
+    if (!m_view.collections.empty())
+        z.push_back(Collections);
     if (!m_view.similar.empty())
         z.push_back(Similar);
     return z;
@@ -481,6 +516,14 @@ std::vector<Detail::Button> Detail::buttons() const
         b.push_back(PlayButton);
     if (m_view.have_target && m_view.target.position_ticks > 0)
         b.push_back(RestartButton);
+    if (t == "Series") {   /* Shuffle: two episodes to mix at least (counted, not copied: every frame) */
+        int n = 0;
+        for (const jf::Item &e : m_view.available_episodes)
+            if (shufflable(e, m_view.item.id) && ++n >= 2) {
+                b.push_back(ShuffleButton);
+                break;
+            }
+    }
     if (m_view.have_trailer)
         b.push_back(TrailerButton);
     if (m_view.item.type != "BoxSet")
@@ -488,6 +531,15 @@ std::vector<Detail::Button> Detail::buttons() const
     b.push_back(FavouriteButton);
     if (!first_trailer_url(m_view.item.remote_trailers).empty()) b.push_back(TrailerQrButton);
     return b;
+}
+
+std::vector<jf::Item> Detail::shuffle_episodes() const
+{
+    std::vector<jf::Item> eps;
+    for (const jf::Item &e : m_view.available_episodes)
+        if (shufflable(e, m_view.item.id))
+            eps.push_back(e);
+    return eps;
 }
 
 /* The focus stays on the same button when the row changes under it; when that
@@ -516,7 +568,7 @@ float Detail::zone_top(Zone z) const
             return y;
         y += k == Seasons ? detail_layout::seasons_height(gfx::text_scale(), m_eps.empty()) :
              k == Episodes ? detail_layout::Episodes(gfx::W - 2 * kPad, gfx::text_scale(), theme_card_scale()).section_height :
-             k == Extras ? kExtrasH : k == Cast ? kCastH : kSimilarH;
+             k == Extras ? kExtrasH : k == Cast ? kCastH : kSimilarH;   /* Collections: Similar's cards */
     }
     return y;
 }
@@ -594,6 +646,7 @@ Action Detail::input(uint32_t p)
             break;
         case Extras: move(m_extra, (int)m_view.extras.size()); break;
         case Cast: move(m_cast, (int)cast_of(m_view.detail).size()); break;
+        case Collections: move(m_collection, (int)m_view.collections.size()); break;
         case Similar: move(m_similar, (int)m_view.similar.size()); break;
         default: break;
         }
@@ -635,6 +688,15 @@ Action Detail::input(uint32_t p)
             } else if (btn == TrailerButton) {
                 a.kind = Action::PlayFromStart;
                 a.item = m_view.trailer;
+            } else if (btn == ShuffleButton) {
+                /* A random episode first; playback shuffles the rest after it. */
+                const std::vector<jf::Item> eps = shuffle_episodes();
+                if (!eps.empty()) {
+                    a.kind = Action::PlayShuffled;
+                    static std::mt19937 rng((unsigned)time(nullptr) ^ (unsigned)clock());
+                    a.item = eps[std::uniform_int_distribution<size_t>(0, eps.size() - 1)(rng)];
+                    a.item.position_ticks = 0;
+                }
             } else if (m_view.have_target) {
                 a.kind = btn == RestartButton ? Action::PlayFromStart : Action::Play;
                 a.item = m_view.target;
@@ -670,6 +732,12 @@ Action Detail::input(uint32_t p)
             }
             break;
         }
+        case Collections:
+            if (m_collection < (int)m_view.collections.size()) {
+                a.kind = Action::Open;
+                a.item = m_view.collections[m_collection];
+            }
+            break;
         case Similar:
             if (m_similar < (int)m_view.similar.size()) {
                 a.kind = Action::Open;
@@ -822,6 +890,8 @@ void Detail::draw_top(float y0, float dt)
             w = gfx::text_width(T("Fra start"), st) + 64;
         if (bs[i] == TrailerButton)
             w = gfx::text_width(T("Trailer"), st) + 64;
+        if (bs[i] == ShuffleButton)
+            w = gfx::text_width(T("Bland"), st) + 64;
         if (bs[i] == TrailerQrButton)
             w = gfx::text_width(T("Trailer QR"), st) + 52;
         if (bs[i] == PlayButton)
@@ -853,6 +923,8 @@ void Detail::draw_top(float y0, float dt)
             gfx::text(r.x+r.w/2,cy+9,T("Trailer QR"),st,fg,1);
         } else if (bs[i] == TrailerButton) {
             gfx::text(r.x + r.w / 2, cy + 9, T("Trailer"), st, fg, 1);
+        } else if (bs[i] == ShuffleButton) {
+            gfx::text(r.x + r.w / 2, cy + 9, T("Bland"), st, fg, 1);
         } else if (bs[i] == WatchedButton) {
             const bool seen = m_view.item.played;
             const uint32_t cc = seen ? 0xff30d158u : alpha(fg, 0.85f);
@@ -1082,6 +1154,37 @@ void Detail::draw_sections(float dt)
                 gfx::text(x + kCastD / 2, y + 56 + kCastD + 66, p.role.empty() ? p.type : p.role,
                           {gfx::Medium, 17, kCastD + 20}, kText3, 1);
             }
+        }
+    }
+
+    /* Included in: the film's collections, cards like More like this's. */
+    if (!m_view.collections.empty()) {
+        const float y = zone_top(Collections) - off;
+        m_collection = std::min(m_collection, (int)m_view.collections.size() - 1);
+        m_scroll[Collections].to(row_target(m_collection, (int)m_view.collections.size(), kSimW, kSimGap));
+        if (m_scroll[Collections].step(dt, 12.f))
+            m_animating = true;
+        if (vis(y, kSimilarH)) {
+            gfx::text(kPad, y + 30, T("Included in"), {gfx::Bold, 30}, alpha(kText,.92f));
+            for (int pass = 0; pass < 2; pass++)
+                for (size_t i = 0; i < m_view.collections.size(); i++) {
+                    const jf::Item &s = m_view.collections[i];
+                    const bool focus = m_zone == Collections && (int)i == m_collection;
+                    if ((pass == 0) == focus)
+                        continue;
+                    const float x = kPad + i * (kSimW + kSimGap) - m_scroll[Collections].value;
+                    if (x > gfx::W || x + kSimW < -40)
+                        continue;
+                    const float lift = m_lifts.step("set" + s.id, focus, dt, &m_animating);
+                    const float k = 1.f + 0.1f * theme_poster_lift(lift);
+                    const gfx::Rect r{x - kSimW * (k - 1) / 2, y + 56 - kSimH * (k - 1) / 2, kSimW * k, kSimH * k};
+                    if (lift > 0.01f)
+                        gfx::shadow(r, 14 * k, 26, 0.3f * lift, 10 * lift);
+                    art::draw(r, landscape_url(m_client, s, 640), landscape_blurhash(s), 640, 360, 14 * k);
+                    if(focus)draw_image_focus_outline(r,14*k);
+                    /* The name always (a collection's picture often has no title on it). */
+                    gfx::text(r.x, r.y + r.h + 36, s.name, {gfx::SemiBold, 22, r.w}, alpha(kText, 0.6f + 0.4f * lift));
+                }
         }
     }
 
