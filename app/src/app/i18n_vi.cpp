@@ -976,6 +976,7 @@ const Table &table_vi()
         {"Catalogue transfer stopped making progress", "Quá trình truyền kho nội dung đã ngừng tiến triển"},
         {"Included in", "Thuộc bộ sưu tập"},
         {"Show \"Included in\" on film pages", "Hiện bộ sưu tập trên trang phim"},
+        {"Show seasons as posters", "Hiển thị các mùa dưới dạng áp phích"},
     };
     return t;
 }

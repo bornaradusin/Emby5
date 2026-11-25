@@ -976,6 +976,7 @@ const Table &table_ro()
         {"Catalogue transfer stopped making progress", "Transferul catalogului nu mai progresează"},
         {"Included in", "Inclus în"},
         {"Show \"Included in\" on film pages", "Afișează „Inclus în” pe paginile filmelor"},
+        {"Show seasons as posters", "Afișează sezoanele ca postere"},
     };
     return t;
 }

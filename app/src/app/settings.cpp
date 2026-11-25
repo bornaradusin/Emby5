@@ -231,6 +231,8 @@ void load_local()
         s_all.local.theme_videos = cJSON_IsTrue(v);
     if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "includedIn"))
         s_all.local.included_in = cJSON_IsTrue(v);
+    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "seasonPosters"))
+        s_all.local.season_posters = cJSON_IsTrue(v);
     s_all.local.audio_delay_ms=read_int(j,"audioDelayMs",s_all.local.audio_delay_ms,-500,500);
     s_all.local.volume_boost=read_int(j,"volumeBoost",s_all.local.volume_boost,0,4);
     s_all.local.net_buffer=read_int(j,"networkBuffer",s_all.local.net_buffer,0,3);
@@ -288,6 +290,7 @@ static bool save_local_snapshot(const Local &l)
     cJSON_AddBoolToObject(j, "themeMusic", l.theme_music);
     cJSON_AddBoolToObject(j, "themeVideos", l.theme_videos);
     cJSON_AddBoolToObject(j, "includedIn", l.included_in);
+    cJSON_AddBoolToObject(j, "seasonPosters", l.season_posters);
     cJSON_AddStringToObject(j, "interfaceLanguage", l.language.c_str());
     cJSON_AddBoolToObject(j, "checkUpdates", l.check_updates);
 

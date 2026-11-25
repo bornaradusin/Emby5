@@ -31,7 +31,7 @@ public:
         SwitchUser, SignOut,
         Quality, NetBuffer, Upscaling, SubMode, SubSize, SubBackground, Autoplay, StillWatching, AutoSkip, AudioDelay,
         VolumeBoost, NightMode, Bitstream,
-        ThemeMusic, ThemeVideos, IncludedIn, Refresh,
+        ThemeMusic, ThemeVideos, IncludedIn, SeasonPosters, Refresh,
         SeerrOn, SeerrUrl, SeerrAuth, SeerrAccount, SeerrTest,
         EmbyLive, IPTVServer, IPTVUsername, IPTVPassword, XtreamLive, M3UUrl, M3UGuide, M3UStatus, IPTVSummary, IPTVCategories,
         VODStatus, VODMoviesStatus, VODShowsStatus, VODM3UStatus, VODInterval, VODRefresh,

@@ -46,4 +46,14 @@ struct Episodes {
 inline float seasons_height(float scale, bool empty) {
     return 48.f * text_scale(scale) + 54.f * text_scale(scale) + 18.f + (empty ? 64.f : 0.f);
 }
+/* Seasons as posters (Settings: Show seasons as posters, #11): 2:3 cards, the season's
+ * name under each. */
+inline float season_poster_width(float card_scale) {
+    card_scale = std::isfinite(card_scale) ? std::clamp(card_scale, .86f, 1.16f) : 1.f;
+    return 168.f * card_scale;
+}
+inline float season_posters_height(float scale, float card_scale, bool empty) {
+    return 48.f * text_scale(scale) + season_poster_width(card_scale) * 1.5f + 48.f * text_scale(scale) + 18.f +
+           (empty ? 64.f : 0.f);
+}
 } // namespace ui::detail_layout

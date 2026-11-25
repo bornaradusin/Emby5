@@ -976,6 +976,7 @@ const Table &table_sr()
         {"Catalogue transfer stopped making progress", "Пренос каталога је престао да напредује"},
         {"Included in", "Део колекције"},
         {"Show \"Included in\" on film pages", "Прикажи колекције на страницама филмова"},
+        {"Show seasons as posters", "Прикажи сезоне као постере"},
     };
     return t;
 }

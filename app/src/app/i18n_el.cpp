@@ -976,6 +976,7 @@ const Table &table_el()
         {"Catalogue transfer stopped making progress", "Η μεταφορά του καταλόγου σταμάτησε να προοδεύει"},
         {"Included in", "Περιλαμβάνεται σε"},
         {"Show \"Included in\" on film pages", "Εμφάνιση «Περιλαμβάνεται σε» στις σελίδες ταινιών"},
+        {"Show seasons as posters", "Εμφάνιση σεζόν ως αφίσες"},
     };
     return t;
 }

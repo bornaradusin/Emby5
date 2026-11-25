@@ -75,6 +75,7 @@ struct Local : Appearance {
     bool theme_music = true;     /* a title's theme song, quietly, on its page */
     bool theme_videos = false;   /* a title's theme video behind its page, in place of the backdrop (off until tested) */
     bool included_in = false;    /* a film's page lists the collections it is in (app/collections_index; off by default) */
+    bool season_posters = false; /* a show's page picks its season by poster, not by name (#11; off by default) */
 };
 
 struct All {

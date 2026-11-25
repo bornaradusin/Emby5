@@ -976,6 +976,7 @@ const Table &table_tr()
         {"Catalogue transfer stopped making progress", "Katalog aktarımı ilerlemeyi durdurdu"},
         {"Included in", "Yer aldığı koleksiyonlar"},
         {"Show \"Included in\" on film pages", "Film sayfalarında koleksiyonları göster"},
+        {"Show seasons as posters", "Sezonları afiş olarak göster"},
     };
     return t;
 }

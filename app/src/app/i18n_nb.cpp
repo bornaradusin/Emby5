@@ -628,6 +628,7 @@ const Table &table_nb()
         {"Catalogue transfer stopped making progress", "Overføringen av katalogen stoppet opp"},
         {"Included in", "Inkludert i"},
         {"Show \"Included in\" on film pages", "Vis «Inkludert i» på filmsider"},
+        {"Show seasons as posters", "Vis sesonger som plakater"},
     };
     return t;
 }

@@ -976,6 +976,7 @@ const Table &table_zh_hant()
         {"Catalogue transfer stopped making progress", "目錄傳輸已停止進展"},
         {"Included in", "所屬合集"},
         {"Show \"Included in\" on film pages", "在電影頁面顯示所屬合集"},
+        {"Show seasons as posters", "以海報顯示季"},
     };
     return t;
 }

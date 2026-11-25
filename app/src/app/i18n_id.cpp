@@ -976,6 +976,7 @@ const Table &table_id()
         {"Catalogue transfer stopped making progress", "Transfer katalog berhenti berjalan"},
         {"Included in", "Termasuk dalam"},
         {"Show \"Included in\" on film pages", "Tampilkan “Termasuk dalam” di halaman film"},
+        {"Show seasons as posters", "Tampilkan musim sebagai poster"},
     };
     return t;
 }

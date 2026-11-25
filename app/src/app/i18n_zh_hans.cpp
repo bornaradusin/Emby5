@@ -976,6 +976,7 @@ const Table &table_zh_hans()
         {"Catalogue transfer stopped making progress", "目录传输已停止进展"},
         {"Included in", "所属合集"},
         {"Show \"Included in\" on film pages", "在电影页面显示所属合集"},
+        {"Show seasons as posters", "以海报显示季"},
     };
     return t;
 }

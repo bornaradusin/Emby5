@@ -976,6 +976,7 @@ const Table &table_es()
         {"Catalogue transfer stopped making progress", "La transferencia del catálogo dejó de avanzar"},
         {"Included in", "Incluida en"},
         {"Show \"Included in\" on film pages", "Mostrar «Incluida en» en las fichas de películas"},
+        {"Show seasons as posters", "Mostrar temporadas como pósteres"},
     };
     return t;
 }

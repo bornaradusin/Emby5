@@ -976,6 +976,7 @@ const Table &table_da()
         {"Catalogue transfer stopped making progress", "Overførslen af kataloget gør ikke længere fremskridt"},
         {"Included in", "Indgår i"},
         {"Show \"Included in\" on film pages", "Vis »Indgår i« på filmsider"},
+        {"Show seasons as posters", "Vis sæsoner som plakater"},
     };
     return t;
 }

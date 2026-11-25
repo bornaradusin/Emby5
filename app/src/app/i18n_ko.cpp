@@ -976,6 +976,7 @@ const Table &table_ko()
         {"Catalogue transfer stopped making progress", "카탈로그 전송이 더 이상 진행되지 않습니다"},
         {"Included in", "포함된 컬렉션"},
         {"Show \"Included in\" on film pages", "영화 페이지에 포함된 컬렉션 표시"},
+        {"Show seasons as posters", "시즌을 포스터로 표시"},
     };
     return t;
 }

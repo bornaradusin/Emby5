@@ -976,6 +976,7 @@ const Table &table_ja()
         {"Catalogue transfer stopped making progress", "カタログの転送が進まなくなりました"},
         {"Included in", "収録コレクション"},
         {"Show \"Included in\" on film pages", "映画ページに収録コレクションを表示"},
+        {"Show seasons as posters", "シーズンをポスターで表示"},
     };
     return t;
 }

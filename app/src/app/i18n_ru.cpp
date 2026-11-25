@@ -976,6 +976,7 @@ const Table &table_ru()
         {"Catalogue transfer stopped making progress", "Загрузка каталога зависла"},
         {"Included in", "Входит в"},
         {"Show \"Included in\" on film pages", "Показывать «Входит в» на страницах фильмов"},
+        {"Show seasons as posters", "Показывать сезоны постерами"},
     };
     return t;
 }

@@ -976,6 +976,7 @@ const Table &table_hu()
         {"Catalogue transfer stopped making progress", "A katalógus átvitele elakadt"},
         {"Included in", "Része ennek"},
         {"Show \"Included in\" on film pages", "„Része ennek” megjelenítése a filmoldalakon"},
+        {"Show seasons as posters", "Évadok megjelenítése poszterként"},
     };
     return t;
 }

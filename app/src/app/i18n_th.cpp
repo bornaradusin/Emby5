@@ -976,6 +976,7 @@ const Table &table_th()
         {"Catalogue transfer stopped making progress", "การถ่ายโอนแคตตาล็อกหยุดมีความคืบหน้า"},
         {"Included in", "อยู่ในคอลเลกชัน"},
         {"Show \"Included in\" on film pages", "แสดงคอลเลกชันในหน้าภาพยนตร์"},
+        {"Show seasons as posters", "แสดงซีซันเป็นโปสเตอร์"},
     };
     return t;
 }

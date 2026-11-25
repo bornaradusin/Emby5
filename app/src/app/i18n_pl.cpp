@@ -976,6 +976,7 @@ const Table &table_pl()
         {"Catalogue transfer stopped making progress", "Przesyłanie katalogu utknęło"},
         {"Included in", "Należy do"},
         {"Show \"Included in\" on film pages", "Pokazuj „Należy do” na stronach filmów"},
+        {"Show seasons as posters", "Pokaż sezony jako plakaty"},
     };
     return t;
 }

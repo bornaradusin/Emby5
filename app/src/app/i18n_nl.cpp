@@ -976,6 +976,7 @@ const Table &table_nl()
         {"Catalogue transfer stopped making progress", "Overdracht van catalogus maakt geen voortgang meer"},
         {"Included in", "Onderdeel van"},
         {"Show \"Included in\" on film pages", "‘Onderdeel van’ tonen op filmpagina's"},
+        {"Show seasons as posters", "Seizoenen als posters tonen"},
     };
     return t;
 }

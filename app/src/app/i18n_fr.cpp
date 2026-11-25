@@ -976,6 +976,7 @@ const Table &table_fr()
         {"Catalogue transfer stopped making progress", "Le transfert du catalogue ne progresse plus"},
         {"Included in", "Fait partie de"},
         {"Show \"Included in\" on film pages", "Afficher « Fait partie de » sur les fiches de films"},
+        {"Show seasons as posters", "Afficher les saisons en affiches"},
     };
     return t;
 }

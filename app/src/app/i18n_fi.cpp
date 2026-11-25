@@ -976,6 +976,7 @@ const Table &table_fi()
         {"Catalogue transfer stopped making progress", "Luettelon siirto lakkasi edistymästä"},
         {"Included in", "Kuuluu kokoelmiin"},
         {"Show \"Included in\" on film pages", "Näytä kokoelmat elokuvasivuilla"},
+        {"Show seasons as posters", "Näytä tuotantokaudet julisteina"},
     };
     return t;
 }

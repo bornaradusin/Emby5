@@ -57,6 +57,7 @@ inline const char *label_of(int row)
         T("Temamusikk"),
         T("Temavideoer"),
         T("Show \"Included in\" on film pages"),
+        T("Show seasons as posters"),
         T("Bildefrekvens"),
         T("Seerr"),
         T("Adresse"),

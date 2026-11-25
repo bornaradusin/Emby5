@@ -976,6 +976,7 @@ const Table &table_cs()
         {"Catalogue transfer stopped making progress", "Přenos katalogu se zastavil"},
         {"Included in", "Součástí"},
         {"Show \"Included in\" on film pages", "Zobrazit „Součástí“ na stránkách filmů"},
+        {"Show seasons as posters", "Zobrazit řady jako plakáty"},
     };
     return t;
 }

@@ -566,7 +566,9 @@ float Detail::zone_top(Zone z) const
             continue;
         if (k == z)
             return y;
-        y += k == Seasons ? detail_layout::seasons_height(gfx::text_scale(), m_eps.empty()) :
+        y += k == Seasons ? (settings::get().local.season_posters
+                                 ? detail_layout::season_posters_height(gfx::text_scale(), theme_card_scale(), m_eps.empty())
+                                 : detail_layout::seasons_height(gfx::text_scale(), m_eps.empty())) :
              k == Episodes ? detail_layout::Episodes(gfx::W - 2 * kPad, gfx::text_scale(), theme_card_scale()).section_height :
              k == Extras ? kExtrasH : k == Cast ? kCastH : kSimilarH;   /* Collections: Similar's cards */
     }
@@ -973,7 +975,60 @@ void Detail::draw_sections(float dt)
     // One themed control per season, not a nested glass bar + bouncing drop.
     // Focus and selection are distinct: when browsing episodes the selected
     // season stays tinted, but only the episode owns the focus outline.
-    if (!m_view.seasons.empty()) {
+    const bool season_posters = settings::get().local.season_posters;
+    if (!m_view.seasons.empty() && season_posters) {
+        /* Seasons as posters (#11): the season's own art, else the show's; the picked one
+         * bright, the others dimmed; the same focus, Options menu and scrolling as the tabs. */
+        const float y = zone_top(Seasons) - off;
+        const float pw = detail_layout::season_poster_width(theme_card_scale()), ph = pw * 1.5f;
+        if (vis(y, detail_layout::season_posters_height(scale, theme_card_scale(), m_eps.empty()))) {
+            gfx::text(kPad, y + 29.f * scale, T("Sesong"), {gfx::Bold, 26}, kText);
+            if (m_zone == Seasons && m_season >= 0 && m_season < (int)m_view.seasons.size() &&
+                m_view.seasons[m_season].type == "Season" && !m_view.seasons[m_season].id.empty()) {
+                const std::string hint = T("Valg");
+                draw_pad_hint(gfx::W - kPad - pad_hint_width(PadButton::Options, hint, 24),
+                              y + 20.f * scale, PadButton::Options, hint, 24);
+            }
+            const float top = y + 48.f * scale;
+            constexpr float gutter = 10.f, gap = 22.f;
+            const float inner = viewport_width - 2.f * gutter;
+            const size_t n = m_view.seasons.size();
+            const float total = n * pw + (n - 1) * gap;
+            const size_t selected = (size_t)std::clamp(m_season, 0, (int)n - 1);
+            const float sx = detail_layout::tab_scroll(selected * (pw + gap), pw, inner, total, m_scroll[Seasons].value);
+            m_scroll[Seasons].snap(sx);
+            gfx::push_scissor({kPad, top - 12, viewport_width, ph + 48.f * scale + 24});
+            const jf::Item &show = m_view.item;
+            for (size_t i = 0; i < n; ++i) {
+                const jf::Item &season = m_view.seasons[i];
+                const gfx::Rect r{kPad + gutter + i * (pw + gap) - sx, top, pw, ph};
+                if (r.x + r.w <= kPad || r.x >= gfx::W - kPad) continue;
+                const bool chosen = i == selected;
+                if (!season.id.empty() && !season.primary_tag.empty())
+                    art::draw(r, poster_url(m_client, season, 400), season.primary_blurhash, 400, 600, 12);
+                else
+                    art::draw(r, poster_url(m_client, show, 400), show.primary_blurhash, 400, 600, 12);
+                if (!chosen) gfx::fill(r, 0x73000000u, 12);
+                if (chosen && m_zone == Seasons) draw_image_focus_outline(r, 12);
+                const std::string label = !season.name.empty() ? season.name : season.index >= 0 ?
+                    std::string(T("Sesong")) + " " + std::to_string(season.index) : T("Episoder");
+                gfx::text(r.x + pw * .5f, r.y + ph + 34.f * scale, label,
+                          {chosen ? gfx::Bold : gfx::SemiBold, 21, pw}, chosen ? kText : kText2, 1);
+            }
+            gfx::pop_scissor();
+            if (total > inner) {
+                char range[80];
+                std::snprintf(range, sizeof range, "%s%d / %zu%s", sx > .5f ? "<  " : "",
+                              m_season + 1, n, sx + inner < total - .5f ? "  >" : "");
+                gfx::text(kPad + viewport_width * .5f, y + 27.f * scale, range,
+                          {gfx::Medium, 20, viewport_width * .5f}, kText2, 1);
+            }
+            if (m_eps.empty())
+                gfx::text(kPad + gutter, top + ph + 48.f * scale + 42.f * scale,
+                          T("No episodes available for this season."), {gfx::Regular, 22, inner}, kText2);
+        }
+    }
+    if (!m_view.seasons.empty() && !season_posters) {
         const float y = zone_top(Seasons) - off;
         if (vis(y, detail_layout::seasons_height(scale, m_eps.empty()))) {
             gfx::text(kPad, y + 29.f * scale, T("Sesong"), {gfx::Bold, 26}, kText);

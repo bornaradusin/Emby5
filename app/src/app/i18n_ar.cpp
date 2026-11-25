@@ -976,6 +976,7 @@ const Table &table_ar()
         {"Catalogue transfer stopped making progress", "توقف نقل الكتالوج عن التقدم"},
         {"Included in", "ضمن المجموعات"},
         {"Show \"Included in\" on film pages", "إظهار المجموعات في صفحات الأفلام"},
+        {"Show seasons as posters", "عرض المواسم كملصقات"},
     };
     return t;
 }

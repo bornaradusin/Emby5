@@ -976,6 +976,7 @@ const Table &table_sv()
         {"Catalogue transfer stopped making progress", "Överföringen av katalogen avstannade"},
         {"Included in", "Ingår i"},
         {"Show \"Included in\" on film pages", "Visa ”Ingår i” på filmsidor"},
+        {"Show seasons as posters", "Visa säsonger som affischer"},
     };
     return t;
 }
