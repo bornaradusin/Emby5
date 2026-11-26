@@ -30,8 +30,8 @@ inline bool section_shows(const std::string &section,ui::HomeRow::Kind k,bool la
     switch(k){
     case R::Resume:return resume;
     case R::NextUp:return has("nextup")||(resume&&s!="resume"&&!layout_has_nextup);
-    case R::Latest:return s=="latestmedia";
-    case R::Libraries:return s=="smalllibrarytiles"||s=="librarybuttons";
+    case R::Latest:return s=="latestmedia"||s=="latestmediablock";
+    case R::Libraries:return s=="smalllibrarytiles"||s=="librarybuttons"||s=="userviews";
     default:return false;
     }
 }
@@ -39,13 +39,18 @@ inline void order(ui::HomeModel &model,const std::vector<std::string> &sections,
     using R=ui::HomeRow;
     const bool layout_has_nextup=std::any_of(sections.begin(),sections.end(),[](const std::string &s){
         std::string l=s;for(char &c:l)c=(char)std::tolower((unsigned char)c);return l.find("nextup")!=std::string::npos;});
+    /* A layout none of whose sections is one of these rows (names Emby5 doesn't know yet) says
+     * nothing Emby5 can follow: every row then, rather than a Home with only My List. */
+    const bool known=std::any_of(sections.begin(),sections.end(),[&](const std::string &s){
+        for(R::Kind k:{R::Resume,R::NextUp,R::Latest,R::Libraries})if(section_shows(s,k,layout_has_nextup))return true;
+        return false;});
     auto rank=[&](R::Kind k){
-        if(sections.empty())return (int)k;
+        if(sections.empty()||!known)return (int)k;
         for(size_t i=0;i<sections.size();++i)
             if(section_shows(sections[i],k,layout_has_nextup))return (int)i;
         return (int)sections.size()+(int)k;
     };
-    if(!sections.empty())model.rows.erase(std::remove_if(model.rows.begin(),model.rows.end(),[&](const R &r){
+    if(!sections.empty()&&known)model.rows.erase(std::remove_if(model.rows.begin(),model.rows.end(),[&](const R &r){
         return (r.kind==R::Resume||r.kind==R::NextUp||r.kind==R::Latest)&&rank(r.kind)>=(int)sections.size();}),model.rows.end());
     auto view_rank=[&](const std::string &id){for(size_t i=0;i<views.size();++i)if(views[i].id==id)return i;return views.size();};
     std::stable_sort(model.rows.begin(),model.rows.end(),[&](const R&a,const R&b){

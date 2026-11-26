@@ -39,7 +39,7 @@ HttpResponse tracked_request(const std::string &method, const std::string &url,
 }
 
 constexpr int kTimeout = 15;
-constexpr const char *kVersion = "1.3.5";
+constexpr const char *kVersion = "1.3.6";
 constexpr const char *kFields = "Overview,Genres";            /* rows: what the UI shows */
 constexpr const char *kItemFields =
     "Overview,Genres,MediaStreams,Taglines,People,Studios,ChildCount,ProductionLocations,SpecialFeatureCount,"
@@ -795,24 +795,75 @@ std::string Client::escape(const std::string &s) { return url_escape(s); }
 
 int unreachable_streak() { return g_unreachable.load(); }
 
+/* The home screen's sections, in order, as names home_sections.h knows (resume, nextup,
+ * latestmedia, smalllibrarytiles, and continuewatching for Continue Watching with Next Up in it).
+ *
+ * Emby 4.10 and later keep the layout as a list of sections (GET /Users/{id}/HomeSections,
+ * ContentService): Continue Watching is a "resume" section, with Next Up in it when its
+ * IncludeNextUpInResume is set (there is no "nextup" type any more), "latestmediablock" is
+ * Latest and "userviews" My Media. The homesectionN keys stay stored but are no longer what the
+ * user sees (#11: Emby 4.11, "Continue Watching" and Latest missing from Home).
+ *
+ * Older servers, and Jellyfin, keep homesection0..N in the display preferences, and a slot that
+ * isn't set shows the server's default for it: reading stopped at the first unset slot, so a
+ * user who had changed only the first saw no Continue Watching or Latest. On Emby, a "resume"
+ * with no "nextup" in the layout includes Next Up, as Emby's own apps show it. */
 std::vector<std::string> Client::home_sections(bool *ok)
 {
     if(ok)*ok=false;
     std::vector<std::string> out;
     std::string body;
+    if (!is_jellyfin() && get_json("/Users/" + user_id_ + "/HomeSections", &body)) {
+        cJSON *j = cJSON_Parse(body.c_str());
+        const cJSON *list = cJSON_IsArray(j) ? j : cJSON_GetObjectItemCaseSensitive(j, "Sections");
+        if (!cJSON_IsArray(list)) list = cJSON_GetObjectItemCaseSensitive(j, "Items");
+        const cJSON *s = nullptr;
+        if (cJSON_IsArray(list)) cJSON_ArrayForEach(s, list) {
+            const cJSON *t = cJSON_GetObjectItemCaseSensitive(s, "SectionType");
+            if (!cJSON_IsString(t) || !t->valuestring) continue;
+            const std::string type = server_url::lower(t->valuestring);
+            if (type == "resume")
+                out.push_back(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(s, "IncludeNextUpInResume"))
+                              ? "continuewatching" : "resume");
+            else if (type == "latestmediablock" || type == "latestmedia") out.push_back("latestmedia");
+            else if (type == "userviews") out.push_back("smalllibrarytiles");
+            else out.push_back(type);
+        }
+        cJSON_Delete(j);
+        if (!out.empty()) {
+            if(ok)*ok=true;
+            return out;
+        }
+    }
     if (!get_json("/DisplayPreferences/usersettings?userId=" + user_id_ + "&client=emby", &body))
         return out;
     cJSON *j = cJSON_Parse(body.c_str());
     if(!cJSON_IsObject(j)){cJSON_Delete(j);return out;}
     if(ok)*ok=true;
     const cJSON *prefs = cJSON_GetObjectItemCaseSensitive(j, "CustomPrefs");
-    for (int i = 0; i < 10; i++) {
+    /* Each server's default for a slot that isn't set. */
+    static const char *const emby_defaults[] = {"smalllibrarytiles", "resume", "resumeaudio", "livetv", "none",
+                                                "latestmedia", "none", "none"};
+    static const char *const jellyfin_defaults[] = {"smalllibrarytiles", "resume", "resumeaudio", "resumebook",
+                                                    "livetv", "nextup", "latestmedia"};
+    const bool jellyfin = is_jellyfin();
+    const size_t slots = jellyfin ? sizeof(jellyfin_defaults) / sizeof(jellyfin_defaults[0])
+                                  : sizeof(emby_defaults) / sizeof(emby_defaults[0]);
+    bool any = false;
+    for (size_t i = 0; i < 10; i++) {
         const cJSON *v = cJSON_GetObjectItemCaseSensitive(prefs, ("homesection" + std::to_string(i)).c_str());
-        if (!cJSON_IsString(v) || !v->valuestring)
-            break;
-        out.push_back(v->valuestring);
+        if (cJSON_IsString(v) && v->valuestring) {
+            out.push_back(v->valuestring);
+            any = true;
+        } else if (i < slots) {
+            out.push_back(jellyfin ? jellyfin_defaults[i] : emby_defaults[i]);
+        }
     }
     cJSON_Delete(j);
+    if (!any) out.clear();   /* nothing set: every row, as before */
+    if (!jellyfin && std::find(out.begin(), out.end(), "nextup") == out.end())
+        for (auto &section : out)
+            if (section == "resume") section = "continuewatching";
     return out;
 }
 
